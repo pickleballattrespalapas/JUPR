@@ -1533,6 +1533,8 @@ def save_generator_round(
     if normalize_scoring_mode(next_event.get("scoringMode")) != "scored":
         raise ValueError("This unscored Round-Robin uses Round Played instead of score entry.")
     row = _get_round(next_event, round_number)
+    if row.get("generationPending"):
+        raise ValueError("Select this round to generate its matchups before entering results.")
     if next_event.get("playoff") and int(round_number) != int(next_event.get("currentRoundNumber") or 1):
         raise ValueError("Only the current playoff round can be scored.")
     if str(row.get("status")) not in {"active", "preview", "saved"}:
@@ -1608,6 +1610,8 @@ def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> 
     if normalize_scoring_mode(next_event.get("scoringMode")) != "unscored":
         raise ValueError("Scored Round-Robins must save scores or skip the round.")
     row = _get_round(next_event, round_number)
+    if row.get("generationPending"):
+        raise ValueError("Select this round to generate its matchups before marking it played.")
     round_status = str(row.get("status"))
     if round_status == "played":
         return next_event
@@ -1679,6 +1683,11 @@ def reopen_generator_round(event: dict[str, Any], *, round_number: int) -> dict[
     row = _get_round(next_event, round_number)
     if str(row.get("status")) != "skipped":
         raise ValueError("Only a skipped round can be reopened.")
+    if row.get("generationPending"):
+        next_event["status"] = "active"
+        row["status"] = "preview"
+        _regenerate_round_robin_from(next_event, round_number, focus_round=round_number)
+        row = _get_round(next_event, round_number)
     row["status"] = "active"
     row["skippedAt"] = None
     row["skipReason"] = ""
@@ -2068,7 +2077,10 @@ def select_generator_round(event: dict[str, Any], *, round_number: int) -> dict[
         next_event["adaptiveFromRound"] = fixed_count + 1
     if next_event.get("adaptiveFromRound") and round_number >= int(next_event["adaptiveFromRound"]) and selected.get("status") in {"preview", "skipped"}:
         selected["status"] = "preview"
-        _regenerate_round_robin_from(next_event, round_number)
+        # The chosen round owns the active cursor while replanning. Otherwise
+        # a backwards selection can reactivate the old round as a placeholder.
+        next_event.update(currentRoundNumber=int(round_number), status="active", completedAt=None)
+        _regenerate_round_robin_from(next_event, round_number, focus_round=round_number)
         selected = _get_round(next_event, round_number)
     selected.update(status="active", skippedAt=None, skipReason="")
     next_event.update(currentRoundNumber=int(round_number), status="active", completedAt=None)
@@ -2142,7 +2154,7 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
         if not fixed or next_number > fixed_count:
             if fixed:
                 next_event["adaptiveFromRound"] = next_number
-            _regenerate_round_robin_from(next_event, next_number)
+            _regenerate_round_robin_from(next_event, next_number, focus_round=next_number)
         next_round = _get_round(next_event, next_number)
     if str(next_round.get("status")) == "preview":
         next_round["status"] = "active"
@@ -2245,7 +2257,38 @@ def _seat_generator_arrivals(
     if not _recover_perfect_rotation(event):
         _regenerate_round_robin_from(event, current + 1)
 
-def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> None:
+def _round_planning_key(event: dict[str, Any], number: int, history: dict[str, Any]) -> str:
+    """Reuse a prepared round only while every scheduling input still matches."""
+    inputs = {
+        "version": 1, "round": number,
+        "active": active_participant_ids(event, number),
+        "roster": [(str(p["id"]), int(p.get("roster_order") or 0)) for p in event.get("participants") or []],
+        "settings": {key: event.get(key) for key in (
+            "playFormat", "courtCount", "doublesCourtCount", "singlesCourtCount", "mixedScheduleSeed", "adaptiveFromRound",
+        )},
+        # Candidate searches can insert zero entries into defaultdicts. Their
+        # presence must not invalidate otherwise identical actual-play history.
+        "history": {key: {pid: count for pid, count in counts.items() if count} for key, counts in history.items()},
+    }
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _regenerate_round_robin_from(
+    event: dict[str, Any], start_round: int, *, focus_round: int | None = None,
+) -> None:
+    """Replan the immediate adaptive window, retaining navigable deferred rounds.
+
+    Fixed previews are generated in full. Once an active standalone session is
+    adaptive, speculative distant rounds must not delay a roster edit or save.
+    They are generated when selected, using only actual play and this window.
+    Hub planning continues to be owned by the hub's court/queue scheduler.
+    """
+    incremental = (
+        event.get("status") in {"active", "completed"} and not event.get("roundRobinHubId")
+        and bool(event.get("adaptiveFromRound")) and not event.get("playoff")
+        and not is_moneyball(event)
+    )
+    focus = int(focus_round or event.get("currentRoundNumber") or 1)
     existing = {int(row.get("number") or 0): row for row in event.get("rounds") or []}
     preserved = [
         copy.deepcopy(row)
@@ -2262,6 +2305,10 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
         _update_history_for_generated_round(history, row, str(event.get("playFormat") or "doubles"))
     generated = []
     total = int(event.get("totalRounds") or 1)
+    if incremental:
+        # The requested preview count is not a hard limit on live play.
+        total = max(total, focus + 1)
+        event["totalRounds"] = total
     if event.get("roundRobinHubId"):
         current = int(event.get("currentRoundNumber") or 1)
         current_row = next((r for r in event.get("rounds") or [] if int(r["number"]) == current), {})
@@ -2286,8 +2333,21 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
             )))
         ):
             row = copy.deepcopy(previous)
+        elif incremental and number not in {focus, focus + 1}:
+            row = {
+                "number": number, "status": "preview", "generationPending": True,
+                "matches": [], "byeParticipantIds": [], "warnings": [],
+                "formatCounts": {"doubles": 0, "singles": 0},
+                "savedAt": None, "skippedAt": None,
+            }
         else:
-            row = _generate_round_robin_round(event, number, history)
+            planning_key = _round_planning_key(event, number, history) if incremental else None
+            if previous and planning_key and previous.get("planningKey") == planning_key and not previous.get("generationPending"):
+                row = copy.deepcopy(previous)
+            else:
+                row = _generate_round_robin_round(event, number, history)
+                if planning_key:
+                    row["planningKey"] = planning_key
         if row.get("status") == "preview" and str(event.get("status")) == "active" and number == int(event.get("currentRoundNumber") or 1):
             row["status"] = "active"
         generated.append(row)
@@ -2321,6 +2381,8 @@ def mutate_generator_roster(
     court_number: int | None = None,
     _hub_managed: bool = False,
 ) -> dict[str, Any]:
+    if action == "remove" and participant_ids and event.get("roundRobinHubId"):
+        raise ValueError("Remove hub players using the hub's player controls.")
     if event.get("roundRobinHubId") and not _hub_managed and not is_moneyball(event) and action != "seat_arrivals":
         from jupr_app.domain.round_robin_hub import mutate_hub_roster
         return mutate_hub_roster(event, action=action, participant_id=participant_id, name=name,
@@ -2375,10 +2437,13 @@ def mutate_generator_roster(
             row["player_id"] = int(player_id)
         next_event.setdefault("participants", []).append(row)
     elif clean_action == "remove":
-        pid = str(participant_id or "")
-        if pid not in participants:
-            raise ValueError("Player was not found.")
-        participants[pid]["inactive_from_round"] = effective
+        removal_ids = [str(item) for item in (participant_ids or [participant_id or ""])]
+        if participant_ids and participant_id:
+            raise ValueError("Choose one player or a list of players to remove, not both.")
+        if len(set(removal_ids)) != len(removal_ids) or not set(removal_ids) <= participants.keys():
+            raise ValueError("Choose each existing player to remove once.")
+        for pid in removal_ids:
+            participants[pid]["inactive_from_round"] = effective
     elif clean_action == "substitute":
         pid = str(participant_id or "")
         if pid not in participants:
@@ -2416,6 +2481,7 @@ def mutate_generator_roster(
         "action": clean_action,
         "effectiveRound": effective,
         "participantId": participant_id,
+        **({"participantIds": removal_ids} if clean_action == "remove" else {}),
         "name": _clean_name(name),
         "at": _now_iso(),
     })
@@ -2442,7 +2508,7 @@ def mutate_generator_roster(
                     if clean_action == "add":
                         ids.append(new_id)
                     elif clean_action == "remove":
-                        ids = [item for item in ids if item != pid]
+                        ids = [item for item in ids if item not in removal_ids]
                     elif clean_action == "substitute" and (scope == "rest" or number == effective):
                         ids = [item for item in ids if item != pid]
                         ids.append(new_id)

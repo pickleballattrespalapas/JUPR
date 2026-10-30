@@ -94,7 +94,7 @@ def process_automatic_checkins(db: Any, *, row: dict[str, Any], state: dict[str,
                               sessions: dict[str, Any], events: dict[str, Any], now: str
                               ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The admission decision, roster, and generated games commit in one hub CAS."""
-    from jupr_app.domain.round_robin_hub import apply_hub_command
+    from jupr_app.services.generator_compute import apply_hub_command
     excluded = [key for key, session in sessions.items() if _is_locked(session)]
     for checkin in _pending_automatic(db, row, sessions):
         candidate = deepcopy(state)
@@ -111,6 +111,9 @@ def process_automatic_checkins(db: Any, *, row: dict[str, Any], state: dict[str,
                 p["id"] for p in changed[key]["participants"] if p["id"] not in prior_ids)
             state, events = candidate, changed
         except ValueError as exc:
+            from jupr_app.services.generator_compute import compute_unavailable_cause
+            if compute_unavailable_cause(exc):
+                raise
             # Name conflicts, capacity and roster restrictions need staff review.
             # Save that outcome so polling never endlessly retries the same input.
             state.setdefault("checkin_decisions", {})[checkin_id] = {
@@ -121,6 +124,7 @@ def process_automatic_checkins(db: Any, *, row: dict[str, Any], state: dict[str,
 def _process_saved_checkins(db: Any, *, hub_id: str) -> None:
     from jupr_app.services.admin_round_robin_hub_service import command_round_robin_hub
     from jupr_app.services.public_live_operation_service import PublicLiveConflictError
+    from jupr_app.services.generator_compute import GeneratorComputeUnavailable
     for _ in range(4):
         row = _first(db.table(HUB_TABLE).select("*").eq("id", hub_id).limit(1).execute())
         if row is None or row["status"] != "active":
@@ -135,6 +139,10 @@ def _process_saved_checkins(db: Any, *, hub_id: str) -> None:
             return
         except PublicLiveConflictError:
             continue  # Another check-in or court action won; reread before retrying.
+        except GeneratorComputeUnavailable:
+            # Intake already committed. Keep the successful check-in response;
+            # the signed-in hub retries planning from this durable intake.
+            return
     # Intake is durable. The signed-in hub also retries unprocessed arrivals.
 
 

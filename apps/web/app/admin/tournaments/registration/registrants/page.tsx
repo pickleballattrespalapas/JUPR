@@ -1,3 +1,4 @@
+import SectionLoadError from "@/components/SectionLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
@@ -21,7 +22,7 @@ export default async function TournamentRegistrantsPage(props: Props) {
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Tournament Manager / Registration</p>
       <h1 style={{ marginTop: 0 }}>{context.tournamentName || "Tournament"} registrants</h1>
       <TournamentPhaseNav phase="registration" />
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Registration management is unavailable. {error}</p> : null}
+      {error ? <SectionLoadError title="Tournament Manager temporarily unavailable" message="Your tournament data couldn’t load. Try again, or use the navigation to open another section." /> : null}
       {data ? <TournamentRegistrantListPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} tournamentId={context.tournamentId} tournamentName={context.tournamentName || context.tournamentId} drawId={context.drawId} /> : null}
     </section>
   );

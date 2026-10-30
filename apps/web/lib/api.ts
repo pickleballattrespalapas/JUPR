@@ -79,6 +79,7 @@ export type LeaderboardResponse = {
     filtered_players: number;
   };
   leaderboard: LeaderboardEntry[];
+  badges_available?: boolean;
   snapshot?: LeaderboardEntry | null;
   leaderboard_settings?: LeaderboardSettings;
   period?: {

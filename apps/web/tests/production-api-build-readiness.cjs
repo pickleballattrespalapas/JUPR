@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
+const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
 const ready = { ok: true, club_website_settings_available: true, interclub_seasons_available: true, environment: "production", fly_app_name: "juprleagues-api",
   supabase_project_ref: "dnoockbwfenunhcibwfn", production_business_write_policy: "enabled",
   staging_write_wave: "none", feature_flags: Object.fromEntries(REQUIRED_FLAGS.map((flag) => [flag, true])) };
@@ -28,6 +28,16 @@ contract.components.schemas.GeneratorStartRequest = { properties: {
   registration_hub_id: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
   participant_names: { type: "array" },
 } };
+const reliabilityReads = [
+  "/public/clubs/{slug}/site/shell",
+  "/public/clubs/{slug}/site/logo",
+  "/clubs/{club_slug}/players/{player_id}/share-metadata",
+  "/clubs/{club_slug}/play-generators/sessions/{session_key}/share-metadata",
+];
+for (const path of reliabilityReads) contract.paths[path] = { get: {} };
+for (const name of ["GeneratorRosterRequest", "PublicGeneratorRosterRequest"]) {
+  contract.components.schemas[name] = { properties: { participant_ids: { type: "array", maxItems: 40 } } };
+}
 
 (async () => {
   assert.equal(operationsReady(ready), true);
@@ -86,6 +96,20 @@ contract.components.schemas.GeneratorStartRequest = { properties: {
   const mandatoryRoster = structuredClone(contract);
   mandatoryRoster.components.schemas.GeneratorStartRequest.properties.participant_names.minItems = 2;
   assert.equal(roundRobinHubReady(mandatoryRoster), false);
+  assert.equal(siteReliabilityReady(contract), true);
+  assert.equal(siteReliabilityReady({}), false);
+  for (const path of reliabilityReads) {
+    const missingRead = structuredClone(contract);
+    delete missingRead.paths[path].get;
+    assert.equal(siteReliabilityReady(missingRead), false, `The web release requires GET ${path}`);
+  }
+  for (const name of ["GeneratorRosterRequest", "PublicGeneratorRosterRequest"]) {
+    const oldRoster = structuredClone(contract);
+    oldRoster.components.schemas[name].properties.participant_ids.maxItems = 4;
+    assert.equal(siteReliabilityReady(oldRoster), false, `${name} must support the full departure batch`);
+    delete oldRoster.components.schemas[name].properties.participant_ids;
+    assert.equal(siteReliabilityReady(oldRoster), false);
+  }
   let calls = 0, clock = 0;
   await waitForProductionApi({ environment: "preview", request: async () => { throw new Error("Preview must not contact production"); } });
   await waitForProductionApi({ environment: "production", now: () => clock,
@@ -148,6 +172,17 @@ contract.components.schemas.GeneratorStartRequest = { properties: {
     pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
       json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? beforeSubmissionCorrections : contract) : ready }) });
   assert.equal(contracts, 2, "The website waits for submission score correction support before exposing the new editor");
+  for (const previousApi of [
+    (() => { const api = structuredClone(contract); delete api.paths[reliabilityReads[0]]; return api; })(),
+    (() => { const api = structuredClone(contract); api.components.schemas.PublicGeneratorRosterRequest.properties.participant_ids.maxItems = 4; return api; })(),
+  ]) {
+    clock = 0;
+    contracts = 0;
+    await waitForProductionApi({ environment: "production", now: () => clock,
+      pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+        json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? previousApi : contract) : ready }) });
+    assert.equal(contracts, 2, "The website waits for compact shell reads and full roster departure batches");
+  }
   clock = 0;
   await assert.rejects(waitForProductionApi({ environment: "production", timeoutMs: 10000,
     now: () => clock, pause: async () => { clock += 10000; }, request: async () => { throw new Error("Unavailable"); } }), /current website remains active/);

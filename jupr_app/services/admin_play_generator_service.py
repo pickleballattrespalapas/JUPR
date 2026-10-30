@@ -16,16 +16,18 @@ from uuid import uuid4
 from jupr_app.data.load import load_data
 from jupr_app.domain.generator_playoffs import generator_playoff_options, start_generator_playoff
 from jupr_app.domain.adaptive_play_engine import (
-    advance_generator_event,
-    create_generator_preview,
     complete_generator_event,
     generator_event_standings,
     generator_match_play_format,
-    mark_generator_round_played,
     normalize_scoring_mode,
+    schedule_export_rows,
+)
+from jupr_app.services.generator_compute import (
+    advance_generator_event,
+    create_generator_preview,
+    mark_generator_round_played,
     mutate_generator_roster,
     save_generator_round,
-    schedule_export_rows,
     skip_generator_round,
     reopen_generator_round,
     select_generator_round,

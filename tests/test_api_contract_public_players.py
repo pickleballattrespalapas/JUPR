@@ -106,20 +106,59 @@ def test_unknown_player_is_a_stable_404(client, monkeypatch):
     assert response.json() == {"detail": "player not found"}
 
 
-def test_player_share_preview_query_satisfies_profile_route_validation(client, monkeypatch):
-    """Exercise the frontend preview's actual query against FastAPI validation."""
+def test_player_share_preview_uses_scoped_metadata_endpoint(client, monkeypatch):
+    """Exercise the frontend preview's actual route without loading a profile."""
     source = (Path(__file__).resolve().parents[1] / "apps/web/lib/shareMetadataCore.ts").read_text()
-    query = re.search(r"/players/\$\{encodeURIComponent\(parts\[3\]\)\}(\?[^`]+)", source)
-    assert query, "Locate the player preview request so its API contract stays covered."
-    monkeypatch.setattr(
-        "services.api.main.get_public_player_profile",
-        lambda *_args, **_kwargs: {"player": {"id": 1}, "identity": {"display_name": "Public Alias"}},
-    )
+    route = re.search(r"/players/\$\{encodeURIComponent\(parts\[3\]\)\}(/share-metadata)", source)
+    assert route, "Locate the lightweight player preview request."
+    captured = {}
+    monkeypatch.setattr("services.api.club_site_routes.published_shell", lambda *_: {"club_id": "club-1"})
 
-    response = client.get(f"/clubs/tres-palapas/players/1{query.group(1)}")
+    def metadata(_supabase, **kwargs):
+        captured.update(kwargs)
+        return {"player": {"id": 1, "name": "Public Alias", "display_name": "Public Alias", "email": "private"}}
+
+    def no_full_profile(*_args, **_kwargs):
+        raise AssertionError("Share previews must not load full player history")
+
+    monkeypatch.setattr("jupr_app.services.public_player_service.get_public_player_share_metadata", metadata)
+    monkeypatch.setattr("services.api.main.get_public_player_profile", no_full_profile)
+    response = client.get(f"/clubs/tres-palapas/players/1{route.group(1)}")
 
     assert response.status_code == 200, response.text
-    assert response.json()["identity"]["display_name"] == "Public Alias"
+    assert response.headers["cache-control"] == "no-store"
+    assert captured == {"club_id": "club-1", "player_id": "1"}
+    assert response.json()["player"]["display_name"] == "Public Alias"
+    assert "private" not in response.text
+
+
+def test_player_share_metadata_rechecks_publication_before_player_read(client, monkeypatch):
+    from fastapi import HTTPException
+
+    def hidden(*_args):
+        raise HTTPException(status_code=404, detail="Club website is not published.")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Unpublished club cannot load metadata")
+
+    monkeypatch.setattr("services.api.club_site_routes.published_shell", hidden)
+    monkeypatch.setattr("jupr_app.services.public_player_service.get_public_player_share_metadata", forbidden)
+    assert client.get("/clubs/tres-palapas/players/1/share-metadata").status_code == 404
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_player_share_metadata_404_or_503_without_private_error(client, monkeypatch, missing):
+    monkeypatch.setattr("services.api.club_site_routes.published_shell", lambda *_: {"club_id": "club-1"})
+
+    def unavailable(*_args, **_kwargs):
+        if missing:
+            return None
+        raise RuntimeError("private database error")
+
+    monkeypatch.setattr("jupr_app.services.public_player_service.get_public_player_share_metadata", unavailable)
+    response = client.get("/clubs/tres-palapas/players/1/share-metadata")
+    assert response.status_code == (404 if missing else 503)
+    assert "private database error" not in response.text
 
 
 def test_player_match_endpoint_forwards_pagination(client, monkeypatch):

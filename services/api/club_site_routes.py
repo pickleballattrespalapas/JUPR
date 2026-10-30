@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from fastapi import HTTPException, Response
+import base64
+import hashlib
+from urllib.parse import quote
+
+from fastapi import HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 
 from services.api.admin_auth_routes import require_admin_assignments
 from services.api.auth import auth_header
@@ -9,6 +14,8 @@ from services.api.club_site_models import SiteAction, SiteDocument, SiteSave, de
 
 SITE_FIELDS = "club_id,revision,draft,published,published_at,updated_at"
 PUBLIC_SITE_FIELDS = "id,slug,is_active,public_site_status,site:pcs_club_sites(published,published_at)"
+PUBLIC_SHELL_FIELDS = "id,slug,is_active,public_site_status,site:pcs_club_sites(published_at,name:published->>name,description:published->>description,location:published->>location,accent:published->>accent,visibility:published->>visibility,display:published->display,page_visibility:published->page_visibility,pages:published->pages)"
+PUBLIC_LOGO_FIELDS = "id,slug,is_active,public_site_status,site:pcs_club_sites(name:published->>name,logo_url:published->>logo_url)"
 
 
 def site_administrator(db_factory, authorization, club_id):
@@ -33,17 +40,39 @@ def site_rpc(db, function, params):
         raise HTTPException(503, "Could not confirm the save. Reload before trying again.") from exc
 
 
-def published_site(db, slug):
+def _published_record(db, slug, fields):
     # The PK/FK is one-to-one. Read publication and visibility in one fresh
     # database snapshot; never cache a previously public document after unpublish.
-    clubs = db.table("clubs").select(PUBLIC_SITE_FIELDS).eq("slug", slug).limit(1).execute().data or []
+    clubs = db.table("clubs").select(fields).eq("slug", slug).limit(1).execute().data or []
     if not clubs or not clubs[0].get("is_active") or clubs[0].get("public_site_status") != "published":
-        raise HTTPException(404, "Club website is not published.")
+        raise HTTPException(404, "Club website is not published.", headers={"Cache-Control": "no-store"})
     club = clubs[0]
     site = club.get("site")
-    if not isinstance(site, dict) or not site.get("published"):
-        raise HTTPException(404, "Club website is not published.")
+    if not isinstance(site, dict) or not (site.get("published") if fields == PUBLIC_SITE_FIELDS else site.get("name")):
+        raise HTTPException(404, "Club website is not published.", headers={"Cache-Control": "no-store"})
+    return club, site
+
+
+def published_site(db, slug):
+    club, site = _published_record(db, slug, PUBLIC_SITE_FIELDS)
     return {"club_id": club["id"], "slug": club["slug"], "document": SiteDocument.model_validate(site["published"]).model_dump(), "published_at": site.get("published_at")}
+
+
+def published_shell(db, slug):
+    """Fresh publication/display settings without loading the inline club logo.
+
+    Page bodies are removed before validation, so optional custom content cannot
+    prevent a generator or tournament page from rendering its required shell.
+    """
+    club, site = _published_record(db, slug, PUBLIC_SHELL_FIELDS)
+    values = {key: site[key] for key in ("name", "description", "location", "accent", "visibility", "display", "page_visibility") if site.get(key) is not None}
+    values["pages"] = [{key: page[key] for key in ("slug", "title", "in_navigation") if key in page}
+                       for page in (site.get("pages") or [])]
+    document = SiteDocument.model_validate(values).model_dump()
+    document = {key: document[key] for key in ("name", "description", "location", "accent", "visibility", "display", "page_visibility", "pages")}
+    document["pages"] = [{key: page[key] for key in ("slug", "title", "in_navigation")} for page in document["pages"]]
+    document["logo_url"] = f"/public/clubs/{quote(club['slug'], safe='')}/site/logo"
+    return {"club_id": club["id"], "slug": club["slug"], "document": document, "published_at": site.get("published_at")}
 
 
 def install_club_site_routes(app, *, get_supabase_client):
@@ -53,6 +82,35 @@ def install_club_site_routes(app, *, get_supabase_client):
         site = published_site(get_supabase_client(), slug)
         if site["document"]["visibility"] == "unlisted": response.headers["X-Robots-Tag"] = "noindex, nofollow"
         return site
+
+    @app.get("/public/clubs/{slug}/site/shell")
+    def public_site_shell(slug: str, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        site = published_shell(get_supabase_client(), slug)
+        if site["document"]["visibility"] == "unlisted": response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return site
+
+    @app.get("/public/clubs/{slug}/site/logo")
+    def public_site_logo(slug: str, request: Request):
+        # Revalidate publication even on conditional image reads. A cached logo
+        # must never bypass unpublish or cross from one club into another.
+        _, site = _published_record(get_supabase_client(), slug, PUBLIC_LOGO_FIELDS)
+        logo = site.get("logo_url") or ""
+        from services.api.club_site_models import safe_link
+        try:
+            safe_link(logo, image=True)
+            if not logo: return Response(status_code=204, headers={"Cache-Control": "no-store"})
+            if not logo.startswith("data:"):
+                return RedirectResponse(logo, status_code=307, headers={"Cache-Control": "no-store"})
+            media, encoded = logo.split(";base64,", 1)
+            content = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError):
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        etag = '"' + hashlib.sha256(content).hexdigest() + '"'
+        headers = {"Cache-Control": "private, no-cache", "ETag": etag, "X-Content-Type-Options": "nosniff"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return Response(content=content, media_type=media.removeprefix("data:"), headers=headers)
 
     @app.get("/admin/clubs/{club_id}/site")
     def admin_site(club_id: str, response: Response, authorization: str | None = auth_header()):

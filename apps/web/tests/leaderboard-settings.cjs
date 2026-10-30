@@ -236,6 +236,18 @@ global.fetch = async (url, options = {}) => {
     }
   }
 
+  assert.doesNotMatch(markup, /Badges are temporarily unavailable/);
+  data.badges_available = false;
+  markup = await render();
+  assert.match(markup, /role="status"[^>]*>Badges are temporarily unavailable\. Rankings are still shown\./);
+  assert.match(markup, /data-testid="leaderboard-table"|<table/);
+  assert.match(markup, />Stu</, "Badge lookup failure preserves ranked players");
+  assert.doesNotMatch(markup, /Leaderboards are unavailable right now/);
+  assert.doesNotMatch(await render({}, { badges: false }), /Badges are temporarily unavailable/, "Hidden badge sections do not show optional badge notices");
+  data.badges_available = true;
+  assert.doesNotMatch(await render(), /Badges are temporarily unavailable/, "Successful badge reads clear the notice");
+
+
   process.env.JUPR_API_BASE_URL = "https://api.test";
   let requestedUrl;
   global.fetch = async url => { requestedUrl = new URL(url); return { ok: true, json: async () => ({}) }; };

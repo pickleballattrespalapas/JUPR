@@ -193,7 +193,8 @@ def test_perfect_rotation_survives_start_save_advance_and_reload(count, courts, 
     for number in range(preview["totalRounds"] + 1, preview["totalRounds"] + 3):
         event = engine.advance_generator_event(_persist(event))
         assert event["status"] == "active"
-        assert event["currentRoundNumber"] == event["totalRounds"] == number
+        assert event["currentRoundNumber"] == number
+        assert event["totalRounds"] == number + 1  # One ready preview beyond the active round.
         assert event["rounds"][:len(completed_cycle)] == completed_cycle
         _assert_valid_round(event, event["rounds"][-1])
         _assert_byes_respect_bye_priority(event, event["rounds"][-1])

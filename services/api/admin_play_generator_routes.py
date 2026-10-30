@@ -135,7 +135,7 @@ class GeneratorRosterRequest(GeneratorDurableRequest):
     player_id: int | None = None
     substitute_scope: str = Field(default="rest", pattern=r"^(round|rest)$")
     roster_order: list[str] = Field(default_factory=list, max_length=40)
-    participant_ids: list[str] = Field(default_factory=list, max_length=4)
+    participant_ids: list[str] = Field(default_factory=list, max_length=40)
     court_number: int | None = Field(default=None, ge=1, le=20)
     source: str = "next_play_generator_roster"
 
@@ -241,6 +241,9 @@ def _require_service_role() -> None:
 
 
 def _handle(exc: Exception) -> None:
+    from jupr_app.services.generator_compute import compute_unavailable_cause
+    if unavailable := compute_unavailable_cause(exc):
+        raise HTTPException(status_code=503, detail=str(unavailable), headers={"Retry-After": "2"}) from exc
     if isinstance(exc, DirectMatchConflictError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, DirectMatchRecoveryRequiredError):

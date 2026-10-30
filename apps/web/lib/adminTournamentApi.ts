@@ -573,9 +573,9 @@ export async function getAdminTournamentStatus(clubId: string): Promise<ApiResul
     return { data: { enabled: true, status: "local_test_harness", warnings: [] }, error: null };
   }
   const result = await fetchJson<AdminTournamentStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/status?include_count=false`);
-  // All callers are tournament server pages. Let their error boundary offer a
-  // fresh read instead of leaving the destination empty after a failed request.
-  if (!result.data) throw new Error("Tournament Manager is temporarily unavailable.");
+  // An upstream outage is an expected read failure. Keep the destination's
+  // heading/navigation and let its local retry panel request a fresh read.
+  if (!result.data) return { data: null, error: "Tournament Manager is temporarily unavailable." };
   return result;
 }
 

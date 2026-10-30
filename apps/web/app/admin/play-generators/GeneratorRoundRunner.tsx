@@ -10,6 +10,7 @@ import GeneratorSharing from "@/components/GeneratorSharing";
 import { hubAutoAdvanceBoundary, hubPreparedRoundLimit } from "@/lib/hubAutoAdvanceBoundary";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+import GeneratorDepartures from "@/components/GeneratorDepartures";
 import GeneratorRoundSchedule from "@/components/GeneratorRoundSchedule";
 import GeneratorLateArrivals from "@/components/GeneratorLateArrivals";
 
@@ -58,6 +59,7 @@ type MatchRow = {
 
 type RoundRow = {
   number: number;
+  generationPending?: boolean;
   stage?: string;
   label?: string;
   status: "preview" | "active" | "saved" | "played" | "skipped" | string;
@@ -386,6 +388,7 @@ export default function GeneratorRoundRunner({
   const [skipReason, setSkipReason] = useState("");
   const [rosterAction, setRosterAction] = useState<RosterAction>("add");
   const [selectedParticipant, setSelectedParticipant] = useState("");
+  const [departingParticipants, setDepartingParticipants] = useState<string[]>([]);
   const [firstSwapParticipant, setFirstSwapParticipant] = useState("");
   const [secondSwapParticipant, setSecondSwapParticipant] = useState("");
   const [newPlayerName, setNewPlayerName] = useState("");
@@ -416,6 +419,7 @@ export default function GeneratorRoundRunner({
     setEditingSavedScores(false);
     setSkipReason("");
     setSelectedParticipant("");
+    setDepartingParticipants([]);
     setFirstSwapParticipant("");
     setSecondSwapParticipant("");
     setNewPlayerName("");
@@ -451,8 +455,10 @@ export default function GeneratorRoundRunner({
     if (replace) router.replace(path); else router.push(path);
   }
 
-  function refresh(): void {
-    if (embedded) onSessionChanged?.(); else router.refresh();
+  function notifySessionChanged(): void {
+    // Mutation responses already contain the fresh session. Only the embedded
+    // workspace needs notification; a route refresh repeats unrelated loaders.
+    if (embedded) onSessionChanged?.();
   }
 
   function captureSessionNavigation(click: MouseEvent<HTMLDivElement>): void {
@@ -520,6 +526,9 @@ export default function GeneratorRoundRunner({
       )
       .map((row) => row.id);
     setRosterOrder(ordered);
+    setDepartingParticipants(current => current.filter(id => next.event.participants.some(player =>
+      player.id === id && (!player.inactive_from_round || player.inactive_from_round > next.event.currentRoundNumber + 1)
+    )));
   }
 
   async function submitResults(organizerName: string, matchDate: string): Promise<void> {
@@ -599,9 +608,10 @@ export default function GeneratorRoundRunner({
   const scoredSession = scoringMode === "scored";
   const resultsLocked = Boolean(session?.submission || session?.official_publish?.published_at || session?.official_publish?.published_match_ids?.length);
   const canManage = Boolean(accessToken) && !resultsLocked && session?.capabilities?.can_manage !== false;
+  const batchDepartures = generatorKind === "round_robin" && !session?.round_robin_hub_id && event?.eventFormat !== "moneyball_expectations";
   const canScore = canManage && session?.capabilities?.can_score !== false;
   const canEditRound =
-    canScore &&
+    canScore && !round?.generationPending &&
     session?.status === "active" &&
     (!session?.round_robin_hub_id || isCurrent) &&
     (isCurrent || (generatorKind === "round_robin" && !event?.playoff)) &&
@@ -726,12 +736,12 @@ export default function GeneratorRoundRunner({
       applySession(playedPayload.session);
       if (playedPayload.session.status === "completed") {
         setMessage("Session completed.");
-        refresh();
+        notifySessionChanged();
         return;
       }
       const nextRound = playedPayload.session.current_round_number || roundNumber + 1;
       navigate(roundPath(generatorKind, sessionKey, nextRound));
-      refresh();
+      notifySessionChanged();
     } catch (error) {
       if (!currentContext(generation)) return;
       setMessage(error instanceof Error ? error.message : "Unable to mark the round played.");
@@ -836,7 +846,7 @@ export default function GeneratorRoundRunner({
     if (typeof destination === "number") {
       navigate(roundPath(generatorKind, sessionKey, destination));
     }
-    if (destination !== null) refresh();
+    if (destination !== null) notifySessionChanged();
   }
 
   async function openScheduledRound(number: number): Promise<void> {
@@ -855,7 +865,7 @@ export default function GeneratorRoundRunner({
         await runMutation(`/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/rounds/${number}/select`, {});
       }
       navigate(roundPath(generatorKind, sessionKey, number));
-      refresh();
+      notifySessionChanged();
     } catch (error) {
       if (!currentContext(generation)) return;
       setMessage(error instanceof Error ? error.message : "We couldn’t open that round. Please try again.");
@@ -919,12 +929,12 @@ export default function GeneratorRoundRunner({
       if (next.status === "completed") {
         setMessage("Session completed. You can submit the saved matches for approval.");
         if (next.event.eventFormat === "moneyball_expectations") navigate(standingsPath(sessionKey));
-        refresh();
+        notifySessionChanged();
         return;
       }
       const nextRound = next.current_round_number || roundNumber + 1;
       navigate(roundPath(generatorKind, sessionKey, nextRound));
-      refresh();
+      notifySessionChanged();
     } catch (error) {
       if (!currentContext(generation)) return;
       setMessage(error instanceof Error ? error.message : "Unable to advance the round.");
@@ -961,7 +971,8 @@ export default function GeneratorRoundRunner({
           secondSwapParticipant
         );
       } else if (rosterAction === "remove") {
-        body.participant_id = selectedParticipant;
+        if (batchDepartures) body.participant_ids = departingParticipants;
+        else body.participant_id = selectedParticipant;
       } else if (rosterAction === "add") {
         body.name = newPlayerName;
         body.player_id = newPlayerId ? Number(newPlayerId) : null;
@@ -979,6 +990,7 @@ export default function GeneratorRoundRunner({
         true
       );
       setSelectedParticipant("");
+      setDepartingParticipants([]);
       setFirstSwapParticipant("");
       setSecondSwapParticipant("");
       setNewPlayerName("");
@@ -994,7 +1006,7 @@ export default function GeneratorRoundRunner({
       if (current !== roundNumber) {
         navigate(roundPath(generatorKind, sessionKey, current));
       } else {
-        refresh();
+        notifySessionChanged();
       }
     } catch (error) {
       if (!currentContext(generation)) return;
@@ -1111,6 +1123,12 @@ export default function GeneratorRoundRunner({
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
           <div>
             <h2 style={{ marginTop: 0 }}>{round.label || `Round ${roundNumber}`}</h2>
+            {round.generationPending ? <div role="status">
+              <p>Matchups will be generated when this round is selected, using the latest roster and played rounds.</p>
+              {canManage ? <button type="button" disabled={busy || Boolean(pendingScoreSave)} onClick={() => void openScheduledRound(roundNumber)} style={primaryButton}>
+                {busy ? "Preparing round…" : "Prepare and select this round"}
+              </button> : <p>The organizer will prepare this round when it is needed.</p>}
+            </div> : null}
             {event.playFormat === "doubles_singles" ? (
               <p style={{ color: "#475569" }}>
                 {doublesGames} doubles game{doublesGames === 1 ? "" : "s"} · {singlesGames} singles game{singlesGames === 1 ? "" : "s"}
@@ -1443,7 +1461,7 @@ export default function GeneratorRoundRunner({
                 style={inputStyle}
               >
                 {event.eventFormat !== "moneyball_expectations" ? <><option value="add">Add player</option>
-                <option value="remove">Remove player</option></> : null}
+                <option value="remove">{batchDepartures ? "Remove players" : "Remove player"}</option></> : null}
                 <option value="substitute">Substitute player</option>
                 {event.eventFormat !== "moneyball_expectations" ? <><option value="swap">Swap players</option>
                 <option value="reorder">Reorder roster</option></> : null}
@@ -1495,7 +1513,12 @@ export default function GeneratorRoundRunner({
               </>
             ) : null}
 
-            {["remove", "substitute"].includes(rosterAction) ? (
+            {rosterAction === "remove" && batchDepartures ? (
+              <GeneratorDepartures participants={event.participants} nextRound={event.currentRoundNumber + 1}
+                selected={departingParticipants} onChange={setDepartingParticipants} disabled={busy || Boolean(pendingScoreSave)} />
+            ) : null}
+
+            {(rosterAction === "substitute" || (rosterAction === "remove" && !batchDepartures)) ? (
               <label>
                 Current player
                 <br />
@@ -1604,7 +1627,7 @@ export default function GeneratorRoundRunner({
             disabled={
               busy || Boolean(pendingScoreSave) ||
               (event.eventFormat === "moneyball_expectations" && (editingScores || (canEditRound && anyDraftScore))) ||
-              (rosterAction === "remove" && !selectedParticipant) ||
+              (rosterAction === "remove" && (batchDepartures ? departingParticipants.length === 0 : !selectedParticipant)) ||
               (rosterAction === "substitute" &&
                 (!selectedParticipant || !newPlayerName.trim())) ||
               (rosterAction === "swap" &&

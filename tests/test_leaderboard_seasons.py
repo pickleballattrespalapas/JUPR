@@ -35,6 +35,8 @@ class _SeasonQuery(_Query):
         rows = [dict(row) for row in self.store.get(self.table_name, [])]
         for key, value in self.filters.items():
             rows = [row for row in rows if str(row.get(key)) == str(value)]
+        for key, values in self.in_filters.items():
+            rows = [row for row in rows if str(row.get(key)) in values]
         for key, operator, value in self.comparisons:
             cutoff = datetime.fromisoformat(value.replace("Z", "+00:00"))
             selected = []
