@@ -92,8 +92,8 @@ function load(file) {
   assert.equal(await siteApi.publicSiteFetch('/public/clubs/fixture/site'), null, 'unpublish is not masked by a cached document');
   global.fetch = async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); };
   await assert.rejects(siteApi.publicSiteFetch('/public/clubs/fixture/site'), { name: 'TimeoutError' });
-  await assert.rejects(adminApi.getAdminTournamentStatus('fixture'), /Tournament Manager is temporarily unavailable/);
+  assert.deepEqual(await adminApi.getAdminTournamentStatus('fixture'), { data: null, error: 'Tournament Manager is temporarily unavailable.' });
   global.fetch = async () => ({ ok: false, status: 503, text: async () => 'Private upstream failure' });
-  await assert.rejects(adminApi.getAdminTournamentStatus('fixture'), /Tournament Manager is temporarily unavailable/);
+  assert.deepEqual(await adminApi.getAdminTournamentStatus('fixture'), { data: null, error: 'Tournament Manager is temporarily unavailable.' });
   console.log('Tournament navigation: pending feedback, route context, retry, bounded fresh reads, and count-free status passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

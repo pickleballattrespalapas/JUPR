@@ -223,7 +223,7 @@ def _status_after_sessions(status: str, state: dict[str, Any], events: dict[str,
 
 def create_round_robin_hub(db: Any, *, club_id: str, title: str, courts: list[dict[str, Any]],
                           idempotency_key: str, actor_email: str) -> dict[str, Any]:
-    from jupr_app.domain.round_robin_hub import apply_hub_command
+    from jupr_app.services.generator_compute import apply_hub_command
     hub_id = str(uuid5(NAMESPACE_URL, f"jupr:rr-hub:{club_id}:{idempotency_key}"))
     fingerprint = _fingerprint({"action": "create", "title": title, "courts": courts})
     if not _replayed(db, club_id, hub_id, idempotency_key, fingerprint):
@@ -238,7 +238,7 @@ def create_round_robin_hub(db: Any, *, club_id: str, title: str, courts: list[di
 def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
                            payload: dict[str, Any], expected_version: int,
                            idempotency_key: str, actor_email: str) -> dict[str, Any]:
-    from jupr_app.domain.round_robin_hub import apply_hub_command
+    from jupr_app.services.generator_compute import apply_hub_command
     started = perf_counter()
     requested_action = action
     fingerprint = _fingerprint({"action": action, "payload": payload, "expected_version": expected_version})
@@ -359,7 +359,7 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
 def persist_linked_generator_patch(db: Any, *, before: dict[str, Any], patch: dict[str, Any],
                                    expected_version: str) -> dict[str, Any]:
     """Route every original generator mutation through the same court transaction."""
-    from jupr_app.domain.round_robin_hub import reconcile_hub_events
+    from jupr_app.services.generator_compute import reconcile_hub_events
     hub_id = str((before.get("state") or {}).get("round_robin_hub_id") or "")
     club_id, session_key = str(before["club_id"]), str(before["session_key"])
     if not hub_id:

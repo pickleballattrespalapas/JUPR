@@ -23,6 +23,7 @@ const mocks = {
   "next/headers": { headers: () => new Headers({ "x-pcs-club-path": pathname }) },
   "@/lib/clubSiteServer": {
     getPublicSite: async slug => slug === "alpha" ? { slug, document: structuredClone(site.published) } : null,
+    getPublicSiteShell: async slug => slug === "alpha" ? { slug, document: structuredClone(site.published) } : null,
     getClubDirectory: async () => ({ clubs: [{ slug: "alpha" }], total: 1, limit: 100 }),
     publicSiteFetch: async path => {
       if (path.endsWith("/tournament-highlights")) {

@@ -21,7 +21,15 @@ class Query:
     def execute(self):
         rows=[r for r in self.rows if all(f(r) for f in self.filters)];count=len(rows)
         if self.span:rows=rows[slice(*self.span)]
-        fields = 'id,slug,is_active,public_site_status,site' if self.fields == routes.PUBLIC_SITE_FIELDS else self.fields
+        site_fields = {routes.PUBLIC_SITE_FIELDS, routes.PUBLIC_SHELL_FIELDS, routes.PUBLIC_LOGO_FIELDS}
+        fields = 'id,slug,is_active,public_site_status,site' if self.fields in site_fields else self.fields
+        if self.fields in {routes.PUBLIC_SHELL_FIELDS, routes.PUBLIC_LOGO_FIELDS}:
+            for row in rows:
+                site = row.get('site')
+                if site:
+                    published = site.get('published') or {}
+                    projection = self.fields.split('site:pcs_club_sites(')[1].rstrip(')').split(',')
+                    row['site'] = {field.split(':')[0]: (published.get(field.split(':')[0]) if ':' in field else site.get(field)) for field in projection}
         if fields!='*':rows=[{k:r.get(k) for k in fields.split(',')} for r in rows]
         return SimpleNamespace(data=rows,count=count)
 
@@ -82,6 +90,74 @@ def test_public_site_uses_one_fresh_join_and_obeys_immediate_unpublish(setup):
     state['tables']['pcs_club_sites'] = []
     assert client.get('/public/clubs/alpha/site').status_code == 404
     assert reads == ['clubs'] * 5
+
+
+def test_compact_shell_omits_logo_and_custom_content_but_preserves_visibility(setup):
+    client, state, db = setup
+    document = state['tables']['pcs_club_sites'][0]['published']
+    document.update(logo_url='data:image/png;base64,' + 'AAAA' * 50000,
+                    display={'ratings': False}, page_visibility={'players': 'private'})
+    document['pages'] = [{'slug': 'home', 'title': 'Home', 'in_navigation': True,
+                          'blocks': [{'invalid': 'Optional content does not gate RR pages'}]}]
+    reads = []
+    original = db.table
+    def table(name):
+        query = original(name)
+        select = query.select
+        def tracked_select(fields, **kwargs):
+            reads.append(fields)
+            return select(fields, **kwargs)
+        query.select = tracked_select
+        return query
+    db.table = table
+    response = client.get('/public/clubs/alpha/site/shell')
+    assert response.status_code == 200
+    shell = response.json()['document']
+    assert reads == [routes.PUBLIC_SHELL_FIELDS]
+    assert 'logo_url' not in reads[0] and '(published,' not in reads[0]
+    assert len(response.content) < 2000
+    assert shell['logo_url'] == '/public/clubs/alpha/site/logo'
+    assert shell['display']['ratings'] is False
+    assert shell['page_visibility']['players'] == 'private'
+    assert shell['pages'] == [{'slug': 'home', 'title': 'Home', 'in_navigation': True}]
+    assert response.headers['cache-control'] == 'no-store'
+    assert 'noindex' in response.headers['x-robots-tag']
+
+
+@pytest.mark.parametrize('path', ['shell', 'logo'])
+def test_shell_and_logo_freshly_enforce_publication(setup, path):
+    client, state, _ = setup
+    url = f'/public/clubs/alpha/site/{path}'
+    assert client.get(url).status_code in (200, 204)
+    for field, value in [('is_active', False), ('public_site_status', 'draft')]:
+        club = state['tables']['clubs'][0]
+        before = club[field]
+        club[field] = value
+        assert client.get(url).status_code == 404
+        club[field] = before
+    state['tables']['pcs_club_sites'][0]['published'] = None
+    assert client.get(url).status_code == 404
+    assert client.get(f'/public/clubs/beta/site/{path}').status_code == 404
+
+
+def test_logo_revalidates_before_304_and_optional_logo_errors_stay_local(setup):
+    client, state, _ = setup
+    document = state['tables']['pcs_club_sites'][0]['published']
+    document['logo_url'] = 'data:image/png;base64,aGVsbG8='
+    url = '/public/clubs/alpha/site/logo'
+    response = client.get(url)
+    assert response.status_code == 200 and response.content == b'hello'
+    assert response.headers['content-type'] == 'image/png'
+    assert response.headers['cache-control'] == 'private, no-cache'
+    headers = {'If-None-Match': response.headers['etag']}
+    assert client.get(url, headers=headers).status_code == 304
+    state['tables']['clubs'][0]['public_site_status'] = 'draft'
+    assert client.get(url, headers=headers).status_code == 404
+    state['tables']['clubs'][0]['public_site_status'] = 'published'
+    for logo in ['javascript:alert(1)', 'data:image/png;base64,xxx', '']:
+        document['logo_url'] = logo
+        assert client.get(url).status_code == 204
+        assert client.get('/public/clubs/alpha/site/shell').status_code == 200
 
 def test_admin_cannot_read_or_publish_another_club(setup):
     c,s,_=setup

@@ -1,3 +1,4 @@
+import SectionLoadError from "@/components/SectionLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/adminTournamentApi";
@@ -17,7 +18,7 @@ export default async function AdminTournamentsPage() {
         Create a new tournament or open an existing tournament.
       </p>
 
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Tournament Manager is unavailable. {error}</p> : null}
+      {error ? <SectionLoadError title="Tournament Manager temporarily unavailable" message="Your tournament data couldn’t load. Try again, or use the navigation to open another section." /> : null}
       {data ? <TournamentAdminPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} /> : null}
 
       <p style={{ marginTop: "1rem" }}>

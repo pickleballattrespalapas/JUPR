@@ -203,6 +203,6 @@ def test_singles_arrivals_and_last_planned_round_can_use_spare_court():
     event = advance_generator_event(score(event))
     assert event["status"] == "active"
     assert event["currentRoundNumber"] == 2
-    assert len(event["rounds"]) == event["totalRounds"] == 2
+    assert len(event["rounds"]) == event["totalRounds"] == 3  # Current + one prepared preview.
     event = mutate_generator_roster(event, action="add", name="Next arrival")
     assert event["participants"][-1]["active_from_round"] == 3

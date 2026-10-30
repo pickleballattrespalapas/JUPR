@@ -143,6 +143,32 @@ def test_public_leaderboards_validate_pagination_bounds(client):
     assert client.get("/clubs/tres-palapas/leaderboards?league_view=archived").status_code == 422
 
 
+def test_public_leaderboards_preserve_optional_badge_failure_through_api(client, monkeypatch):
+    from services.api import main as api_main
+    from jupr_app.services.leaderboard_service import build_public_leaderboard
+    from tests.test_public_leaderboard_projection import _fixture, _Query
+
+    db = _fixture()
+
+    class Query(_Query):
+        def execute(self):
+            if self.table_name == "player_badges":
+                raise RuntimeError("private badge failure")
+            return super().execute()
+
+    db.table = lambda name: Query(db.store, name)
+    monkeypatch.setattr(api_main, "get_supabase_client", lambda: db)
+    monkeypatch.setattr(api_main, "build_public_leaderboard", build_public_leaderboard)
+    response = client.get("/clubs/tres-palapas/leaderboards")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["badges_available"] is False
+    assert payload["leaderboard"][0]["player_name"] == "Avery Ace"
+    assert payload["leaderboard"][0]["rating_jupr"] == 4.0
+    assert payload["leaderboard"][0]["badges"] == []
+    assert "private badge failure" not in response.text
+
+
 def test_public_leaderboards_report_server_projection_failure_without_backend_detail(client, monkeypatch):
     from services.api import main as api_main
 
