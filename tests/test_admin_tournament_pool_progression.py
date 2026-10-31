@@ -186,3 +186,45 @@ def test_retirement_allows_smaller_reviewed_playoff_with_required_reason():
         live._validate_playoff_configuration(draw,3,conf)
     conf['override_reason']='Three active teams remain after withdrawal; all advance.'
     assert len(live._playoff_rows(result,draw,'tour-1',3,conf))==2
+
+
+@pytest.mark.parametrize("scheduled_games", [0, 2])
+def test_saved_pool_roster_stays_printable_before_complete_schedule(scheduled_games):
+    tables = pool_tables()
+    tables["tournament_games"] = tables["tournament_games"][:scheduled_games]
+    tables["tournament_day_live_queue"] = []
+    tables["tournament_day_live_draws"] = []
+    tables["tournament_day_live_runs"] = []
+
+    result = snapshot(tables)
+    draw = result["draws"][0]
+    groups = draw["round_robin_summary"]["pools"]
+    assert [(group["pool_id"], group["pool_name"]) for group in groups] == [
+        ("A", "Pool A"), ("B", "Pool B")
+    ]
+    assert [sorted(row["team_id"] for row in group["standings"]) for group in groups] == [
+        ["team-1", "team-2", "team-3"], ["team-4", "team-5", "team-6"]
+    ]
+    named_standings = {
+        row["team_id"]: row["team_name"]
+        for row in draw["round_robin_summary"]["standings"]
+    }
+    assert named_standings == {
+        f"team-{number}": f"Player {number * 2 - 1} / Player {number * 2}"
+        for number in range(1, 7)
+    }
+    assert draw["pool_standings"] == groups
+    assert len(result["games"]) == scheduled_games
+    assert draw["round_robin_complete"] is False
+    assert draw["readiness"]["activate"]["ready"] is False
+    assert draw["readiness"]["generate_playoffs"]["ready"] is False
+    for action in ("activate", "generate_playoffs"):
+        assert "POOL_SETUP_INVALID" in {
+            blocker["code"] for blocker in draw["readiness"][action]["blockers"]
+        }
+    assert draw["playoff_review"]["recommended_seed_team_ids"] == []
+    assert draw["playoff_review"]["default_seed_team_ids"] == []
+    assert not any(
+        row["recommended_qualifier"]
+        for row in draw["round_robin_summary"]["standings"]
+    )

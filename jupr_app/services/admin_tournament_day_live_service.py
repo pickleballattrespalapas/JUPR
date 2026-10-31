@@ -1628,10 +1628,16 @@ def build_admin_tournament_day_live_snapshot(
         if draw.get("pool_config") is not None:
             try:
                 pool_config = normalize_pool_config(draw.get("pool_config"), draw_teams)
-                validate_pool_schedule(draw_teams, draw_games, pool_config, require_complete=True)
+                # The saved roster must remain printable before games exist.
+                # Compute validates membership and any existing pairings; full
+                # schedule coverage remains a separate progression requirement.
                 pool_groups = compute_pool_standings(draw_teams, draw_games, pool_config)
+                validate_pool_schedule(draw_teams, draw_games, pool_config, require_complete=True)
                 pool_recommended_ids = recommend_pool_qualifiers(draw_teams, draw_games, pool_config)
             except (ValueError, TypeError) as exc:
+                for group in pool_groups:
+                    for standing in group["standings"]:
+                        standing["recommended_qualifier"] = False
                 pool_blockers.append(_blocker("POOL_SETUP_INVALID", str(exc)))
             activate_blockers.extend(pool_blockers)
             source_scope_blockers.extend(pool_blockers)
