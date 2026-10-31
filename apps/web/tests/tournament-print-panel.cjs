@@ -1,0 +1,54 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),ts=require('typescript');
+const React=require('react'),{act,create}=require('react-test-renderer');
+global.IS_REACT_ACT_ENVIRONMENT=true;
+const file=path.join(__dirname,'../app/admin/tournaments/live-operations/TournamentPrintPanel.tsx');
+const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
+const exportsModule={exports:{}};
+let calls=[],saves=[],fail=false,waitForBuild=null;
+const builder={buildTournamentPrintPdf:async(snapshot,options,scope)=>{
+  calls.push({snapshot,options,scope});
+  if(waitForBuild) await waitForBuild;
+  if(fail) throw new Error('PDF unavailable');
+  return {pdf:{save:name=>saves.push(name),getNumberOfPages:()=>3},filename:'sample.pdf'};
+}};
+new Function('require','module','exports',code)(name=>name==='@/lib/tournamentPrintPacket'?builder:name.endsWith('.css')?{default:{}}:require(name),exportsModule,exportsModule.exports);
+const Panel=exportsModule.exports.default;
+const snapshot={scope:{tournament_id:'t1',registration_day_id:'d1'},day_scope:{selected_day:{label:'Saturday'}},draws:[{id:'a',name:'Mixed 3.5 - Pool A'},{id:'b',name:'Mixed 3.5 - Pool B'}],games:[{id:'g1',draw_id:'a',stage:'ROUND_ROBIN',state:'UNQUEUED'},{id:'g2',draw_id:'b',stage:'ROUND_ROBIN',state:'COMPLETED',finalized_at:'2026-10-31T12:00:00Z'}]};
+const text=node=>typeof node==='string'?node:node?.children?.map(text).join(' ')||'';
+const button=(tree,label)=>tree.root.findAllByType('button').find(node=>text(node).includes(label));
+(async()=>{
+  let tree; await act(async()=>{tree=create(React.createElement(Panel,{snapshot}));});
+  assert.match(text(tree.toJSON()),/4\s+scorecards/);
+  await act(async()=>tree.root.findAllByType('input')[1].props.onChange({target:{checked:false}}));
+  await act(async()=>tree.root.findAllByType('select')[0].props.onChange({target:{value:'remaining'}}));
+  await act(async()=>tree.root.findAllByType('select')[1].props.onChange({target:{value:'saved'}}));
+  await act(async()=>tree.root.findAllByType('select')[2].props.onChange({target:{value:'4'}}));
+  await act(async()=>button(tree,'Download full').props.onClick());
+  assert.deepEqual(calls[0].options,{drawIds:['a'],unplayedOnly:true,includeResults:true,blankCards:4,cardLayout:'cut-stack'});
+  assert.match(text(tree.toJSON()),/top-half pile/);
+  await act(async()=>tree.root.findAllByType('select')[3].props.onChange({target:{value:'consecutive'}}));
+  assert.match(text(tree.toJSON()),/top card, then the bottom card/);
+  assert.equal(calls[0].snapshot,snapshot,'the export uses the loaded snapshot without another request');
+  assert.equal(calls[0].scope,'packet');
+  assert.equal(saves.length,1);
+  assert.match(text(tree.toJSON()),/3-page PDF downloaded/);
+  await act(async()=>button(tree,'Clear selection').props.onClick());
+  assert.equal(button(tree,'Download match').props.disabled,true);
+  await act(async()=>button(tree,'Select all').props.onClick());
+  fail=true;
+  await act(async()=>button(tree,'Download admin').props.onClick());
+  assert.match(text(tree.toJSON()),/PDF unavailable/);
+  assert.equal(button(tree,'Download admin').props.disabled,false,'failed exports can be retried');
+  fail=false;
+  await act(async()=>button(tree,'Download admin').props.onClick());
+  assert.equal(saves.length,2);
+  // A day switch unmounts this keyed component. A delayed module load must
+  // not download the old day's packet into the newly selected day.
+  let release;waitForBuild=new Promise(resolve=>{release=resolve;});
+  await act(async()=>button(tree,'Download match').props.onClick());
+  assert.equal(button(tree,'Download admin').props.disabled,true);
+  await act(async()=>tree.unmount());
+  await act(async()=>{release();});
+  assert.equal(saves.length,2,'no stale download after leaving the day');
+  console.log('PASS paper packet panel: exact snapshot and selected draws, blank/saved settings, downloads, retry, disabled controls and stale-day cancellation.');
+})().catch(error=>{console.error(error);process.exit(1);});

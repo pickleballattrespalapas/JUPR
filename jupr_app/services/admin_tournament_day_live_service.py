@@ -21,8 +21,15 @@ from jupr_app.domain.tournaments import (
     build_playoff_games,
     compute_round_robin_standings,
     compute_round_robin_standings_with_tiebreaks,
+    compute_podium_from_playoffs,
     finalize_game,
     resolve_playoff_dependencies,
+)
+from jupr_app.domain.tournaments.pools import (
+    normalize_pool_config,
+    compute_pool_standings,
+    recommend_pool_qualifiers,
+    validate_pool_schedule,
 )
 from jupr_app.domain.tournaments.score_policy import (
     BEST_OF_THREE_GAME_FORMAT,
@@ -60,29 +67,38 @@ TOURNAMENT_DAY_LIVE_RECONCILE_CONFIRMATION = "RECONCILE DAY OPERATIONS"
 ACTIVE_OPERATION_STATUSES = {"intent", "mutated", "recovery_required"}
 ACTIVE_QUEUE_STATES = {"HELD", "CALLED", "ON_COURT", "RESERVED"}
 NON_PLAYED_RESULT_TYPES = {"FORFEIT", "NO_SHOW", "RETIREMENT"}
-SUPPORTED_ADVANCE_COUNTS = (4, 5, 6)
+SUPPORTED_ADVANCE_COUNTS = tuple(range(2, 17))
+LEGACY_ADVANCE_COUNTS = (4, 5, 6)
 PLAYOFF_TEMPLATE_CODES = {
+    **{count: f"SINGLE_ELIMINATION_{count}" for count in SUPPORTED_ADVANCE_COUNTS},
     4: "SINGLE_ELIMINATION_4",
     5: "SINGLE_ELIMINATION_5",
     6: "SINGLE_ELIMINATION_6",
 }
 PLAYOFF_TEMPLATE_LABELS = {
+    **{count: f"{count}-team elimination" for count in SUPPORTED_ADVANCE_COUNTS},
+    2: "2-team final",
+    3: "3-team semifinal and final",
     4: "4-team semifinals",
     5: "5-team play-in and semifinals",
     6: "6-team quarterfinals and semifinals",
 }
 PLAYOFF_TEMPLATE_DESCRIPTIONS = {
+    **{count: "Seeded elimination with byes where needed, followed by medal matches." for count in SUPPORTED_ADVANCE_COUNTS},
+    2: "The two qualifiers play one gold medal final; no bronze medal is awarded.",
+    3: "Seeds 2 and 3 play a semifinal; the winner meets seed 1 in the final. The semifinal loser places third.",
     4: "Seeds 1–4 play 1v4 and 2v3 semifinals, followed by gold and bronze medal matches.",
     5: "Seeds 4 and 5 play in; the winner joins seeds 1–3 in semifinals, followed by gold and bronze medal matches.",
     6: "Seeds 3v6 and 4v5 play quarterfinals while seeds 1 and 2 receive byes, followed by semifinals and medal matches.",
 }
 PLAYOFF_ROUND_LABELS = {
+    "R16": "Round of 16",
     "QF": "Quarterfinals",
     "SF": "Semifinals",
     "BRONZE": "Bronze medal match",
     "FINAL": "Gold medal final",
 }
-PLAYOFF_ROUND_DISPLAY_ORDER = ("QF", "SF", "BRONZE", "FINAL")
+PLAYOFF_ROUND_DISPLAY_ORDER = ("R16", "QF", "SF", "BRONZE", "FINAL")
 PLAYOFF_SCORING_FORMAT_ORDER = (
     "GAME_TO_11",
     "GAME_TO_15",
@@ -491,35 +507,35 @@ def _podium_matches_playoff_results(
     playoff_games: list[dict[str, Any]],
     podium_rows: list[dict[str, Any]],
 ) -> bool:
-    final_games = [
-        row
-        for row in playoff_games
-        if _text(row.get("playoff_round")).upper() == "FINAL"
-    ]
-    bronze_games = [
-        row
-        for row in playoff_games
-        if _text(row.get("playoff_round")).upper() == "BRONZE"
-    ]
-    podium_by_placement = {
-        _safe_int(row.get("placement")): _text(row.get("team_id"))
-        for row in podium_rows
-    }
+    if not playoff_games or not all(_is_finalized_non_tied(game) for game in playoff_games):
+        return False
+    expected = compute_podium_from_playoffs(playoff_games) or []
+    expected_pairs = {(int(row["placement"]), _text(row["team_id"])) for row in expected}
+    actual_pairs = {(_safe_int(row.get("placement")), _text(row.get("team_id"))) for row in podium_rows}
     return bool(
-        len(podium_rows) == 3
-        and set(podium_by_placement) == {1, 2, 3}
-        and len(set(podium_by_placement.values())) == 3
-        and len(final_games) == 1
-        and len(bronze_games) == 1
-        and _is_finalized_non_tied(final_games[0])
-        and _is_finalized_non_tied(bronze_games[0])
-        and podium_by_placement.get(1)
-        == _text(final_games[0].get("winner_team_id"))
-        and podium_by_placement.get(2)
-        == _text(final_games[0].get("loser_team_id"))
-        and podium_by_placement.get(3)
-        == _text(bronze_games[0].get("winner_team_id"))
+        len(expected) in {2, 3}
+        and len(podium_rows) == len(expected)
+        and len(actual_pairs) == len(podium_rows)
+        and len({team_id for _, team_id in actual_pairs}) == len(podium_rows)
+        and actual_pairs == expected_pairs
     )
+
+
+def _game_pool_labels(draw: dict[str, Any], game: dict[str, Any]) -> dict[str, Any]:
+    """Derived display context; readiness separately validates exact membership."""
+    if _text(game.get("stage")).upper() != "ROUND_ROBIN":
+        return {"pool_id": None, "pool_name": None}
+    config = draw.get("pool_config")
+    pools = config.get("pools", []) if isinstance(config, dict) else []
+    if not isinstance(pools, list):
+        return {"pool_id": None, "pool_name": None}
+    for pool in pools:
+        if not isinstance(pool, dict) or not isinstance(pool.get("team_ids"), list):
+            continue
+        members = {_text(team_id) for team_id in pool["team_ids"]}
+        if _text(game.get("team_a_id")) in members and _text(game.get("team_b_id")) in members:
+            return {"pool_id": pool.get("id"), "pool_name": pool.get("name")}
+    return {"pool_id": None, "pool_name": None}
 
 
 def _game_sort_key(game: dict[str, Any]) -> tuple[Any, ...]:
@@ -1279,6 +1295,7 @@ def build_admin_tournament_day_live_snapshot(
                 "state": _text((queue or {}).get("state") or ("COMPLETED" if _is_finalized_non_tied(game) else "UNQUEUED")).upper(),
                 "stage": _text(game.get("stage")).upper(),
                 "round_label": _round_label(game),
+                **_game_pool_labels(draw, game),
                 "slot_label": (
                     f"Slot {_safe_int(game.get('rr_slot_number'))}"
                     if _safe_int(game.get("rr_slot_number")) is not None
@@ -1604,6 +1621,30 @@ def build_admin_tournament_day_live_snapshot(
         activate_blockers.extend(
             player_registration_blockers(set(exact_roster_player_ids))
         )
+        pool_config = None
+        pool_groups: list[dict[str, Any]] = []
+        pool_blockers: list[dict[str, Any]] = []
+        pool_recommended_ids: list[str] = []
+        if draw.get("pool_config") is not None:
+            try:
+                pool_config = normalize_pool_config(draw.get("pool_config"), draw_teams)
+                # The saved roster must remain printable before games exist.
+                # Compute validates membership and any existing pairings; full
+                # schedule coverage remains a separate progression requirement.
+                pool_groups = compute_pool_standings(draw_teams, draw_games, pool_config)
+                validate_pool_schedule(draw_teams, draw_games, pool_config, require_complete=True)
+                pool_recommended_ids = recommend_pool_qualifiers(draw_teams, draw_games, pool_config)
+            except (ValueError, TypeError) as exc:
+                for group in pool_groups:
+                    for standing in group["standings"]:
+                        standing["recommended_qualifier"] = False
+                pool_blockers.append(_blocker("POOL_SETUP_INVALID", str(exc)))
+            activate_blockers.extend(pool_blockers)
+            source_scope_blockers.extend(pool_blockers)
+        pool_advance_count = (
+            sum(pool["advance_count"] for pool in pool_config["pools"])
+            if pool_config else None
+        )
         active_draw_team_count = sum(
             _text(team.get("competition_status") or "ACTIVE").upper()
             != "RETIRED"
@@ -1611,21 +1652,21 @@ def build_admin_tournament_day_live_snapshot(
         )
         allowed_advance_counts = [
             count
-            for count in SUPPORTED_ADVANCE_COUNTS
+            for count in (SUPPORTED_ADVANCE_COUNTS if pool_config else LEGACY_ADVANCE_COUNTS)
             if count <= active_draw_team_count
         ]
         if not allowed_advance_counts:
             activate_blockers.append(
                 _blocker(
                     "PLAYOFF_FORMAT_UNAVAILABLE",
-                    "At least four active in-draw teams are required to reach a supported playoff and closeout format.",
+                    "The draw needs enough active teams for its configured playoff format (at least two pool qualifiers, or four teams without pools).",
                 )
             )
         activate_blockers = list(
             {row["code"]: row for row in activate_blockers}.values()
         )
 
-        configured_advance_count = _safe_int(
+        configured_advance_count = pool_advance_count if pool_config else _safe_int(
             draw.get("playoff_advance_count")
             if draw.get("playoff_advance_count") not in (None, "")
             else tournament.get("playoff_advance_count")
@@ -1637,12 +1678,14 @@ def build_admin_tournament_day_live_snapshot(
         )
         rr_games = [row for row in draw_games if _text(row.get("stage")).upper() == "ROUND_ROBIN"]
         playoff_games = [row for row in draw_games if _text(row.get("stage")).upper() == "PLAYOFF"]
-        round_robin_complete = bool(rr_games) and all(
+        round_robin_complete = not pool_blockers and bool(rr_games) and all(
             _is_finalized_non_tied(row) for row in rr_games
         )
-        round_robin_result = compute_round_robin_standings_with_tiebreaks(
-            draw_teams,
-            rr_games,
+        # Pool standings never compare raw wins across unequal pools.
+        round_robin_result = (
+            {"standings": [row for group in pool_groups for row in group["standings"]], "tiebreaks": []}
+            if draw.get("pool_config") is not None
+            else compute_round_robin_standings_with_tiebreaks(draw_teams, rr_games)
         )
         round_robin_standings = list(round_robin_result.get("standings") or [])
         standings_summary: list[dict[str, Any]] = []
@@ -1658,7 +1701,11 @@ def build_admin_tournament_day_live_snapshot(
             )
             standings_summary.append(
                 {
-                    "rank": _safe_int(standing.get("seed")),
+                    "rank": _safe_int(standing.get("pool_rank") or standing.get("seed")),
+                    "pool_id": standing.get("pool_id"),
+                    "pool_name": standing.get("pool_name"),
+                    "pool_rank": standing.get("pool_rank"),
+                    "recommended_qualifier": bool(standing.get("recommended_qualifier")),
                     "seed": _safe_int(standing.get("seed")),
                     "team_id": team_id,
                     "team_number": _safe_int(standing.get("team_number")),
@@ -1684,6 +1731,22 @@ def build_admin_tournament_day_live_snapshot(
             for row in round_robin_standings
             if not row.get("retired") and _text(row.get("team_id"))
         ]
+        if pool_config:
+            eligible_team_ids = pool_recommended_ids + [team_id for team_id in eligible_team_ids if team_id not in pool_recommended_ids]
+        display_pool_groups = [
+            {
+                "pool_id": group["pool_id"],
+                "pool_name": group["pool_name"],
+                "advance_count": group["advance_count"],
+                "standings": [row for row in standings_summary if row.get("pool_id") == group["pool_id"]],
+                "tiebreak_explanations": _round_robin_tiebreak_explanations(
+                    list(group.get("tiebreaks") or []),
+                    [row for row in standings_summary if row.get("pool_id") == group["pool_id"]],
+                    [game for game in rr_games if _game_pool_labels(draw, game).get("pool_id") == group["pool_id"]],
+                ),
+            }
+            for group in pool_groups
+        ]
         event_scoring = _game_scoring(event)
         event_default_format = _text(event_scoring.get("format")) or None
         playoff_templates = [
@@ -1694,10 +1757,15 @@ def build_admin_tournament_day_live_snapshot(
             )
             for count in allowed_advance_counts
         ]
+        if pool_config:
+            # A withdrawn qualifier's unused place needs explicit operator
+            # selection; do not silently promote a team from another pool.
+            for template in playoff_templates:
+                template["default_seed_team_ids"] = pool_recommended_ids[:template["advance_count"]]
         review_default_count = (
             default_advance_count
             if default_advance_count in allowed_advance_counts
-            else (allowed_advance_counts[0] if allowed_advance_counts else None)
+            else ((allowed_advance_counts[-1] if pool_config else allowed_advance_counts[0]) if allowed_advance_counts else None)
         )
         default_template = next(
             (
@@ -1714,6 +1782,7 @@ def build_admin_tournament_day_live_snapshot(
                 _is_finalized_non_tied(row) for row in rr_games
             ),
             "standings": standings_summary,
+            "pools": display_pool_groups,
             "tiebreak_explanations": _round_robin_tiebreak_explanations(
                 list(round_robin_result.get("tiebreaks") or []),
                 standings_summary,
@@ -1722,6 +1791,8 @@ def build_admin_tournament_day_live_snapshot(
             "ranking_policy": round_robin_ranking_policy(),
         }
         playoff_review = {
+            "configured_advance_count": pool_advance_count,
+            "recommended_seed_team_ids": pool_recommended_ids if pool_config else eligible_team_ids[:int(review_default_count or 0)],
             "eligible_team_ids": eligible_team_ids,
             "default_seed_team_ids": list(
                 (default_template or {}).get("default_seed_team_ids") or []
@@ -1747,6 +1818,7 @@ def build_admin_tournament_day_live_snapshot(
         }
         playoff_review_fingerprint = _fingerprint(
             {
+                "pool_config": draw.get("pool_config"),
                 "round_robin_summary": round_robin_summary,
                 "playoff_review": playoff_review,
             }
@@ -1809,10 +1881,12 @@ def build_admin_tournament_day_live_snapshot(
             podium_blockers.append(_blocker("GAMES_INCOMPLETE", "Finalize every draw game before podium review."))
         draw_podium = [row for row in podium_rows if _text(row.get("draw_id")) == draw_id]
         podium_team_ids = [_text(row.get("team_id")) for row in draw_podium]
+        expected_podium = (compute_podium_from_playoffs(playoff_games) or []) if playoff_games else []
+        expected_placements = [1, 2] if pool_config and len(expected_podium) == 2 else [1, 2, 3]
         podium_valid = (
             sorted(_safe_int(row.get("placement"), 0) for row in draw_podium)
-            == [1, 2, 3]
-            and len(set(podium_team_ids)) == 3
+            == expected_placements
+            and len(set(podium_team_ids)) == len(expected_placements)
             and set(podium_team_ids).issubset({_text(row.get("id")) for row in draw_teams})
         )
         podium_matches_playoff_results = bool(
@@ -1879,14 +1953,14 @@ def build_admin_tournament_day_live_snapshot(
                 closeout_blockers.append(
                     _blocker(
                         "PODIUM_INCOMPLETE",
-                        "Save exact first, second, and third place evidence before closing the day.",
+                        "Save the exact medal placements required by this playoff format before closing the day.",
                     )
                 )
             elif not podium_matches_playoff_results:
                 closeout_blockers.append(
                     _blocker(
                         "PODIUM_RESULT_MISMATCH",
-                        "Podium placements must exactly match the finalized Final and Bronze playoff results.",
+                        "Podium placements must exactly match the finalized playoff results.",
                     )
                 )
             if not podium_review.get("current"):
@@ -1921,6 +1995,8 @@ def build_admin_tournament_day_live_snapshot(
                 "source_updated_at": draw.get("updated_at"),
                 "event_option_id": _text(draw.get("event_option_id")) or None,
                 "stage": "PLAYOFF" if playoff_games else "ROUND_ROBIN",
+                "pool_config": draw.get("pool_config"),
+                "pool_standings": display_pool_groups,
                 "round_robin_complete": round_robin_complete,
                 "progression_status": progression_status,
                 "playoff_review_fingerprint": playoff_review_fingerprint,
@@ -1990,6 +2066,7 @@ def build_admin_tournament_day_live_snapshot(
                     "podium": _readiness(podium_blockers),
                     "closeout": _readiness(closeout_blockers),
                 },
+                "pool_config": draw.get("pool_config"),
                 "round_robin_summary": round_robin_summary,
                 "playoff_review": playoff_review,
                 "progression": {
@@ -2383,7 +2460,7 @@ def build_admin_tournament_day_live_snapshot(
         "courts": live_courts,
         "queue": queue_rows,
         "participant_claims": claim_rows,
-        "draws": [{"id": row.get("id"), "updated_at": row.get("updated_at")} for row in draws],
+        "draws": [{"id": row.get("id"), "updated_at": row.get("updated_at"), "pool_config": row.get("pool_config")} for row in draws],
         "events": [
             {
                 "id": row.get("id"),
@@ -2790,11 +2867,10 @@ def _validate_playoff_configuration(
     advance_count: int,
     configuration: Any,
 ) -> dict[str, Any]:
-    if not isinstance(configuration, dict) or set(configuration) != {
-        "template_code",
-        "seed_team_ids",
-        "round_scoring",
-    }:
+    required_keys = {"template_code", "seed_team_ids", "round_scoring"}
+    if not isinstance(configuration, dict) or set(configuration) not in (
+        required_keys, required_keys | {"override_reason"}
+    ):
         raise ValueError(
             "Playoff configuration requires an exact template, ordered seeds, and scoring for every round."
         )
@@ -2845,6 +2921,15 @@ def _validate_playoff_configuration(
         raise ValueError(
             "Every playoff seed must be an active, non-retired team from this exact draw."
         )
+    override_reason = configuration.get("override_reason", "")
+    if not isinstance(override_reason, str) or len(override_reason.strip()) > 500:
+        raise ValueError("The playoff override reason must be text of at most 500 characters.")
+    recommended = list(review.get("recommended_seed_team_ids") or [])
+    configured_count = _safe_int(review.get("configured_advance_count"))
+    if draw.get("pool_config") is not None and (
+        int(advance_count) != configured_count or seed_team_ids != recommended
+    ) and not override_reason.strip():
+        raise ValueError("Explain why the playoff count, teams or seeds differ from the pool qualifiers before confirming the override.")
     raw_round_scoring = configuration.get("round_scoring")
     if not isinstance(raw_round_scoring, dict):
         raise ValueError("Choose a scoring format for every playoff round.")
@@ -2880,6 +2965,7 @@ def _validate_playoff_configuration(
         "template_code": expected_template_code,
         "seed_team_ids": seed_team_ids,
         "round_scoring": round_scoring,
+        **({"override_reason": override_reason.strip()} if "override_reason" in configuration else {}),
     }
 
 
@@ -2924,6 +3010,8 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
                 raise ValueError(
                     "Choose a supported advancing-team count from the reviewed draw."
                 )
+            if draw.get("pool_config") is not None and "playoff_configuration" not in payload:
+                raise ValueError("Review and confirm the pool qualifiers and seeds before generating playoffs.")
             if "playoff_configuration" in payload:
                 _validate_playoff_configuration(
                     draw,
@@ -3273,10 +3361,14 @@ def _playoff_rows(
     active_team_count = sum(
         row.get("competition_status") != "RETIRED" for row in teams
     )
-    if count not in SUPPORTED_ADVANCE_COUNTS or count > active_team_count:
-        raise ValueError(
-            "Playoff generation requires 4, 5, or 6 active teams; retired teams cannot advance."
-        )
+    pool_config = normalize_pool_config(draw.get("pool_config"), teams)
+    allowed_counts = SUPPORTED_ADVANCE_COUNTS if pool_config else LEGACY_ADVANCE_COUNTS
+    if count not in allowed_counts or count > active_team_count:
+        raise ValueError("Choose a supported active-team playoff count; retired teams cannot advance.")
+    if pool_config:
+        validate_pool_schedule(teams, rr_games, pool_config, require_complete=True)
+        if playoff_configuration is None:
+            raise ValueError("Review and confirm the pool qualifiers and seeds before generating playoffs.")
     standings = [
         row
         for row in compute_round_robin_standings(teams, rr_games)

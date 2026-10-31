@@ -99,6 +99,38 @@ function tournamentPartnerLookupReady(openapi) {
   return Boolean(route?.post);
 }
 
+function tournamentPoolsReady(openapi) {
+  const route = openapi?.paths?.["/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/pools"]?.put;
+  const schemas = openapi?.components?.schemas;
+  const pools = schemas?.AdminTournamentDrawPoolsRequest?.properties;
+  const playoff = schemas?.AdminTournamentDayLivePlayoffConfiguration?.properties;
+  const payload = schemas?.AdminTournamentDayLivePayload?.properties;
+  const variants = (field) => field?.anyOf || [field];
+  const advanceCount = variants(payload?.advance_count).find((field) => field?.type === "integer");
+  const overrideReason = variants(playoff?.override_reason).find((field) => field?.type === "string");
+  let supportsEveryBracket = false;
+  if (typeof playoff?.template_code?.pattern === "string") {
+    try {
+      const pattern = new RegExp(playoff.template_code.pattern);
+      supportsEveryBracket = Array.from({ length: 15 }, (_, index) => index + 2)
+        .every((count) => pattern.test(`SINGLE_ELIMINATION_${count}`));
+    } catch { /* A malformed API schema must keep the current site serving. */ }
+  }
+  return route?.requestBody?.content?.["application/json"]?.schema?.$ref === "#/components/schemas/AdminTournamentDrawPoolsRequest"
+    && variants(pools?.pool_config).some((field) => field?.type === "object")
+    && variants(pools?.pool_config).some((field) => field?.type === "null")
+    && pools?.expected_state_fingerprint?.type === "string"
+    && pools?.expected_draw_updated_at?.type === "string"
+    && pools?.expected_team_versions?.type === "array"
+    && pools?.confirmation_text?.type === "string"
+    && variants(payload?.playoff_configuration).some((field) => field?.$ref === "#/components/schemas/AdminTournamentDayLivePlayoffConfiguration")
+    && advanceCount?.minimum === 2 && advanceCount.maximum === 16
+    && playoff?.seed_team_ids?.type === "array"
+    && playoff.seed_team_ids.minItems === 2 && playoff.seed_team_ids.maxItems === 16
+    && overrideReason?.maxLength === 500
+    && supportsEveryBracket;
+}
+
 async function waitForProductionApi({
   environment = process.env.VERCEL_ENV,
   request = fetch,
@@ -108,7 +140,7 @@ async function waitForProductionApi({
 } = {}) {
   if (environment !== "production") return;
   const deadline = now() + timeoutMs;
-  console.log("Waiting for the production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, and tournament partner lookup APIs before building the website.");
+  console.log("Waiting for the production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, tournament partner lookup, and tournament pool APIs before building the website.");
   while (now() < deadline) {
     try {
       const response = await request("https://api.juprleagues.com/health", {
@@ -120,8 +152,8 @@ async function waitForProductionApi({
         });
         if (contract.ok) {
           const openapi = await contract.json();
-          if (weeklyReportReady(openapi) && leagueLiveReady(openapi) && roundRobinHubReady(openapi) && siteReliabilityReady(openapi) && startingRatingReviewReady(openapi) && tournamentPartnerLookupReady(openapi)) {
-            console.log("Production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, and tournament partner lookup APIs are ready.");
+          if (weeklyReportReady(openapi) && leagueLiveReady(openapi) && roundRobinHubReady(openapi) && siteReliabilityReady(openapi) && startingRatingReviewReady(openapi) && tournamentPartnerLookupReady(openapi) && tournamentPoolsReady(openapi)) {
+            console.log("Production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, tournament partner lookup, and tournament pool APIs are ready.");
             return;
           }
         }
@@ -134,7 +166,7 @@ async function waitForProductionApi({
   throw new Error("Production operations API is not ready. The current website remains active; retry after API verification.");
 }
 
-module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, waitForProductionApi, REQUIRED_FLAGS };
+module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, tournamentPoolsReady, waitForProductionApi, REQUIRED_FLAGS };
 if (require.main === module) {
   waitForProductionApi().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }

@@ -6,7 +6,11 @@ import os
 import uuid
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.domain.tournaments import SUPPORTED_TEAM_COUNTS, build_round_robin_games
+from jupr_app.domain.tournaments import SUPPORTED_TEAM_COUNTS
+from jupr_app.domain.tournaments.pools import (
+    build_draw_round_robin_games,
+    validate_pool_schedule,
+)
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
@@ -178,9 +182,10 @@ def _round_robin_rows(
             "created_at": now,
             "updated_at": now,
         }
-        for row in build_round_robin_games(
+        for row in build_draw_round_robin_games(
             tournament_id=tournament_id,
-            team_ids_by_number=team_ids_by_number,
+            teams=[{"id": team_id, "team_number": number} for number, team_id in team_ids_by_number.items()],
+            pool_config=draw.get("pool_config"),
         )
     ]
 
@@ -208,9 +213,10 @@ def _missing_round_robin_rows(
         (int(_safe_int(row.get("rr_round_number")) or 0) for row in existing_games),
         default=0,
     )
-    generated = build_round_robin_games(
+    generated = build_draw_round_robin_games(
         tournament_id=tournament_id,
-        team_ids_by_number=team_ids_by_number,
+        teams=[{"id": team_id, "team_number": number} for number, team_id in team_ids_by_number.items()],
+        pool_config=draw.get("pool_config"),
     )
     source_rounds = sorted(
         {
@@ -1151,6 +1157,8 @@ def reconcile_admin_tournament_round_robin_games(
         teams=teams,
         games=existing_games,
     )
+    if draw.get("pool_config") is not None:
+        validate_pool_schedule(teams, existing_games, draw["pool_config"])
     _require_round_robin_reconcile_dependencies_clear(
         supabase,
         club_id=str(club_id),
@@ -1181,7 +1189,11 @@ def reconcile_admin_tournament_round_robin_games(
         raise ValueError(
             "This draw already contains exactly one game for every current-roster pairing."
         )
-    expected_total = team_count * (team_count - 1) // 2
+    expected_total = len(build_draw_round_robin_games(
+        tournament_id=clean_tournament_id,
+        teams=teams,
+        pool_config=draw.get("pool_config"),
+    ))
     if len(existing_games) + len(missing_rows) != expected_total:
         raise ValueError(
             "The partial schedule cannot be reconciled into one exact round robin without changing existing games."

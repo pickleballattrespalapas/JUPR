@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
+const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, tournamentPoolsReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
 const ready = { ok: true, club_website_settings_available: true, interclub_seasons_available: true, environment: "production", fly_app_name: "juprleagues-api",
   supabase_project_ref: "dnoockbwfenunhcibwfn", production_business_write_policy: "enabled",
   staging_write_wave: "none", feature_flags: Object.fromEntries(REQUIRED_FLAGS.map((flag) => [flag, true])) };
@@ -51,6 +51,24 @@ contract.components.schemas.StartingRatingReviewConfirmRequest = { properties: {
 } };
 contract.components.schemas.StartingRatingReviewConfirmation = { properties: {
   player_id: { type: "integer" }, rating_jupr: { type: "number" }, expected_state_fingerprint: { type: "string" },
+} };
+const poolsPath = "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/pools";
+contract.paths[poolsPath] = { put: { requestBody: { content: { "application/json": {
+  schema: { $ref: "#/components/schemas/AdminTournamentDrawPoolsRequest" },
+} } } } };
+contract.components.schemas.AdminTournamentDrawPoolsRequest = { properties: {
+  pool_config: { anyOf: [{ type: "object" }, { type: "null" }] },
+  expected_state_fingerprint: { type: "string" }, expected_draw_updated_at: { type: "string" },
+  expected_team_versions: { type: "array" }, confirmation_text: { type: "string" },
+} };
+contract.components.schemas.AdminTournamentDayLivePayload = { properties: {
+  advance_count: { anyOf: [{ type: "integer", minimum: 2, maximum: 16 }, { type: "null" }] },
+  playoff_configuration: { anyOf: [{ $ref: "#/components/schemas/AdminTournamentDayLivePlayoffConfiguration" }, { type: "null" }] },
+} };
+contract.components.schemas.AdminTournamentDayLivePlayoffConfiguration = { properties: {
+  template_code: { type: "string", pattern: "^SINGLE_ELIMINATION_([2-9]|1[0-6])$" },
+  seed_team_ids: { type: "array", minItems: 2, maxItems: 16 },
+  override_reason: { anyOf: [{ type: "string", maxLength: 500 }, { type: "null" }] },
 } };
 
 (async () => {
@@ -131,6 +149,29 @@ contract.components.schemas.StartingRatingReviewConfirmation = { properties: {
   const beforePartnerLookup = structuredClone(contract);
   delete beforePartnerLookup.paths[partnerLookupPath].post;
   assert.equal(tournamentPartnerLookupReady(beforePartnerLookup), false);
+  assert.equal(tournamentPoolsReady(contract), true);
+  assert.equal(tournamentPoolsReady({}), false);
+  const incompletePoolContracts = [
+    ["the pool save route", (api) => { delete api.paths[poolsPath].put; }],
+    ["the guarded pool request", (api) => { api.paths[poolsPath].put.requestBody.content["application/json"].schema.$ref = "#/components/schemas/OldRequest"; }],
+    ["pool removal", (api) => { api.components.schemas.AdminTournamentDrawPoolsRequest.properties.pool_config = { type: "object" }; }],
+    ...["pool_config", "expected_state_fingerprint", "expected_draw_updated_at", "expected_team_versions", "confirmation_text"].map((field) => [
+      `pool save ${field}`, (api) => { delete api.components.schemas.AdminTournamentDrawPoolsRequest.properties[field]; },
+    ]),
+    ["playoff configuration", (api) => { delete api.components.schemas.AdminTournamentDayLivePayload.properties.playoff_configuration; }],
+    ["two-team playoffs", (api) => { api.components.schemas.AdminTournamentDayLivePayload.properties.advance_count.anyOf[0].minimum = 4; }],
+    ["sixteen-team playoffs", (api) => { api.components.schemas.AdminTournamentDayLivePayload.properties.advance_count.anyOf[0].maximum = 8; }],
+    ["two-team seed lists", (api) => { api.components.schemas.AdminTournamentDayLivePlayoffConfiguration.properties.seed_team_ids.minItems = 4; }],
+    ["sixteen-team seed lists", (api) => { api.components.schemas.AdminTournamentDayLivePlayoffConfiguration.properties.seed_team_ids.maxItems = 8; }],
+    ["all playoff template sizes", (api) => { api.components.schemas.AdminTournamentDayLivePlayoffConfiguration.properties.template_code.pattern = "^SINGLE_ELIMINATION_(4|6|8)$"; }],
+    ["valid playoff template schema", (api) => { api.components.schemas.AdminTournamentDayLivePlayoffConfiguration.properties.template_code.pattern = "["; }],
+    ["manual override reasons", (api) => { delete api.components.schemas.AdminTournamentDayLivePlayoffConfiguration.properties.override_reason; }],
+  ].map(([reason, mutate]) => {
+    const api = structuredClone(contract);
+    mutate(api);
+    assert.equal(tournamentPoolsReady(api), false, `The release requires ${reason}`);
+    return [reason, api];
+  });
   const incompleteRatingReviews = [];
   for (const path of ratingReviewPaths) {
     const missingRoute = structuredClone(contract);
@@ -239,6 +280,14 @@ contract.components.schemas.StartingRatingReviewConfirmation = { properties: {
     pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
       json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? beforePartnerLookup : contract) : ready }) });
   assert.equal(contracts, 2, "The updated partner editor waits until its lookup endpoint is deployed");
+  for (const [reason, previousApi] of incompletePoolContracts) {
+    clock = 0;
+    contracts = 0;
+    await waitForProductionApi({ environment: "production", now: () => clock,
+      pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+        json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? previousApi : contract) : ready }) });
+    assert.equal(contracts, 2, `The pool interface waits for ${reason} before release`);
+  }
   clock = 0;
   await assert.rejects(waitForProductionApi({ environment: "production", timeoutMs: 10000,
     now: () => clock, pause: async () => { clock += 10000; }, request: async () => { throw new Error("Unavailable"); } }), /current website remains active/);

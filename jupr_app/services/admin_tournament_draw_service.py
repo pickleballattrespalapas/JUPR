@@ -115,6 +115,7 @@ def _draw_payload(row: dict[str, Any]) -> dict[str, Any]:
         "event_option_id": _clean_text(row.get("event_option_id"), limit=120) or None,
         "name": _clean_text(row.get("name"), limit=180),
         "status": _clean_text(row.get("status") or "draft", limit=40).lower(),
+        "pool_config": row.get("pool_config"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }

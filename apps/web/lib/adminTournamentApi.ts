@@ -117,7 +117,13 @@ export type AdminTournamentSelection = {
   updated_at?: string | null;
 };
 
+export type TournamentDrawPoolConfiguration = {
+  version: 1;
+  pools: Array<{ id: string; name: string; team_ids: string[]; advance_count: number }>;
+};
+
 export type AdminTournamentDraw = {
+  pool_config?: TournamentDrawPoolConfiguration | null;
   id: string;
   tournament_id?: string | null;
   registration_day_id?: string | null;

@@ -1,0 +1,93 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const React = require('react');
+const { act, create } = require('react-test-renderer');
+global.IS_REACT_ACT_ENVIRONMENT = true;
+const ts = require('typescript');
+const helpers = require('../lib/tournamentDrawPools.mjs');
+const { validatePlayoffReviewConfiguration } = require('../lib/tournamentDayWorkspaceState.mjs');
+const teams = count => Array.from({ length: count }, (_, i) => ({ id: `team-${i + 1}`, team_number: i + 1, seed: i + 1, label: `Player ${i + 1} / Partner ${i + 1}` }));
+for (const [count, sizes, matches] of [[8, [4, 4], 12], [6, [3, 3], 6], [7, [3, 4], 9]]) {
+  const config = helpers.seededPoolConfiguration(teams(count));
+  assert.deepEqual(config.pools.map(p => p.team_ids.length).sort(), sizes);
+  const report = helpers.inspectPoolConfiguration(config, teams(count));
+  assert.equal(report.ok, true);
+  assert.equal(report.totalMatches, matches);
+  assert.equal(report.totalQualifiers, 4);
+  assert.equal(report.uneven, count === 7);
+}
+const twoFinalists = helpers.seededPoolConfiguration(teams(6));
+twoFinalists.pools.forEach(pool => { pool.advance_count = 1; });
+assert.equal(helpers.inspectPoolConfiguration(twoFinalists, teams(6)).totalQualifiers, 2);
+assert.equal(helpers.inspectPoolConfiguration(twoFinalists, teams(6)).ok, true);
+const eight = teams(8);
+const seeded = helpers.seededPoolConfiguration(eight);
+assert.deepEqual(seeded.pools.map(p => p.team_ids), [['team-1', 'team-4', 'team-5', 'team-8'], ['team-2', 'team-3', 'team-6', 'team-7']]);
+const moved = helpers.moveTeamToPool(seeded, 'team-1', 'B');
+assert.equal(moved.pools.flatMap(p => p.team_ids).filter(id => id === 'team-1').length, 1);
+assert.equal(helpers.inspectPoolConfiguration(moved, eight).uneven, true);
+const duplicate = structuredClone(seeded); duplicate.pools[1].team_ids.push('team-1');
+assert.equal(helpers.inspectPoolConfiguration(duplicate, eight).ok, false);
+const missing = structuredClone(seeded); missing.pools[0].team_ids.shift();
+assert.equal(helpers.inspectPoolConfiguration(missing, eight).ok, false);
+const tooManyAdvance = structuredClone(seeded); tooManyAdvance.pools[0].advance_count = 5;
+assert.equal(helpers.inspectPoolConfiguration(tooManyAdvance, eight).ok, false);
+const oneAdvance = structuredClone(seeded); oneAdvance.pools[0].advance_count = 0; oneAdvance.pools[1].advance_count = 1;
+assert.equal(helpers.inspectPoolConfiguration(oneAdvance, eight).ok, false);
+const review = { configured_advance_count: 4, recommended_seed_team_ids: ['team-1', 'team-2', 'team-4', 'team-3'], eligible_team_ids: eight.map(t => t.id), templates: [{code: 'FOUR', advance_count: 4, applicable_rounds: ['SF', 'FINAL', 'BRONZE']}], scoring_formats: [{code: 'GAME_TO_11'}] };
+const conf = { template_code: 'FOUR', seed_team_ids: review.recommended_seed_team_ids, round_scoring: {SF: 'GAME_TO_11', FINAL: 'GAME_TO_11', BRONZE: 'GAME_TO_11'} };
+assert.equal(validatePlayoffReviewConfiguration(review, conf).ok, true);
+const overridden = { ...conf, seed_team_ids: ['team-1', 'team-2', 'team-5', 'team-3'] };
+assert.match(validatePlayoffReviewConfiguration(review, overridden).message, /Explain/);
+assert.equal(validatePlayoffReviewConfiguration(review, {...overridden, override_reason: 'Pool A runner-up withdrew; next team advances.'}).ok, true);
+assert.equal(validatePlayoffReviewConfiguration(review, {...overridden, override_reason: 'x'.repeat(501)}).ok, false);
+assert.equal(validatePlayoffReviewConfiguration({...review, configured_advance_count: 6}, conf).ok, false);
+assert.equal(validatePlayoffReviewConfiguration({...review, configured_advance_count: 6}, {...conf, override_reason:'Two qualifying teams withdrew; reduce the playoff to four.'}).ok, true);
+assert.equal(validatePlayoffReviewConfiguration(review, {...conf, seed_team_ids: ['team-1', 'team-1', 'team-4', 'team-3']}).ok, false);
+
+const reduced = { ...review, eligible_team_ids:['team-1','team-2','team-3'], templates:[{code:'THREE',advance_count:3,applicable_rounds:['SF','FINAL']}] };
+const reducedConfig = { template_code:'THREE',seed_team_ids:['team-1','team-2','team-3'],round_scoring:{SF:'GAME_TO_11',FINAL:'GAME_TO_11'} };
+assert.equal(validatePlayoffReviewConfiguration(reduced,reducedConfig).ok,false);
+assert.equal(validatePlayoffReviewConfiguration(reduced,{...reducedConfig,override_reason:'One qualifier withdrew, so three teams remain.'}).ok,true);
+
+const file = path.resolve(__dirname, '../app/admin/tournaments/ops/TournamentDrawPoolsPanel.tsx');
+const compiled = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
+const loaded = { exports: {} };
+new Function('require', 'module', 'exports', compiled)(name => {
+  if (name === '@/lib/tournamentDrawPools.mjs') return helpers;
+  if (name === '@/components/ConfirmAction') return { ConfirmAction: props => React.createElement('button', {disabled: props.disabled, onClick: () => props.onConfirm(props.confirmationText)}, props.triggerLabel) };
+  return require(name);
+}, loaded, loaded.exports);
+function text(node) { if (typeof node === 'string' || typeof node === 'number') return String(node); return (node.children || []).map(text).join(''); }
+async function main() {
+  let renderer;
+  const saves = [], dirty = [];
+  const props = { teams: teams(6), savedConfiguration: null, hasGames: false, disabled: false, busy: false, onDirtyChange: value => dirty.push(value), onSave: async (config, confirmation) => { saves.push({config, confirmation}); return {status:'succeeded',title:'Saved'}; } };
+  await act(async () => { renderer = create(React.createElement(loaded.exports.default, props)); });
+  const root = renderer.root;
+  const button = label => renderer.root.findAllByType('button').find(node => text(node) === label);
+  assert.equal(button('Save pools').props.disabled, true);
+  await act(async () => button('Split into two pools').props.onClick());
+  assert.equal(dirty.at(-1), true);
+  assert.match(text(root), /6 pool matches · 4 playoff teams/);
+  assert.equal(root.findAllByType('select').filter(node => node.props['aria-label']?.startsWith('Pool for')).length, 6);
+  await act(async () => button('Save pools').props.onClick());
+  assert.equal(saves[0].confirmation, 'SAVE POOLS');
+  assert.deepEqual(saves[0].config.pools.map(p => p.team_ids.length), [3, 3]);
+  const assigning = label => root.findAllByType('select').find(node => node.props['aria-label'] === label);
+  await act(async () => assigning('Pool for Player 1 / Partner 1').props.onChange({target:{value:'B'}}));
+  assert.match(text(root), /Uneven pools/);
+  await act(async () => assigning('Pool for Player 4 / Partner 4').props.onChange({target:{value:'B'}}));
+  assert.equal(button('Save pools').props.disabled, true, 'Do not save a one-team pool or quota larger than that pool');
+  await act(async () => button('Reset to saved pools').props.onClick());
+  assert.equal(dirty.at(-1), false);
+  assert.ok(button('Split into two pools'));
+  await act(async () => renderer.update(React.createElement(loaded.exports.default, {...props,key:'saved',savedConfiguration:saves[0].config,hasGames:true})));
+  assert.match(text(renderer.root), /Pool assignments are locked/);
+  assert.equal(renderer.root.findAllByType('select').every(node => node.props.disabled), true);
+  assert.equal(button('Remove pool split').props.disabled, true);
+  await act(async () => renderer.unmount());
+  console.log('tournament draw pool editor and playoff override contract: ok');
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });
