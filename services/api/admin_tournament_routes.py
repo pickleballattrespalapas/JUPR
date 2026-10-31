@@ -55,6 +55,7 @@ from jupr_app.services.admin_tournament_podium_review_service import (
     review_admin_tournament_draw_podium,
 )
 from jupr_app.services.admin_tournament_registration_import_service import import_admin_tournament_registrations_to_draw
+from jupr_app.services.admin_tournament_player_link_service import link_admin_tournament_registration_player
 from jupr_app.services.admin_tournament_registration_import_recovery_service import (
     REGISTRATION_IMPORT_RECONCILE_CONFIRMATION,
     reconcile_admin_tournament_registration_import_operation,
@@ -113,6 +114,12 @@ from jupr_app.services.admin_tournament_team_competition_service import (
     is_admin_team_tournament_enabled,
 )
 from services.api.auth import authenticate_bearer, auth_header
+
+
+class AdminTournamentRegistrationPlayerLinkRequest(BaseModel):
+    player_id: int = Field(gt=0)
+    expected_updated_at: str = Field(min_length=1)
+    confirmation_text: str
 
 
 class AdminTournamentRegistrationUpdateRequest(BaseModel):
@@ -802,6 +809,30 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 source=payload.source,
                 preflight=lambda: replace_admin_tournament_draw_teams(supabase, **kwargs, dry_run=True),
                 mutate=lambda: replace_admin_tournament_draw_teams(supabase, **kwargs),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}/link-player")
+    def post_admin_tournament_registration_player_link(
+        club_id: str, tournament_id: str, registration_id: str,
+        payload: AdminTournamentRegistrationPlayerLinkRequest, authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase, club_id=club_id, authorization=authorization,
+            source="next_tournament_ops_player_link",
+        )
+        try:
+            require_tournament_admin_mutation_runtime("operations")
+            # This CAS-protected assignment, its team projections, and its audit
+            # are one transaction. Repeating the same link is an explicit no-op.
+            return link_admin_tournament_registration_player(
+                supabase, club_id=club_id, tournament_id=tournament_id, registration_id=registration_id,
+                player_id=payload.player_id, expected_updated_at=payload.expected_updated_at,
+                confirmation_text=payload.confirmation_text, actor_email=actor_email, actor_role=actor_role,
             )
         except Exception as exc:
             _handle(exc)

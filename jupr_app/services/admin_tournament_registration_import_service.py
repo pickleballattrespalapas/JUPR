@@ -420,6 +420,20 @@ def import_admin_tournament_registrations_to_draw(
     registrations_by_id = {_clean_text(row.get("id"), limit=120): row for row in registrations}
     registrations_by_email = {_email(row.get("email")): row for row in registrations if _email(row.get("email"))}
     selections = _selections_for_draw(supabase, tournament_id=clean_tournament_id, draw=draw)
+    selected_registration_ids = {str(row.get("registration_id") or "") for row in selections
+                                 if str(row.get("partner_mode") or "").upper() != "NEEDS_PARTNER"}
+    unlinked_names = sorted({
+        str(row.get("display_name") or row.get("id"))
+        for row in registrations
+        if str(row.get("id") or "") in selected_registration_ids
+        and _is_confirmed_registration(row) and _safe_int(row.get("player_id")) is None
+    })
+    if unlinked_names:
+        raise ValueError(
+            "Some confirmed registrations could not be resolved to PCS player profiles: "
+            + ", ".join(unlinked_names)
+            + ". Close this dialog and use Link player profiles in the import section, then try importing again."
+        )
     finalized_reviews = (
         _finalized_combined_rating_reviews(
             supabase,
