@@ -285,6 +285,24 @@ async function main() {
     assert.deepEqual(transfer.division_transfer_context, selections[1].division_transfer_context);
     assert.equal(transfer.partner_mode, undefined, "Moving a division must not reset the partner state");
     assert.equal(transfer.expected_updated_at, selections[1].updated_at);
+    // The Edit entry path also supports moving a confirmed team while clearing
+    // an obsolete public note, as in the reported Mixed 2.5 -> Mixed 3.0 move.
+    selections[1].partner_note = "2.0 level";
+    await act(async () => { await save(); });
+    await act(async () => entry("Doubles entry").findAllByType("button").find(node => content(node) === "Edit entry").props.onClick());
+    assert.equal(field("Public partner note").findByType("textarea").props.value, "2.0 level");
+    await act(async () => field("Public partner note").findByType("textarea").props.onChange({ target: { value: "" } }));
+    await act(async () => field("Division").findByType("select").props.onChange({ target: { value: "doubles-4.5" } }));
+    assert.equal(divisionDialog().props.submitLabel, "Move both players");
+    assert.equal(divisionDialog().props.submitDisabled, false);
+    await act(async () => { completion = await divisionDialog().props.onSubmit(); });
+    assert.equal(completion.status, "success");
+    assert.deepEqual(requests.at(-1), {
+      event_option_id: "doubles-4.5", partner_note: "",
+      division_transfer_context: selections[1].division_transfer_context,
+      expected_updated_at: selections[1].updated_at,
+      confirmation_text: "SAVE SELECTION", source: "next_tournament_registration_detail"
+    }, "The move carries the requested note edit without replacing the confirmed partner");
     await verifyPublicLegacyGenders();
     await act(async () => field("Registration status").findByType("select").props.onChange({ target: { value: "cancelled" } }));
     const cancellation = () => renderer.root.findAllByType(ConfirmAction).find(node => node.props.confirmLabel === "Yes, cancel and remove");
