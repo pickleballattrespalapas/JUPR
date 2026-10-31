@@ -69,6 +69,28 @@ jobs:
             tests/test_public_read_cache.py \
             tests/test_public_read_scoping.py
 
+      - name: Verify tournament pool schedules and progression
+        run: |
+          python -m pytest -q \
+            tests/test_tournament_pool_play.py \
+            tests/test_admin_tournament_pool_service.py \
+            tests/test_admin_tournament_pool_schedule_service.py \
+            tests/test_admin_tournament_pool_progression.py \
+            tests/test_tournament_pool_lifecycle.py \
+            tests/test_public_tournament_pools.py
+
+      - name: Set up Node for pool database tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify tournament pool database transactions
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tournament-pool-sql" --no-save --ignore-scripts @electric-sql/pglite@0.5.10
+          export PGLITE_MODULE="$RUNNER_TEMP/tournament-pool-sql/node_modules/@electric-sql/pglite/dist/index.js"
+          node tests/sql/tournament_draw_pools.mjs
+          node tests/sql/tournament_pool_progression.mjs
+
       - name: Verify League Live with the standalone uploader disabled
         run: |
           python -m pytest -q \

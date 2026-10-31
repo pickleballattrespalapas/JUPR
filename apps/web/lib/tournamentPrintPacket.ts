@@ -140,6 +140,45 @@ export function tournamentPrintDraws(snapshot: Snapshot, drawIds: string[]): Pri
   });
 }
 
+/** Native pools share one draw and playoff bracket, but need separate tallies. */
+export function tournamentPrintPools(model: PrintDraw): PrintDraw[] {
+  const pools=model.draw.pool_config?.pools;
+  if (!pools?.length) return [model];
+  const memberships=new Map<string,string>();
+  for (const pool of pools) for (const id of pool.team_ids) {
+    if (memberships.has(id) || !model.teams.some(team=>team.id===id)) {
+      throw new Error("Pool team assignments do not match the saved draw. Reload the day before printing.");
+    }
+    memberships.set(id,pool.id);
+  }
+  if (model.teams.some(team=>!memberships.has(team.id))) {
+    throw new Error("A team is missing its pool assignment. Reload the day before printing.");
+  }
+  for (const game of model.games.filter(rr)) {
+    const pool=memberships.get(game.team_a.team_id || "");
+    if (!pool || pool!==memberships.get(game.team_b.team_id || "") || (game.pool_id && game.pool_id!==pool)) {
+      throw new Error("A saved match does not belong to one pool. Review the pool schedule before printing.");
+    }
+  }
+  return pools.map(pool=>{
+    const teams=model.teams.filter(team=>memberships.get(team.id)===pool.id);
+    const rounds=model.rounds.map(round=>{
+      const games=round.games.filter(game=>memberships.get(game.team_a.team_id || "")===pool.id);
+      const playing=new Set(games.flatMap(game=>[game.team_a.team_id,game.team_b.team_id]));
+      return {...round,games,byes:teams.filter(team=>!playing.has(team.id))};
+    }).filter(round=>round.games.length);
+    const draw={...model.draw,name:`${model.draw.name} - ${pool.name}`};
+    return {draw,teams,rounds,games:rounds.flatMap(round=>round.games),playoffs:[]};
+  });
+}
+
+function cardDivision(game: Game, model?: PrintDraw): string {
+  const division=model?.draw.name || game.draw_name;
+  if (!rr(game)) return division;
+  const pool=game.pool_name || model?.draw.pool_config?.pools.find(pool=>pool.team_ids.includes(game.team_a.team_id || "") && pool.team_ids.includes(game.team_b.team_id || ""))?.name;
+  return pool ? `${division} - ${pool}` : division;
+}
+
 /** Current court/queue order is authoritative. Future court dispatch is dynamic;
  * the remaining cards follow saved rounds across the selected draws. */
 export function tournamentPrintMatches(snapshot: Snapshot, models: PrintDraw[], options: TournamentPrintOptions): PrintMatch[] {
@@ -274,7 +313,7 @@ class Paper {
 function card(paper: Paper, y: number, game: Game | null, model?: PrintDraw) {
   const p = paper;
   p.fit(p.snapshot.tournament.name,32,y+32,548,30,18,true);
-  p.fit(game ? model?.draw.name || game.draw_name : "Division: ____________________________________",32,y+72,548,29,14,true);
+  p.fit(game ? cardDivision(game,model) : "Division: ____________________________________",32,y+72,548,29,14,true);
   p.fit(game ? printMatchLabel(game) : "Round: ____________________",32,y+112,360,22,12,true);
   // Cards are prepared ahead of play. The desk writes the court at dispatch,
   // even if this snapshot happens to contain a current or reserved assignment.
@@ -436,12 +475,17 @@ function playoffSheet(paper: Paper, model: PrintDraw) {
 
 export async function buildTournamentPrintPdf(snapshot: Snapshot, options: TournamentPrintOptions, scope: TournamentPrintScope) {
   const models=tournamentPrintDraws(snapshot,options.drawIds);
+  // Validate pool membership for cards too, before creating a misleading PDF.
+  const poolsByDraw=models.map(model=>tournamentPrintPools(model));
   const {jsPDF}=await import("jspdf");
   const pdf=new jsPDF({orientation:"portrait",unit:"pt",format:"letter",compress:true});
   const paper=new Paper(pdf,snapshot,Boolean(options.includeResults));
   pdf.setProperties({title:`${snapshot.tournament.name} - ${scope === "cards" ? "Match scorecards" : scope === "admin" ? "Admin tally sheets" : "Paper tournament packet"}`,creator:"Pickleball Club Sandwich"});
   if (scope !== "admin") cards(paper,models,options);
-  if (scope !== "cards") for (const model of models) { tally(paper,model); playoffSheet(paper,model); }
+  if (scope !== "cards") for (const [index,model] of models.entries()) {
+    for (const pool of poolsByDraw[index]) tally(paper,pool);
+    playoffSheet(paper,model);
+  }
   if (!paper.started) throw new Error("No matches match your selection. Include completed matches or add spare blank cards.");
   const safe=(value:string)=>clean(value).replace(/[^a-zA-Z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,70) || "tournament";
   const day=snapshot.day_scope.selected_day;

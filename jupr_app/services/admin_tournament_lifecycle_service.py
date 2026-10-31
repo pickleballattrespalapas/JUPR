@@ -8,7 +8,9 @@ from jupr_app.domain.tournament_admin_operations import (
     stable_tournament_admin_fingerprint,
 )
 from jupr_app.domain.tournament_podium import PODIUM_BADGE_MAP
-from jupr_app.domain.tournaments import compute_round_robin_standings
+from jupr_app.domain.tournaments import compute_round_robin_standings, compute_podium_from_playoffs
+from jupr_app.domain.tournaments.bracket_builder import PLAYOFF_TEMPLATES
+from jupr_app.domain.tournaments.pools import compute_pool_standings, normalize_pool_config, validate_pool_schedule
 from jupr_app.services.admin_tournament_ops_service import build_admin_tournament_ops_runtime_status
 from jupr_app.services.admin_tournament_podium_review_service import (
     build_admin_tournament_podium_review_fingerprint,
@@ -1135,6 +1137,7 @@ def _draw_core_blockers(
     expected_awards: list[dict[str, Any]],
     award_rows: list[dict[str, Any]],
     awards_available: bool,
+    pool_config: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     team_ids = {str(row.get("id") or "") for row in teams if row.get("id")}
@@ -1195,16 +1198,45 @@ def _draw_core_blockers(
     )
     placements = [row["placement"] for row in podium_rows]
     podium_team_ids = [str(row["team_id"]) for row in podium_rows]
+    playoff_games = [game for game in games if str(game.get("stage") or "").upper() == "PLAYOFF"]
+    pool_playoff_podium: list[dict[str, Any]] | None = None
+    pool_qualifier_count: int | None = None
+    if pool_config is not None:
+        try:
+            normalized = normalize_pool_config(pool_config, teams)
+            validate_pool_schedule(teams, games, normalized, require_complete=True)
+            pool_qualifier_ids = {
+                str(game.get(side) or "")
+                for game in playoff_games
+                for side in ("team_a_id", "team_b_id")
+                if game.get(side)
+            }
+            pool_qualifier_count = len(pool_qualifier_ids)
+            if pool_qualifier_count not in PLAYOFF_TEMPLATES or not pool_qualifier_ids.issubset(team_ids):
+                raise ValueError("Review and complete a supported combined playoff for this division.")
+            if len(playoff_games) != len(PLAYOFF_TEMPLATES[pool_qualifier_count]["games"]):
+                raise ValueError("Complete the division's combined playoff bracket before publishing pool results.")
+            pool_playoff_podium = compute_podium_from_playoffs(playoff_games)
+            if not pool_playoff_podium:
+                raise ValueError("Finish the combined playoff before reviewing the division podium.")
+        except (ValueError, KeyError, TypeError) as exc:
+            blockers.append(_blocker("POOL_CHAMPIONSHIP_INCOMPLETE", str(exc), scope="draw", draw_id=draw_id))
+    final_only = pool_qualifier_count == 2 and len(playoff_games) == 1 and str(playoff_games[0].get("playoff_round") or "").upper() == "FINAL"
+    expected_placements = [1, 2] if final_only else [1, 2, 3]
     podium_complete = (
-        placements == [1, 2, 3]
-        and len(set(podium_team_ids)) == 3
+        placements == expected_placements
+        and len(set(podium_team_ids)) == len(expected_placements)
         and all(team_id in team_ids for team_id in podium_team_ids)
     )
+    if pool_config is not None:
+        podium_complete = podium_complete and bool(pool_playoff_podium) and {
+            (row["placement"], row["team_id"]) for row in podium_rows
+        } == {(row["placement"], str(row["team_id"])) for row in (pool_playoff_podium or [])}
     if not podium_complete:
         blockers.append(
             _blocker(
                 "PODIUM_INCOMPLETE",
-                f"{draw_name} needs exactly one valid first-, second-, and third-place team.",
+                f"{draw_name} needs exactly one valid team for each expected podium placement ({', '.join(map(str, expected_placements))}).",
                 scope="draw",
                 draw_id=draw_id,
                 entity_type="tournament_podium",
@@ -1850,6 +1882,7 @@ def build_admin_tournament_lifecycle(
             expected_awards=expected_awards,
             award_rows=award_rows,
             awards_available=awards_available,
+            pool_config=draw.get("pool_config"),
         )
         if series_errors:
             missing_legacy_details = [
@@ -2005,8 +2038,18 @@ def build_admin_tournament_lifecycle(
             for row in competition_games
             if str(row.get("stage") or "").upper() == "ROUND_ROBIN"
         ]
+        pool_standings: list[dict[str, Any]] = []
         try:
-            standings = compute_round_robin_standings(draw_teams, rr_games) if draw_teams else []
+            if draw.get("pool_config") is not None:
+                pool_standings = compute_pool_standings(draw_teams, rr_games, draw["pool_config"])
+                standings = []
+                for pool in pool_standings:
+                    pool["standings"] = [
+                        {**row, "team_name": team_labels.get(str(row.get("team_id") or ""), "Tournament team")}
+                        for row in pool["standings"]
+                    ]
+            else:
+                standings = compute_round_robin_standings(draw_teams, rr_games) if draw_teams else []
         except Exception:
             standings = []
         standings = [
@@ -2074,6 +2117,7 @@ def build_admin_tournament_lifecycle(
                 },
                 "teams": team_summaries,
                 "standings": standings,
+                "pool_standings": pool_standings,
                 "podium": podium_summary,
                 "states": states,
                 "operations": draw_operations,

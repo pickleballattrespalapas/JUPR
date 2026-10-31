@@ -55,7 +55,7 @@ export default function TournamentPrintPanel({ snapshot }: { snapshot: AdminTour
         {snapshot.draws.map(draw => (
           <label key={draw.id}>
             <input type="checkbox" checked={drawIds.includes(draw.id)} onChange={event => setSelected(previous => event.target.checked ? [...previous, draw.id] : previous.filter(id => id !== draw.id))} />
-            {draw.name}
+            {draw.name}{draw.pool_config?.pools.length ? ` (${draw.pool_config.pools.length} pools)` : ""}
           </label>
         ))}
         {!snapshot.draws.length ? <p>Create your divisions and generate their match schedules first.</p> : null}
@@ -84,7 +84,7 @@ export default function TournamentPrintPanel({ snapshot }: { snapshot: AdminTour
         </label>
       </div>
       <p className={styles.help}>Cards follow current court assignments and the ready queue, then the saved rounds across selected divisions, with playoff feeder matches first. Future dispatch can change as courts finish. {cardLayout === "cut-stack" ? "Keep the printed pages in page order, cut the stack in half, then put the top-half pile on the bottom-half pile." : "Take the top card, then the bottom card from each page in page order."}</p>
-      <p className={styles.help}>The admin chart keeps the saved round-robin schedule on the left and each team’s For / Against columns on the right, with wins/losses, totals, differential and seed below. Large draws continue across sheets. Admin sheets always include the full saved schedule.</p>
+      <p className={styles.help}>The admin chart keeps the saved round-robin schedule on the left and each team’s For / Against columns on the right, with wins/losses, totals, differential and seed below. Each pool gets its own tally; the division’s shared playoff bracket prints once. Large draws continue across sheets. Admin sheets always include the full saved schedule.</p>
       {missingSchedules.length ? <p className={styles.notice}>No saved matches yet for {missingSchedules.map(draw => draw.name).join(", ")}. Generate those schedules before printing their match cards.</p> : null}
       {noPlayoffs.length ? <p className={styles.help}>Playoff matches have not been generated for {noPlayoffs.map(draw => draw.name).join(", ")}. Their playoff cards and bracket worksheets will be available after generation. Spare blank cards can be used for later matches.</p> : null}
       <p className={styles.help}>{drawIds.length} selected · {cardCount} scorecards · {Math.ceil(cardCount/2)} scorecard pages. Every court field is blank so the desk can write the court number when sending a match out. Reprint after changing teams or the schedule.</p>

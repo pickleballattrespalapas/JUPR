@@ -25,6 +25,8 @@ export type PublicTournamentSeriesGameScore = {
 export type PublicTournamentGameResult = {
   public_game_key: string;
   stage: string;
+  public_pool_key?: string | null;
+  pool_name?: string | null;
   round_number?: number | null;
   slot_number?: number | null;
   playoff_game_code?: string | null;
@@ -52,6 +54,28 @@ export type PublicTournamentTiebreakExplanation = {
   steps: PublicTournamentTiebreakExplanationStep[];
 };
 
+export type PublicTournamentStanding = {
+  public_team_key: string;
+  rank?: number | null;
+  team_name: string;
+  wins?: number | null;
+  losses?: number | null;
+  points_for?: number | null;
+  points_against?: number | null;
+  differential?: number | null;
+  competition_status?: string | null;
+  retired?: boolean;
+};
+
+export type PublicTournamentPoolStanding = {
+  public_pool_key: string;
+  name: string;
+  advance_count: number;
+  round_robin_complete: boolean;
+  standings: PublicTournamentStanding[];
+  tiebreak_explanations: PublicTournamentTiebreakExplanation[];
+};
+
 export type PublicTournamentDrawResult = {
   public_draw_key: string;
   name: string;
@@ -76,18 +100,8 @@ export type PublicTournamentDrawResult = {
     name: string;
     competition_status?: string | null;
   }>;
-  standings: Array<{
-    public_team_key: string;
-    rank?: number | null;
-    team_name: string;
-    wins?: number | null;
-    losses?: number | null;
-    points_for?: number | null;
-    points_against?: number | null;
-    differential?: number | null;
-    competition_status?: string | null;
-    retired?: boolean;
-  }>;
+  standings: PublicTournamentStanding[];
+  pool_standings?: PublicTournamentPoolStanding[];
   tiebreak_explanations?: PublicTournamentTiebreakExplanation[];
   scores: PublicTournamentGameResult[];
   bracket: PublicTournamentGameResult[];

@@ -9,7 +9,7 @@ function load(file) {
   new Function('require','module','exports',code)(require,module,module.exports);
   return module.exports;
 }
-const {buildTournamentPrintPdf,tournamentPrintDraws,tournamentPrintMatches,tournamentCardPages,tournamentTallyPages,printScoring,printSource} = load(path.join(__dirname,'../lib/tournamentPrintPacket.ts'));
+const {buildTournamentPrintPdf,tournamentPrintDraws,tournamentPrintPools,tournamentPrintMatches,tournamentCardPages,tournamentTallyPages,printScoring,printSource} = load(path.join(__dirname,'../lib/tournamentPrintPacket.ts'));
 function contents(pdf) {
   const bytes = Buffer.from(pdf.output('arraybuffer'));
   assert.equal(bytes.subarray(0,5).toString(),'%PDF-');
@@ -44,6 +44,29 @@ function savedFixture(n) {
     sample.games=saved.map((game,index)=>({...base,id:`saved-${n}-${index}`,rr_round_number:game.rr_round_number,rr_slot_number:game.rr_slot_number,round_label:`Round ${game.rr_round_number}`,slot_label:`Slot ${game.rr_slot_number}`,team_a:side(game.team_a_id),team_b:side(game.team_b_id)}));
   }
   return sample;
+}
+
+function poolFixture(sizes) {
+  const snapshot=fixture(sizes.reduce((a,b)=>a+b,0),'pooled-draw');
+  const draw=snapshot.draws[0], standings=draw.round_robin_summary.standings;
+  const pools=[],games=[],slots=new Map();
+  let offset=0;
+  for(const [index,size] of sizes.entries()) {
+    const members=standings.slice(offset,offset+size);
+    const pool={id:`pool-${index+1}`,name:`Pool ${String.fromCharCode(65+index)}`,team_ids:members.map(team=>team.team_id),advance_count:1};
+    pools.push(pool);
+    const local=fixture(size);
+    const side=value=>{const team=members[Number(value.team_id.split('-').at(-1))-1];return {team_id:team.team_id,name:team.team_name,participant_names:team.participant_names};};
+    for(const game of local.games) {
+      const slot=(slots.get(game.rr_round_number)||0)+1;
+      slots.set(game.rr_round_number,slot);
+      games.push({...game,id:`${pool.id}-${game.id}`,draw_id:draw.id,draw_name:draw.name,pool_id:pool.id,pool_name:pool.name,rr_slot_number:slot,slot_label:`Slot ${slot}`,team_a:side(game.team_a),team_b:side(game.team_b)});
+    }
+    offset+=size;
+  }
+  draw.pool_config={version:1,pools};
+  snapshot.games=games.sort((a,b)=>a.rr_round_number-b.rr_round_number || a.rr_slot_number-b.rr_slot_number);
+  return snapshot;
 }
 
 (async()=>{
@@ -123,6 +146,30 @@ function savedFixture(n) {
   assert.equal(courtFields.length,combined.games.length);
   assert.ok(courtFields.every(value=>value==='__________'),'all courts stay writable, including current, reserved and unassigned matches');
   assert.ok(!queueCards.includes('Team 1 -') && !queueCards.includes('Winner \\(circle\\):'),'cards identify teams by names only');
+
+  for(const sizes of [[4,4],[3,3],[3,5],[2,3,3],[2,2,2,2,2,2,2,2]]) {
+    const snapshot=poolFixture(sizes),ids=[snapshot.draws[0].id],before=JSON.stringify(snapshot);
+    const parent=tournamentPrintDraws(snapshot,ids)[0],pools=tournamentPrintPools(parent);
+    assert.deepEqual(pools.map(pool=>pool.teams.length),sizes,'each native pool has its own roster');
+    assert.deepEqual(pools.map(pool=>pool.games.length),sizes.map(n=>n*(n-1)/2));
+    for(const [index,pool] of pools.entries()) {
+      const members=new Set(snapshot.draws[0].pool_config.pools[index].team_ids);
+      assert.ok(pool.rounds.every(round=>round.byes.length===sizes[index]%2),'byes belong to their own pool only');
+      assert.ok(pool.teams.every(team=>members.has(team.id)));
+      assert.deepEqual(pool.games,snapshot.games.filter(game=>game.pool_id===snapshot.draws[0].pool_config.pools[index].id),'pool charts preserve saved global slot order');
+    }
+    const admin=await buildTournamentPrintPdf(snapshot,{drawIds:ids},'admin');
+    assert.equal(admin.pdf.getNumberOfPages(),sizes.length,'one small chart per pool');
+    const cards=contents((await buildTournamentPrintPdf(snapshot,{drawIds:ids},'cards')).pdf);
+    for(const pool of snapshot.draws[0].pool_config.pools) assert.ok(cards.includes(pool.name),'cards identify the native pool');
+    assert.equal(JSON.stringify(snapshot),before,'printing preserves pool assignments and advancement');
+    const sharedFinal={...snapshot.games[0],id:'shared-final',stage:'PLAYOFF',pool_id:null,pool_name:null,round_label:'Final',playoff_round:'FINAL',playoff_game_code:'P1',team_b:snapshot.games.at(-1).team_b};
+    const withFinal=await buildTournamentPrintPdf({...snapshot,games:[...snapshot.games,sharedFinal]},{drawIds:ids},'admin');
+    assert.equal(withFinal.pdf.getNumberOfPages(),sizes.length+1,'the shared division playoff worksheet appears only once');
+  }
+  const invalidPool=poolFixture([3,3]);
+  invalidPool.games[0].team_b=invalidPool.games.at(-1).team_b;
+  await assert.rejects(buildTournamentPrintPdf(invalidPool,{drawIds:[invalidPool.draws[0].id]},'cards'),/does not belong to one pool/);
 
   const snapshot=fixture(4), id=snapshot.draws[0].id, opts={drawIds:[id]};
   // Use a changed saved schedule and non-contiguous slots. A count-based
