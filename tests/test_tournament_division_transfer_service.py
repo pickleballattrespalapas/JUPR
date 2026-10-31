@@ -154,6 +154,55 @@ def test_admin_confirmed_transfer_requires_partner_snapshot(monkeypatch):
     assert not supabase.rpc_calls
 
 
+@pytest.mark.parametrize("note", [None, "", "Moving up to 3.0", "2.0 level"])
+def test_admin_confirmed_transfer_allows_public_note_edits(monkeypatch, note):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    supabase, storage, _token, payload = _team(monkeypatch, other_day=True)
+    selection = storage["tournament_registration_selections"][0]
+    selection["partner_note"] = "2.0 level"
+    before = deepcopy(storage)
+    result = update_admin_tournament_selection(
+        supabase, club_id="club-1", tournament_id="t1", selection_id=selection["id"],
+        expected_updated_at=selection["updated_at"], actor_email="admin@example.com", actor_role="club_owner",
+        confirmation_text="SAVE SELECTION", dry_run=True,
+        patch={"event_option_id": "higher-division", "partner_note": note,
+               "division_transfer_context": payload["selections"][0]["division_transfer_context"]},
+    )
+    assert result["patch"] == {
+        "event_option_id": "higher-division", "registration_day_id": "another-day",
+        "partner_note": note or "",
+        "division_transfer_context": payload["selections"][0]["division_transfer_context"],
+    }
+    assert not supabase.rpc_calls
+    for table in before:
+        assert storage[table] == before[table]
+
+
+@pytest.mark.parametrize("partner_patch", [
+    {"partner_mode": "NONE"}, {"partner_name": "Someone else"},
+    {"partner_email": "someone-else@example.com"}, {"partner_phone": "555-1234"},
+    {"partner_dupr_id": "different-id"}, {"partner_skill": 6.5},
+    {"partner_age": 25}, {"partner_gender": "Men"},
+])
+def test_admin_confirmed_transfer_still_rejects_partner_changes(monkeypatch, partner_patch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    supabase, storage, _token, payload = _team(monkeypatch)
+    selection = storage["tournament_registration_selections"][0]
+    before = deepcopy(storage)
+    with pytest.raises(ValueError, match="keeps the confirmed partner"):
+        update_admin_tournament_selection(
+            supabase, club_id="club-1", tournament_id="t1", selection_id=selection["id"],
+            expected_updated_at=selection["updated_at"], actor_email="admin@example.com", actor_role="club_owner",
+            confirmation_text="SAVE SELECTION", dry_run=True,
+            patch={"event_option_id": "higher-division", "partner_note": "",
+                   "division_transfer_context": payload["selections"][0]["division_transfer_context"],
+                   **partner_patch},
+        )
+    assert not supabase.rpc_calls
+    for table in before:
+        assert storage[table] == before[table]
+
+
 @pytest.mark.parametrize("reason,error,match", [
     ("DIVISION_FULL", ValueError, "full"),
     ("DIVISION_COMMERCE_REVIEW_REQUIRED", ValueError, "event-specific pricing"),

@@ -19,7 +19,7 @@ declare
   expected_reason text;
 begin
   select id::text into strict club from public.clubs order by id limit 1;
-  foreach scenario in array array['admin_success','public_success','stale_partner','stale_link',
+  foreach scenario in array array['admin_success','admin_note_edit','admin_note_clear','public_success','stale_partner','stale_link',
     'cancelled','capacity','family','price','target_closed','duplicate','draw','public_rollback'] loop
     tournament := gen_random_uuid(); suffix := replace(tournament::text,'-','');
     reg1 := 'reg1_'||suffix; reg2 := 'reg2_'||suffix;
@@ -57,6 +57,8 @@ begin
     -- Exercise the canonical manual-partner trigger with real stored snapshots.
     update public.tournament_registration_selections set partner_name='Transfer Two',partner_email='two-'||suffix||'@example.invalid',
       partner_age=62,partner_gender='Men',partner_skill=4.12 where id=sel1;
+    update public.tournament_registration_selections set partner_note='2.0 level' where id=sel1;
+    update public.tournament_registration_selections set partner_note='Partner note retained' where id=sel2;
     -- Cancellation is exercised without an order: a real paid cancellation
     -- requires its own commerce revision evidence, outside this transfer test.
     if scenario <> 'cancelled' then
@@ -127,8 +129,14 @@ begin
       result:=public.server_update_public_tournament_registration_edit(tournament::text,reg1,primary_version,versions,
         jsonb_build_object('display_name','Edited Name','age',60,'gender','Men','doubles_skill',4),desired);
     else
+      desired:=jsonb_build_object('event_option_id',target_event,'registration_day_id',day2,'division_transfer_context',context);
+      if scenario='admin_note_edit' then
+        desired:=desired || jsonb_build_object('partner_note','Moving up');
+      elsif scenario='admin_note_clear' then
+        desired:=desired || jsonb_build_object('partner_note',null);
+      end if;
       result:=public.admin_update_tournament_registration_selection(tournament::text,sel1,selection_version,
-        jsonb_build_object('event_option_id',target_event,'registration_day_id',day2,'division_transfer_context',context));
+        desired);
     end if;
     if expected_reason is null then
       if (result->>'ok') is distinct from 'true' then raise exception 'Successful % failed: %',scenario,result; end if;
@@ -144,6 +152,11 @@ begin
         or (select payment_status from public.tournament_registrations where id=reg2)<>'waived'
         or (select partner_email from public.tournament_registration_selections where id=sel1)<>'two-'||suffix||'@example.invalid' then
         raise exception 'Payment or partner data changed for %',scenario;
+      end if;
+      if (select partner_note from public.tournament_registration_selections where id=sel1)
+          is distinct from (case scenario when 'admin_note_edit' then 'Moving up' when 'admin_note_clear' then null else '2.0 level' end)
+        or (select partner_note from public.tournament_registration_selections where id=sel2) is distinct from 'Partner note retained' then
+        raise exception 'Public notes were not preserved or updated correctly for %',scenario;
       end if;
     else
       if (result->>'ok') is distinct from 'false' or coalesce(result->>'reason',result->>'code')<>expected_reason then
@@ -162,5 +175,5 @@ begin
   end loop;
 end
 $test$;
-select '12 atomic team transfer scenarios passed; fixtures rolled back' as result;
+select '14 atomic team transfer scenarios passed; fixtures rolled back' as result;
 rollback;

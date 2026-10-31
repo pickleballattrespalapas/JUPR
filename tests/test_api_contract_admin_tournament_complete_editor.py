@@ -493,6 +493,52 @@ def test_selection_update_supports_complete_manual_partner(monkeypatch) -> None:
     assert supabase.rpc_calls[-1][1]["p_patch"]["partner_gender"] == "Women"
 
 
+@pytest.mark.parametrize("note", [None, "", "Moving up to 3.0"])
+def test_move_both_players_with_note_edit_reaches_atomic_transfer_rpc(monkeypatch, note):
+    from copy import deepcopy
+    from jupr_app.domain.tournament_registration_repo import ADMIN_SELECTION_UPDATE_RPC
+    from tests.test_tournament_division_transfer_service import _team
+
+    supabase, storage, _token, payload = _team(monkeypatch, other_day=True)
+    selection = storage["tournament_registration_selections"][0]
+    selection["partner_note"] = "2.0 level"
+    before = deepcopy(storage)
+    calls = []
+
+    def rpc(name, params):
+        calls.append((name, params))
+        # The real database transaction is exercised in the SQL regression.
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data={
+            "ok": True, "selection": {**selection, **params["p_patch"]},
+        }))
+
+    monkeypatch.setattr(supabase, "rpc", rpc)
+    client = _install(monkeypatch, supabase)
+    response = client.patch(
+        f"/admin/clubs/club-1/tournaments/admin/tournaments/t1/selections/{selection['id']}",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "event_option_id": "higher-division", "partner_note": note,
+            "division_transfer_context": payload["selections"][0]["division_transfer_context"],
+            "expected_updated_at": selection["updated_at"], "confirmation_text": "SAVE SELECTION",
+            "source": "next_tournament_registration_detail",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is True
+    assert calls == [(ADMIN_SELECTION_UPDATE_RPC, {
+        "p_tournament_id": "t1", "p_selection_id": selection["id"],
+        "p_expected_updated_at": selection["updated_at"],
+        "p_patch": {
+            "event_option_id": "higher-division", "registration_day_id": "another-day",
+            "partner_note": note or None,
+            "division_transfer_context": payload["selections"][0]["division_transfer_context"],
+        },
+    })]
+    for table in ("tournament_registrations", "tournament_registration_selections", "tournament_registration_team_links"):
+        assert storage[table] == before[table], "The API must delegate writes to the atomic RPC"
+
+
 @pytest.mark.parametrize("operation", ["create", "update"])
 def test_partner_board_requires_registration_consent(
     monkeypatch, operation
