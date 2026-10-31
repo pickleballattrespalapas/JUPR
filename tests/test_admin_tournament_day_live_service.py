@@ -714,6 +714,122 @@ def test_snapshot_is_day_scoped_multi_draw_human_readable_and_stable() -> None:
     assert rescored["state_fingerprint"] != first["state_fingerprint"]
 
 
+def _combined_division_snapshot_tables() -> dict:
+    tables = snapshot_tables()
+    tables["tournament_event_draws"][0].update(
+        {"name": "Mixed 4.0 / 4.5", "source_event_option_ids": ["event-a", "event-b"]}
+    )
+    tables["tournament_event_draws"][1].update(
+        {
+            "status": "CANCELLED",
+            "hidden_from_primary_ops": True,
+            "combined_into_draw_id": "draw-a",
+        }
+    )
+    tables["tournament_teams"] = [
+        row for row in tables["tournament_teams"] if row["draw_id"] == "draw-a"
+    ]
+    tables["tournament_games"] = [
+        row for row in tables["tournament_games"] if row["draw_id"] == "draw-a"
+    ]
+    return tables
+
+
+@pytest.mark.parametrize("source_change", ["disabled", "moved_day", "missing", "incompatible_family", "eligibility_mode", "skill_mode"])
+def test_combined_draw_requires_every_source_division_to_remain_on_the_day(source_change) -> None:
+    tables = _combined_division_snapshot_tables()
+    first = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    assert [row["id"] for row in first["draws"]] == ["draw-a"]
+    assert first["draws"][0]["source_event_option_ids"] == ["event-a", "event-b"]
+    assert first["draws"][0]["readiness"]["assignments"]["ready"] is True
+
+    if source_change == "disabled":
+        tables["tournament_event_options"][1]["enabled"] = False
+    elif source_change == "moved_day":
+        tables["tournament_event_options"][1]["scheduled_day_ids"] = ["day-2"]
+    elif source_change == "incompatible_family":
+        tables["tournament_event_options"][1]["event_family_key"] = "singles"
+    elif source_change in {"eligibility_mode", "skill_mode"}:
+        tables["tournament_event_options"][1][source_change] = "COMBINED_RATING_CAP"
+    else:
+        tables["tournament_event_options"].pop()
+
+    changed = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    assert changed["state_fingerprint"] != first["state_fingerprint"]
+    draw = changed["draws"][0]
+    assert draw["readiness"]["assignments"]["ready"] is False
+    assert draw["readiness"]["activate"]["ready"] is False
+    if source_change in {"incompatible_family", "eligibility_mode", "skill_mode"}:
+        assert any(
+            row["code"] == "DRAW_SOURCE_INVALID"
+            for row in draw["readiness"]["assignments"]["blockers"]
+        )
+    else:
+        blocker = next(
+            row
+            for row in draw["readiness"]["assignments"]["blockers"]
+            if row["code"] == "DRAW_UNSCHEDULED"
+        )
+        assert blocker["event_option_ids"] == ["event-b"]
+
+
+def test_combined_draw_fingerprint_binds_source_membership_and_day_close_counts_one_draw() -> None:
+    tables = _combined_division_snapshot_tables()
+    tables["tournament_day_live_runs"] = [
+        {
+            "id": "run-1",
+            "club_id": "club-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "state": "ACTIVE",
+            "version": 1,
+            "queue_version": 1,
+        }
+    ]
+    tables["tournament_day_live_draws"] = [
+        {
+            "id": "day-draw-a",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "draw_id": "draw-a",
+            "state": "ACTIVE",
+            "source_draw_updated_at": "2026-08-17T08:00:00Z",
+            "version": 1,
+        }
+    ]
+    combined = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    assert not any(
+        row["code"] in {"NO_ACTIVATED_DRAWS", "SCHEDULED_DRAWS_NOT_ACTIVATED"}
+        for row in combined["readiness"]["close_day"]["blockers"]
+    )
+
+    tables["tournament_event_draws"][0]["source_event_option_ids"] = []
+    single = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    assert single["state_fingerprint"] != combined["state_fingerprint"]
+    assert single["draws"][0]["source_event_option_ids"] == ["event-a"]
+
+
 def test_snapshot_nests_best_of_three_rating_games_under_the_matchup() -> None:
     tables = snapshot_tables()
     parent = next(row for row in tables["tournament_games"] if row["id"] == "game-a")

@@ -118,6 +118,8 @@ def _team_payload(row: dict[str, Any]) -> dict[str, Any]:
         "draw_id": _clean_text(row.get("draw_id"), limit=120) or None,
         "registration_day_id": _clean_text(row.get("registration_day_id"), limit=120) or None,
         "event_option_id": _clean_text(row.get("event_option_id"), limit=120) or None,
+        "source_event_option_id": _clean_text(row.get("source_event_option_id"), limit=120) or None,
+        "source_selection_id": _clean_text(row.get("source_selection_id"), limit=120) or None,
         "team_number": _safe_int(row.get("team_number")),
         "player1_id": _safe_int(row.get("player1_id")),
         "player2_id": _safe_int(row.get("player2_id")),
@@ -250,6 +252,31 @@ def replace_admin_tournament_draw_teams(
 
     before_rows = _existing_teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     next_rows = _normalize_team_rows(list(teams or []), draw=draw, tournament_id=clean_tournament_id)
+    # The editor may regenerate row IDs or reverse partner order. Preserve
+    # registration provenance only for an unchanged saved player pair, using
+    # server-side evidence rather than provenance supplied by the browser.
+    existing_pairs: dict[tuple[int, ...], list[dict[str, Any]]] = {}
+    for row in before_rows:
+        pair = tuple(sorted(
+            player_id for player_id in (_safe_int(row.get("player1_id")), _safe_int(row.get("player2_id")))
+            if player_id is not None
+        ))
+        existing_pairs.setdefault(pair, []).append(row)
+    for row in next_rows:
+        pair = tuple(sorted(
+            player_id for player_id in (_safe_int(row.get("player1_id")), _safe_int(row.get("player2_id")))
+            if player_id is not None
+        ))
+        previous = existing_pairs.get(pair, [])
+        if len(previous) == 1:
+            original = previous[0]
+            row["source"] = original.get("source") or "MANUAL"
+            row["source_event_option_id"] = original.get("source_event_option_id") or original.get("event_option_id") or draw.get("event_option_id")
+            row["source_selection_id"] = original.get("source_selection_id") or None
+        else:
+            row["source"] = "MANUAL"
+            row["source_event_option_id"] = draw.get("event_option_id") or None
+            row["source_selection_id"] = None
     _require_club_player_ids(supabase, club_id=str(club_id), team_rows=next_rows)
 
     if dry_run:

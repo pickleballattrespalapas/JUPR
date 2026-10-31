@@ -6,6 +6,7 @@ import os
 import uuid
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.tournament_draw_sources import draw_source_event_option_ids
 from jupr_app.services.admin_tournament_service import (
     EVENT_OPTION_SELECT,
     TOURNAMENT_SELECT,
@@ -113,6 +114,8 @@ def _draw_payload(row: dict[str, Any]) -> dict[str, Any]:
         "tournament_id": _clean_text(row.get("tournament_id"), limit=120),
         "registration_day_id": _clean_text(row.get("registration_day_id"), limit=120) or None,
         "event_option_id": _clean_text(row.get("event_option_id"), limit=120) or None,
+        "source_event_option_ids": draw_source_event_option_ids(row),
+        "combined_into_draw_id": row.get("combined_into_draw_id"),
         "name": _clean_text(row.get("name"), limit=180),
         "status": _clean_text(row.get("status") or "draft", limit=40).lower(),
         "pool_config": row.get("pool_config"),
@@ -164,6 +167,13 @@ def create_admin_tournament_draw(
         clean_name = f"{_event_label(event_option)} Ops Draw" if event_option else "Tournament Ops Draw"
 
     for existing in _existing_draws(supabase, tournament_id=clean_tournament_id):
+        sources = draw_source_event_option_ids(existing)
+        if (
+            len(sources) > 1 and clean_event_option_id in sources
+            and not existing.get("hidden_from_primary_ops")
+            and str(existing.get("status") or "draft").lower() not in DISABLED_EVENT_STATUSES
+        ):
+            raise ValueError("This division already belongs to a combined draw. Open that draw to import teams or add more divisions.")
         same_event = _clean_text(existing.get("event_option_id"), limit=120) == (clean_event_option_id or "")
         same_day = _clean_text(existing.get("registration_day_id"), limit=120) == (clean_day_id or "")
         same_name = _clean_text(existing.get("name"), limit=180).lower() == clean_name.lower()

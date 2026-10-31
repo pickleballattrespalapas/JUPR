@@ -50,6 +50,7 @@ from jupr_app.services.admin_tournament_ops_service import (
 )
 from jupr_app.services.admin_tournament_playoff_service import generate_admin_tournament_playoff_games
 from jupr_app.services.admin_tournament_pool_service import save_admin_tournament_draw_pools
+from jupr_app.services.admin_tournament_combine_service import combine_admin_tournament_draw_divisions
 from jupr_app.services.admin_tournament_podium_service import generate_admin_tournament_draw_podium
 from jupr_app.services.admin_tournament_podium_review_service import (
     review_admin_tournament_draw_podium,
@@ -233,6 +234,14 @@ class AdminTournamentDrawPoolsRequest(BaseModel):
     expected_team_versions: list[dict[str, Any]] = Field(default_factory=list)
     confirmation_text: str = ""
     source: str = "next_tournament_admin_save_pools"
+
+
+class AdminTournamentDrawCombineRequest(BaseModel):
+    event_option_ids: list[str] = Field(min_length=2, max_length=16)
+    name: str = Field(min_length=1, max_length=180)
+    expected_state_fingerprint: str = Field(min_length=64, max_length=64)
+    confirmation_text: str = ""
+    source: str = "next_tournament_ops_combine_divisions"
 
 
 class AdminTournamentRegistrationImportRequest(BaseModel):
@@ -736,6 +745,33 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 source=payload.source,
                 preflight=lambda: create_admin_tournament_draw(supabase, **kwargs, dry_run=True),
                 mutate=lambda: create_admin_tournament_draw(supabase, **kwargs),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/combine-divisions")
+    def post_admin_tournament_combine_divisions(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentDrawCombineRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            _require_confirmation(payload.confirmation_text, "COMBINE DIVISIONS")
+            kwargs = {
+                "club_id": str(club_id), "tournament_id": str(tournament_id), "draw_id": str(draw_id),
+                "event_option_ids": payload.event_option_ids, "name": payload.name,
+                "expected_state_fingerprint": payload.expected_state_fingerprint,
+                "actor_email": actor_email, "actor_role": actor_role,
+                "confirmation_text": payload.confirmation_text, "source": payload.source,
+            }
+            return _guarded_ops_mutation(
+                supabase, club_id=str(club_id), tournament_id=str(tournament_id),
+                action="ops_divisions_combine", entity_type="tournament_event_draw", entity_id=str(draw_id),
+                expected_state=payload.expected_state_fingerprint,
+                payload={"draw_id": str(draw_id), "event_option_ids": payload.event_option_ids, "name": payload.name},
+                actor_email=actor_email, actor_role=actor_role, source=payload.source,
+                preflight=lambda: combine_admin_tournament_draw_divisions(supabase, **kwargs, dry_run=True),
+                mutate=lambda: combine_admin_tournament_draw_divisions(supabase, **kwargs),
             )
         except Exception as exc:
             _handle(exc)

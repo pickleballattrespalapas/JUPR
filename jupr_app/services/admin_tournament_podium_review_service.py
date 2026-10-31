@@ -101,6 +101,7 @@ def _draw_projection(draw: dict[str, Any]) -> dict[str, Any]:
             "draw_kind",
             "hidden_from_primary_ops",
             "pool_config",
+            "source_event_option_ids",
         )
     }
 

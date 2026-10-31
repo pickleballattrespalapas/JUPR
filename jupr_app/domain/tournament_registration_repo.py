@@ -13,6 +13,7 @@ from typing import Any
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.tournament_public_references import build_public_tournament_reference
+from jupr_app.domain.tournament_draw_sources import draw_source_event_option_ids
 from jupr_app.domain.tournament_public_visibility import (
     CURRENT_TOURNAMENT_VIEW,
     normalize_public_tournament_view,
@@ -3056,14 +3057,14 @@ def registration_is_imported_to_draw(
 
     draw_resp = (
         supabase.table("tournament_event_draws")
-        .select("id,registration_day_id,event_option_id")
+        .select("id,registration_day_id,event_option_id,source_event_option_ids")
         .eq("tournament_id", str(tournament_id))
         .execute()
     )
     draw_scope_by_id = {
         str(row.get("id") or "").strip(): (
             str(row.get("registration_day_id") or "").strip(),
-            str(row.get("event_option_id") or "").strip(),
+            set(draw_source_event_option_ids(row)),
         )
         for row in _safe_data(draw_resp)
         if str(row.get("id") or "").strip()
@@ -3072,7 +3073,7 @@ def registration_is_imported_to_draw(
         supabase.table("tournament_teams")
         .select(
             "id,draw_id,registration_day_id,event_option_id,"
-            "player1_id,player2_id,source_selection_id"
+            "player1_id,player2_id,source_selection_id,source_event_option_id"
         )
         .eq("tournament_id", str(tournament_id))
         .in_("source", ["REGISTRATION", "REGISTRATION_COMBINED_RATING"])
@@ -3094,13 +3095,20 @@ def registration_is_imported_to_draw(
             draw_scope = draw_scope_by_id.get(
                 str(team.get("draw_id") or "").strip()
             )
-            team_day_id = (draw_scope or ("", ""))[0] or str(
+            team_day_id = (draw_scope or ("", set()))[0] or str(
                 team.get("registration_day_id") or ""
             ).strip()
-            team_event_option_id = (draw_scope or ("", ""))[1] or str(
-                team.get("event_option_id") or ""
-            ).strip()
-            if (team_day_id, team_event_option_id) != (day_id, event_option_id):
+            source_event_option_id = str(team.get("source_event_option_id") or "").strip()
+            # A combined draw retains the primary playing event on every team.
+            # Registration edits must still lock BOTH members of a team from a
+            # secondary division, not only the selection recorded as its source.
+            team_event_option_ids = (
+                {source_event_option_id}
+                if source_event_option_id
+                else (draw_scope or ("", set()))[1]
+                or {str(team.get("event_option_id") or "").strip()}
+            )
+            if team_day_id != day_id or event_option_id not in team_event_option_ids:
                 continue
             if (
                 selection_id

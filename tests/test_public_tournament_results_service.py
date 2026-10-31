@@ -273,6 +273,33 @@ def test_direct_results_do_not_expose_hidden_lifecycle_states(status: str) -> No
     assert by_slug == (None, None, [], [])
 
 
+def test_combined_divisions_have_one_named_public_draw_and_shared_podium() -> None:
+    storage = _results_storage()
+    storage["tournament_event_options"][0]["division_name"] = "4.0"
+    storage["tournament_event_options"].append({
+        **storage["tournament_event_options"][0], "id": "event2", "division_name": "4.5",
+    })
+    storage["tournament_event_draws"][0].update({
+        "name": "Mixed 4.0 / 4.5", "source_event_option_ids": ["event1", "event2"],
+    })
+    storage["tournament_event_draws"].append({
+        "id": "superseded-draw", "tournament_id": "t1", "registration_day_id": "day1",
+        "event_option_id": "event2", "name": "Mixed 4.5", "status": "cancelled",
+        "hidden_from_primary_ops": True, "combined_into_draw_id": "draw-private-id",
+    })
+
+    payload = build_public_tournament_results(FakeSupabase(storage), club_id="club-1", tournament_id="t1")
+
+    assert len(payload["draws"]) == 1
+    draw = payload["draws"][0]
+    assert draw["division_name"] == "Mixed 4.0 / 4.5"
+    assert draw["source_division_names"] == ["4.0", "4.5"]
+    assert len(draw["podium"]) == 2
+    assert [row["placement"] for row in draw["podium"]] == [1, 2]
+    assert "superseded-draw" not in json.dumps(payload)
+    assert "event2" not in json.dumps(payload)
+
+
 def test_standard_results_include_multi_day_scores_bracket_standings_and_medals() -> None:
     payload = build_public_tournament_results(
         FakeSupabase(_results_storage()), club_id="club-1", tournament_id="t1"
