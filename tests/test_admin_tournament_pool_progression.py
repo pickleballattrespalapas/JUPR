@@ -83,6 +83,44 @@ def test_pool_qualifier_override_requires_reason_and_stays_exact_draw():
         live._playoff_rows(result,draw,'tour-1',4)
 
 
+def test_nine_team_review_generates_record_seeds_and_score_corrections_refresh_them():
+    tables = pool_tables((3, 3, 3), (3, 3, 3))
+    # Pool B wins by ten, C by six, and A by one in each match.
+    losing_score = {"team-1": 10, "team-4": 1, "team-7": 5}
+    config = tables['tournament_event_draws'][0]['pool_config']
+    pool_by_team = {team_id: pool for pool in config['pools'] for team_id in pool['team_ids']}
+    for game in tables['tournament_games']:
+        pool = pool_by_team[game['team_a_id']]
+        game['score_a' if game['loser_team_id'] == game['team_a_id'] else 'score_b'] = losing_score[pool['team_ids'][0]]
+    before = snapshot(tables)
+    draw = before['draws'][0]
+    # Runners-up all have differential zero: points scored break their tie.
+    expected = ['team-4', 'team-7', 'team-1', 'team-2', 'team-8', 'team-5', 'team-3', 'team-9', 'team-6']
+    assert draw['playoff_review']['recommended_seed_team_ids'] == expected
+    assert draw['playoff_review']['default_seed_team_ids'] == expected
+    reviewed = live._validate_playoff_configuration(draw, 9, configuration(draw))
+    assert reviewed['seed_team_ids'] == expected
+    games = live._playoff_rows(before, draw, 'tour-1', 9, reviewed)
+    assert (games[0]['team_a_id'], games[0]['team_b_id']) == ('team-9', 'team-6')
+    assert games[1]['team_a_id'] == 'team-4'
+    assert games[1]['team_b_source'] == {'winnerOf': games[0]['playoff_game_code']}
+
+    for game in tables['tournament_games']:
+        if 'team-1' in (game['team_a_id'], game['team_b_id']):
+            game['score_a' if game['loser_team_id'] == game['team_a_id'] else 'score_b'] = 0
+            game['updated_at'] += '-corrected'
+    after = snapshot(tables)
+    assert after['draws'][0]['playoff_review']['recommended_seed_team_ids'][:3] == ['team-1', 'team-4', 'team-7']
+    assert before['state_fingerprint'] != after['state_fingerprint']
+    assert draw['playoff_review_fingerprint'] != after['draws'][0]['playoff_review_fingerprint']
+    # A previously generated bracket remains fixed and cannot be regenerated.
+    tables['tournament_games'].extend(dict(game, id=f'playoff-{i}') for i, game in enumerate(games))
+    existing = deepcopy(tables['tournament_games'])
+    generated = snapshot(tables)['draws'][0]
+    assert 'PLAYOFFS_EXIST' in {b['code'] for b in generated['readiness']['generate_playoffs']['blockers']}
+    assert tables['tournament_games'] == existing
+
+
 @pytest.mark.parametrize('corruption',['cross_pool','missing_pair','duplicate_pair','unassigned'])
 def test_pool_readiness_fails_closed_for_invalid_schedule(corruption):
     tables = pool_tables()

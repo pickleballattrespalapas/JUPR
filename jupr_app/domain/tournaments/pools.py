@@ -6,12 +6,12 @@ membership is stored once on the draw, never inferred from a display name.
 from __future__ import annotations
 
 from collections import defaultdict
+from fractions import Fraction
 from itertools import combinations
 import re
 from typing import Any
 
 from .bracket_builder import (
-    PLAYOFF_TEMPLATES,
     build_round_robin_games,
     compute_round_robin_standings_with_tiebreaks,
 )
@@ -185,68 +185,41 @@ def compute_pool_standings(
     return result
 
 
-def _avoid_immediate_pool_rematches(
-    qualifiers: list[tuple[int, int, str]], advance_count: int,
-) -> list[tuple[int, int, str]]:
-    """Improve first-match crossovers without promoting a lower pool place.
+def _qualifier_seed_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    """Compare equal pool places by record, without favoring larger pools.
 
-    Only equal-place seeds can swap. Each accepted swap strictly reduces the
-    number of direct same-pool pairings, bounding the search by bracket size.
-    Ties retain the existing pool order; missing quota qualifiers stay missing.
+    Fractions keep mathematically equal records tied. An unplayed provisional
+    record follows played records at the same pool place; completed schedules
+    are still required by the progression service before playoff generation.
     """
-    ordered = list(qualifiers)
-    if len(ordered) != advance_count:
-        return ordered
-    template = PLAYOFF_TEMPLATES.get(advance_count, {})
-    direct_pairs = [
-        (int(game["teamA"]["seed"]) - 1, int(game["teamB"]["seed"]) - 1)
-        for game in template.get("games", [])
-        if "seed" in game["teamA"] and "seed" in game["teamB"]
-    ]
-
-    def rematches(rows: list[tuple[int, int, str]]) -> int:
-        return sum(
-            rows[left][1] == rows[right][1]
-            for left, right in direct_pairs if left < len(rows) and right < len(rows)
-        )
-
-    while True:
-        score = rematches(ordered)
-        if not score:
-            return ordered
-        best_score, best_swap = score, None
-        # Prefer moving runners-up/lower places before changing pool winners.
-        ranks = sorted({row[0] for row in ordered}, reverse=True)
-        for rank in ranks:
-            indices = [i for i, row in enumerate(ordered) if row[0] == rank]
-            for left, right in reversed(list(combinations(indices, 2))):
-                candidate = list(ordered)
-                candidate[left], candidate[right] = candidate[right], candidate[left]
-                candidate_score = rematches(candidate)
-                if candidate_score < best_score:
-                    best_score, best_swap = candidate_score, (left, right)
-        if best_swap is None:
-            return ordered
-        left, right = best_swap
-        ordered[left], ordered[right] = ordered[right], ordered[left]
+    matches = row["wins"] + row["losses"]
+    divisor = max(matches, 1)
+    return (
+        row["pool_rank"],
+        matches == 0,
+        -Fraction(row["wins"], divisor),
+        -Fraction(row["differential"], divisor),
+        -Fraction(row["points_for"], divisor),
+        row["team_number"],
+        str(row["team_id"]),
+    )
 
 
 def recommend_pool_qualifiers(
     teams: list[dict[str, Any]], games: list[dict[str, Any]], pool_config: Any
 ) -> list[str]:
-    """Recommend by pool place, improving crossovers inside equal-place bands.
+    """Seed pool winners first, then each lower place, by strength of record.
 
-    Raw wins are never compared across pools. Two pools advancing two teams
-    retain A1, B1, A2, B2 for crossover semifinals. For other layouts, equal-place
-    seeds may swap to avoid an immediate pool rematch; manual review still owns
-    the final selections, especially when uneven quotas force repeat meetings.
+    Within each place use win percentage, point differential per match, points
+    scored per match, then original team number. Pool order and rematch avoidance
+    never change this order. Head-to-head remains a within-pool tiebreak only.
+    Quotas and retired-team eligibility are unchanged; missing qualifiers still
+    require operator review rather than borrowing from another pool.
     """
     pools = compute_pool_standings(teams, games, pool_config)
     qualifiers = sorted(
-        (row["pool_rank"], pool_index, str(row["team_id"]))
-        for pool_index, pool in enumerate(pools)
-        for row in pool["standings"] if row["recommended_qualifier"]
+        (row for pool in pools
+         for row in pool["standings"] if row["recommended_qualifier"]),
+        key=_qualifier_seed_key,
     )
-    advance_count = sum(pool["advance_count"] for pool in pools)
-    ordered = _avoid_immediate_pool_rematches(qualifiers, advance_count)
-    return [team_id for _, _, team_id in ordered]
+    return [str(row["team_id"]) for row in qualifiers]
