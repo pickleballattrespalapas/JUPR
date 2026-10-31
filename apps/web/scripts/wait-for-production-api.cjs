@@ -131,6 +131,22 @@ function tournamentPoolsReady(openapi) {
     && supportsEveryBracket;
 }
 
+function tournamentCombinedDivisionsReady(openapi) {
+  const route = openapi?.paths?.["/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/combine-divisions"]?.post;
+  const schema = openapi?.components?.schemas?.AdminTournamentDrawCombineRequest;
+  const fields = schema?.properties;
+  return route?.requestBody?.content?.["application/json"]?.schema?.$ref === "#/components/schemas/AdminTournamentDrawCombineRequest"
+    && ["event_option_ids", "name", "expected_state_fingerprint"].every((field) => schema?.required?.includes(field))
+    && fields?.event_option_ids?.type === "array"
+    && fields.event_option_ids.items?.type === "string"
+    && fields.event_option_ids.minItems === 2 && fields.event_option_ids.maxItems === 16
+    && fields?.name?.type === "string" && fields.name.minLength === 1 && fields.name.maxLength === 180
+    && fields?.expected_state_fingerprint?.type === "string"
+    && fields.expected_state_fingerprint.minLength === 64 && fields.expected_state_fingerprint.maxLength === 64
+    && fields?.confirmation_text?.type === "string"
+    && fields?.source?.type === "string";
+}
+
 async function waitForProductionApi({
   environment = process.env.VERCEL_ENV,
   request = fetch,
@@ -140,7 +156,7 @@ async function waitForProductionApi({
 } = {}) {
   if (environment !== "production") return;
   const deadline = now() + timeoutMs;
-  console.log("Waiting for the production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, tournament partner lookup, and tournament pool APIs before building the website.");
+  console.log("Waiting for the production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, tournament partner lookup, tournament pool, and combined-division APIs before building the website.");
   while (now() < deadline) {
     try {
       const response = await request("https://api.juprleagues.com/health", {
@@ -152,8 +168,8 @@ async function waitForProductionApi({
         });
         if (contract.ok) {
           const openapi = await contract.json();
-          if (weeklyReportReady(openapi) && leagueLiveReady(openapi) && roundRobinHubReady(openapi) && siteReliabilityReady(openapi) && startingRatingReviewReady(openapi) && tournamentPartnerLookupReady(openapi) && tournamentPoolsReady(openapi)) {
-            console.log("Production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, tournament partner lookup, and tournament pool APIs are ready.");
+          if (weeklyReportReady(openapi) && leagueLiveReady(openapi) && roundRobinHubReady(openapi) && siteReliabilityReady(openapi) && startingRatingReviewReady(openapi) && tournamentPartnerLookupReady(openapi) && tournamentPoolsReady(openapi) && tournamentCombinedDivisionsReady(openapi)) {
+            console.log("Production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, tournament partner lookup, tournament pool, and combined-division APIs are ready.");
             return;
           }
         }
@@ -166,7 +182,7 @@ async function waitForProductionApi({
   throw new Error("Production operations API is not ready. The current website remains active; retry after API verification.");
 }
 
-module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, tournamentPoolsReady, waitForProductionApi, REQUIRED_FLAGS };
+module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, tournamentPoolsReady, tournamentCombinedDivisionsReady, waitForProductionApi, REQUIRED_FLAGS };
 if (require.main === module) {
   waitForProductionApi().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }
