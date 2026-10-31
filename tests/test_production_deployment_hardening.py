@@ -1690,7 +1690,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow
-    assert 'EXPECTED_MIGRATION_HEAD: "20261031180237"' in workflow
+    assert 'EXPECTED_MIGRATION_HEAD: "20261031205606"' in workflow
     assert 'if [ "$GITHUB_REF" != "refs/heads/$PRODUCTION_SOURCE_BRANCH" ]; then' in workflow
     assert '"$HEAD_SHA" != "$GITHUB_SHA"' in workflow
     assert '"$HEAD_SHA" != "$PRODUCTION_SHA"' in workflow
