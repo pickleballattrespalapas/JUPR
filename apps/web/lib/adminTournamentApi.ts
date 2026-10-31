@@ -182,6 +182,13 @@ export type AdminTournamentDetailResponse = {
   warnings?: string[];
 };
 
+export type AdminTournamentUnlinkedRegistration = {
+  id: string;
+  display_name: string;
+  updated_at: string | null;
+  draw_ids: string[];
+};
+
 export type AdminTournamentOpsSnapshotResponse = {
   ok: boolean;
   mode?: string;
@@ -212,6 +219,7 @@ export type AdminTournamentOpsSnapshotResponse = {
   registration_days?: Array<Record<string, unknown>>;
   event_options?: Array<Record<string, unknown>>;
   players?: AdminTournamentOpsPlayer[];
+  unlinked_registrations?: AdminTournamentUnlinkedRegistration[];
   state_fingerprint?: string | null;
   state_ready?: boolean;
   operation_runtime?: {

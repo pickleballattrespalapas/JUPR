@@ -2,14 +2,16 @@
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import TournamentDrawPoolsPanel from "./TournamentDrawPoolsPanel";
+import TournamentPlayerLinkReview from "./TournamentPlayerLinkReview";
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
+import { actionSuccess, actionUncertain, InteractionActionError, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminTournamentOpsSnapshotResponse,
   AdminTournamentOpsPlayer,
+  AdminTournamentUnlinkedRegistration,
   AdminTournamentOpsTeam,
   AdminTournamentResultsImportPreviewResponse,
   AdminTournamentStatusResponse,
@@ -54,13 +56,13 @@ const registrationImportReconcileConfirmation = "RECONCILE REGISTRATION IMPORT";
 const NON_PLAYED_RESULT_TYPES: ReadonlySet<string> = new Set(["FORFEIT", "NO_SHOW", "RETIREMENT"]);
 const DISABLED_EVENT_STATUSES: ReadonlySet<string> = new Set(["disabled", "cancelled", "canceled", "inactive", "archived", "deleted", "void", "voided"]);
 
-class TournamentOpsRequestError extends Error {
+class TournamentOpsRequestError extends InteractionActionError {
   readonly status: number;
   readonly uncertain: boolean;
   readonly operationReference: string | null;
 
   constructor(message: string, status: number, uncertain = false, operationReference: string | null = null) {
-    super(message);
+    super(message, { kind: status === 409 ? "conflict" : [401, 403].includes(status) ? "forbidden" : [400, 422].includes(status) ? "validation" : "failed" });
     this.name = "TournamentOpsRequestError";
     this.status = status;
     this.uncertain = uncertain;
@@ -252,6 +254,7 @@ export default function TournamentOpsPanel({
   const reviewedState = snapshot?.state_fingerprint || "";
   const selectedDraw = snapshot?.draws?.find((row) => String(row.id || "") === selectedDrawId) || null;
   const players = snapshot?.players || [];
+  const unlinkedRegistrations = (snapshot?.unlinked_registrations || []).filter(row => row.draw_ids.includes(selectedDrawId));
   const teamsById = new Map((snapshot?.teams || []).map((team) => [String(team.id || ""), team]));
   const effectiveScoringFormat = (game: Record<string, unknown>) => effectiveGameScoringFormat(
     game,
@@ -282,7 +285,7 @@ export default function TournamentOpsPanel({
   const registrationImportBlocksWrites = registrationImportRecovery !== null;
   const guardedWriteDisabled = busy || !accessToken || !operationsWriteReady || !reviewedState || !registrationImportRecoveryLoaded || registrationImportBlocksWrites;
   const drawCasWriteDisabled = guardedWriteDisabled || !reviewedDrawUpdatedAt;
-  const registrationImportDisabled = drawCasWriteDisabled || !selectedDrawId || reviewedSourceGameVersions.length > 0 || Boolean(selectedDraw?.pool_config);
+  const registrationImportDisabled = drawCasWriteDisabled || !selectedDrawId || unlinkedRegistrations.length > 0 || reviewedSourceGameVersions.length > 0 || Boolean(selectedDraw?.pool_config);
   const teamSnapshotCasDisabled = drawCasWriteDisabled || !reviewedTeamVersions.length || reviewedTeamVersions.some((row) => !row.id || !row.updated_at);
   const gameSnapshotCasDisabled = teamSnapshotCasDisabled || !reviewedSourceGameVersions.length || reviewedSourceGameVersions.some((row) => !row.id || !row.updated_at);
   useEffect(() => { setPoolDraftDirty(false); }, [selectedTournamentId, selectedDrawId, reviewedDrawUpdatedAt]);
@@ -413,6 +416,31 @@ export default function TournamentOpsPanel({
     setResultsReviewDirty(true);
     if (selectedTournamentId) void loadOps(selectedTournamentId, drawId);
     else snapshotRequest.invalidate();
+  }
+
+  async function linkRegistrationPlayer(registration: AdminTournamentUnlinkedRegistration, playerId: number, confirmationText: string): Promise<ActionCompletion> {
+    const tournamentId = selectedTournamentId;
+    const drawId = selectedDrawId;
+    setBusy(true);
+    try {
+      await requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/registrations/${encodeURIComponent(registration.id)}/link-player`, {
+        method: "POST",
+        body: JSON.stringify({ player_id: playerId, expected_updated_at: registration.updated_at, confirmation_text: confirmationText }),
+      });
+      // A new snapshot also refreshes the import fingerprint after identity changes.
+      const refreshed = await loadOps(tournamentId, drawId);
+      if (!refreshed) setSnapshot(null);
+      return actionSuccess("Player linked", `${registration.display_name} is linked. ${refreshed ? "Review any remaining players, then import the teams." : "Reload the draw before importing the teams."}`);
+    } catch (error) {
+      if (registrationImportErrorIsUncertain(error)) {
+        return actionUncertain("Check the player link", "The response was interrupted. Check the link before continuing.",
+          `${registration.id}:${playerId}`, "Check player link",
+          () => linkRegistrationPlayer(registration, playerId, confirmationText), false);
+      }
+      throw error;
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function createDraw(confirmationText: string) {
@@ -1233,7 +1261,8 @@ export default function TournamentOpsPanel({
           {operationsWriteReady && (shows("import") || workflow === "draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Import confirmed registrations</h2>
-            <p style={{ color: "#475569" }}>Imports confirmed registration entries for the selected draw’s registration day/division. Each registration must already be linked to a JUPR player.</p>
+            <p style={{ color: "#475569" }}>Imports confirmed registration entries for the selected draw’s registration day/division. Review any missing player links below before importing.</p>
+            <TournamentPlayerLinkReview registrations={unlinkedRegistrations} players={players} disabled={guardedWriteDisabled} onLink={linkRegistrationPlayer} />
             <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
               <label><strong>Mode</strong><br /><select value={registrationImportMode} onChange={(event) => setRegistrationImportMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
               <ConfirmAction triggerLabel="Import confirmed registrations" title={`${registrationImportMode === "REPLACE" ? "Replace teams from" : "Append teams from"} confirmed registrations?`} description={registrationImportMode === "REPLACE" ? "This replaces the draw's current team list with teams built from confirmed, player-linked registrations." : "This appends teams built from confirmed, player-linked registrations after the current teams."} confirmLabel={registrationImportMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT REGISTRATIONS" tone={registrationImportMode === "REPLACE" ? "danger" : "default"} disabled={registrationImportDisabled} busy={busy} onConfirm={importRegistrations} />
