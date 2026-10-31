@@ -17,7 +17,7 @@ from jupr_app.services.admin_tournament_draw_service import _draw_payload
 from jupr_app.services.admin_tournament_game_service import _require_reviewed_draw_version
 from jupr_app.services.admin_tournament_team_service import _team_payload, write_admin_tournament_draw_teams_atomic
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
-from jupr_app.services.admin_tournament_service import require_tournament_gender_approvals_for_import
+from jupr_app.services.admin_tournament_service import require_no_declined_gender_reviews_for_import
 
 CONFIRM_IMPORT_REGISTRATIONS = "IMPORT REGISTRATIONS"
 STANDARD_DOUBLES_EVENT_TYPES = {
@@ -877,7 +877,9 @@ def import_admin_tournament_registrations_to_draw(
             )
         raise ValueError("No confirmed registrations with linked player IDs were available for this draw.")
 
-    require_tournament_gender_approvals_for_import(
+    # Confirmed registrations do not need a second eligibility approval here.
+    # Honor an explicit administrator decline for the current entry and pair.
+    require_no_declined_gender_reviews_for_import(
         supabase, club_id=str(club_id), tournament_id=clean_tournament_id,
         selection_ids=imported_selection_ids,
     )

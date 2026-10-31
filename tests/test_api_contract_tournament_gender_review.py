@@ -8,6 +8,7 @@ from jupr_app.services.admin_tournament_service import (
     get_admin_tournament_detail, review_admin_tournament_gender_eligibility,
 )
 from jupr_app.services.admin_tournament_registration_import_service import import_admin_tournament_registrations_to_draw
+from jupr_app.services import admin_tournament_registration_import_service as import_service
 from jupr_app.services.public_tournament_registration_service import submit_public_tournament_registration
 from tests.test_public_tournament_registration_service import FakeSupabase, fake_storage
 from tests.test_api_contract_admin_tournament_registration_import import tournament_registration_import_tables, _client
@@ -74,17 +75,37 @@ def _decide(db, decision="APPROVED", **overrides):
     })
 
 
-def _import(db):
+def _import(db, **overrides):
     return import_admin_tournament_registrations_to_draw(db, club_id="club", tournament_id="tour_1",
         draw_id="draw_1", actor_email="admin@example.invalid", actor_role="administrator",
-        confirmation_text="IMPORT REGISTRATIONS", dry_run=True)
+        confirmation_text="IMPORT REGISTRATIONS", **{"dry_run": True, **overrides})
 
 
-def test_approval_applies_to_pair_and_unlocks_import(reviewed_pair):
+@pytest.mark.parametrize("import_mode", ["REPLACE", "APPEND"])
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_confirmed_pair_imports_without_second_gender_approval(reviewed_pair, import_mode, dry_run):
+    tables, db = reviewed_pair
+    before = deepcopy(tables)
+    assert _review(db)["status"] == "PENDING"
+
+    result = _import(db, import_mode=import_mode, dry_run=dry_run)
+
+    assert result["ok"] is True
+    assert result["updated_count"] == 1
+    assert [(team["player1_id"], team["player2_id"]) for team in result["teams"]] == [(1, 2)]
+    assert tables.get(REVIEW_TABLE, []) == before.get(REVIEW_TABLE, [])
+    assert tables["tournament_registrations"] == before["tournament_registrations"]
+    if dry_run:
+        assert tables["tournament_teams"] == before["tournament_teams"]
+    else:
+        assert any(team.get("player1_id") == 1 and team.get("player2_id") == 2 for team in tables["tournament_teams"])
+        assert len(tables["tournament_teams"]) == (2 if import_mode == "APPEND" else 1)
+
+
+def test_explicit_approval_applies_to_pair_and_remains_importable(reviewed_pair):
     tables, db = reviewed_pair
     assert _review(db)["fingerprint"] == _review(db, "sel_2")["fingerprint"]
-    with pytest.raises(ValueError, match="administrator approval"):
-        _import(db)
+    assert _import(db)["ok"] is True
     _decide(db)
     assert _review(db)["status"] == _review(db, "sel_2")["status"] == "APPROVED"
     assert _import(db)["ok"] is True
@@ -92,19 +113,41 @@ def test_approval_applies_to_pair_and_unlocks_import(reviewed_pair):
     assert tables[REVIEW_TABLE][0]["reviewed_by"] == "admin@example.invalid"
 
 
+@pytest.mark.parametrize("declined", [False, True])
+def test_atomic_import_accepts_pending_but_never_writes_declined_pair(monkeypatch, reviewed_pair, declined):
+    tables, db = reviewed_pair
+    version = "2026-10-31T21:00:00Z"
+    tables["tournament_event_draws"][0]["updated_at"] = version
+    writes = []
+    monkeypatch.setattr(import_service, "write_admin_tournament_draw_teams_atomic",
+                        lambda _db, **kwargs: writes.append(kwargs) or kwargs["rows"])
+    if declined:
+        _decide(db, "DECLINED")
+        with pytest.raises(ValueError, match="administrator declined"):
+            _import(db, dry_run=False, atomic=True, expected_draw_updated_at=version)
+        assert writes == []
+    else:
+        result = _import(db, dry_run=False, atomic=True, expected_draw_updated_at=version)
+        assert result["updated_count"] == 1
+        assert len(writes) == 1
+        assert writes[0]["expected_draw_updated_at"] == version
+        assert [(row["player1_id"], row["player2_id"]) for row in writes[0]["rows"]] == [(1, 2)]
+
+
 def test_declined_or_changed_pair_cannot_reuse_approval(reviewed_pair):
     tables, db = reviewed_pair
     old_version = _review(db)["review_version"]
     _decide(db, "DECLINED")
-    with pytest.raises(ValueError, match="administrator approval"):
-        _import(db)
+    before = deepcopy(tables)
+    with pytest.raises(ValueError, match="administrator declined"):
+        _import(db, dry_run=False)
+    assert tables["tournament_teams"] == before["tournament_teams"]
     with pytest.raises(StaleTournamentRegistrationSelectionError):
         _decide(db, expected_review_version=old_version)
     _decide(db)
     tables["tournament_registrations"][1]["gender"] = "Women"
     assert _review(db)["status"] == "PENDING"
-    with pytest.raises(ValueError, match="administrator approval"):
-        _import(db)
+    assert _import(db)["ok"] is True
 
 
 def test_only_admin_in_own_club_can_review(reviewed_pair):
