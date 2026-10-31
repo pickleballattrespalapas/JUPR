@@ -5,6 +5,7 @@ from datetime import datetime
 
 from postgrest.exceptions import APIError
 
+from jupr_app.domain.tournament_draw_sources import draw_source_event_option_ids
 from jupr_app.domain.tournament_registration_repo import StaleTournamentRegistrationAdminError
 from jupr_app.services.admin_tournament_service import is_admin_tournament_admin_enabled
 
@@ -16,6 +17,7 @@ def unlinked_draw_registrations(
 ) -> list[dict[str, Any]]:
     """Expose only confirmed entrants in the displayed draws, without contact data."""
     result = []
+    draw_scopes = [(draw, set(draw_source_event_option_ids(draw))) for draw in draws]
     for registration in registrations:
         if registration.get("player_id") is not None:
             continue
@@ -23,8 +25,8 @@ def unlinked_draw_registrations(
             continue
         entries = [row for row in selections if row.get("registration_id") == registration.get("id")
                    and str(row.get("partner_mode") or "").upper() != "NEEDS_PARTNER"]
-        draw_ids = sorted({str(draw["id"]) for draw in draws for entry in entries
-                           if (not draw.get("event_option_id") or str(draw["event_option_id"]) == str(entry.get("event_option_id") or ""))
+        draw_ids = sorted({str(draw["id"]) for draw, source_ids in draw_scopes for entry in entries
+                           if (not source_ids or str(entry.get("event_option_id") or "") in source_ids)
                            and (not draw.get("registration_day_id") or str(draw["registration_day_id"]) == str(entry.get("registration_day_id") or ""))})
         if draw_ids:
             result.append({

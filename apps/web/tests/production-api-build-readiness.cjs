@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, tournamentPoolsReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
+const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, tournamentPoolsReady, tournamentCombinedDivisionsReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
 const ready = { ok: true, club_website_settings_available: true, interclub_seasons_available: true, environment: "production", fly_app_name: "juprleagues-api",
   supabase_project_ref: "dnoockbwfenunhcibwfn", production_business_write_policy: "enabled",
   staging_write_wave: "none", feature_flags: Object.fromEntries(REQUIRED_FLAGS.map((flag) => [flag, true])) };
@@ -70,6 +70,19 @@ contract.components.schemas.AdminTournamentDayLivePlayoffConfiguration = { prope
   seed_team_ids: { type: "array", minItems: 2, maxItems: 16 },
   override_reason: { anyOf: [{ type: "string", maxLength: 500 }, { type: "null" }] },
 } };
+const combinePath = "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/combine-divisions";
+contract.paths[combinePath] = { post: { requestBody: { content: { "application/json": {
+  schema: { $ref: "#/components/schemas/AdminTournamentDrawCombineRequest" },
+} } } } };
+contract.components.schemas.AdminTournamentDrawCombineRequest = {
+  required: ["event_option_ids", "name", "expected_state_fingerprint"],
+  properties: {
+    event_option_ids: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 16 },
+    name: { type: "string", minLength: 1, maxLength: 180 },
+    expected_state_fingerprint: { type: "string", minLength: 64, maxLength: 64 },
+    confirmation_text: { type: "string" }, source: { type: "string" },
+  },
+};
 
 (async () => {
   assert.equal(operationsReady(ready), true);
@@ -151,6 +164,22 @@ contract.components.schemas.AdminTournamentDayLivePlayoffConfiguration = { prope
   assert.equal(tournamentPartnerLookupReady(beforePartnerLookup), false);
   assert.equal(tournamentPoolsReady(contract), true);
   assert.equal(tournamentPoolsReady({}), false);
+  assert.equal(tournamentCombinedDivisionsReady(contract), true);
+  assert.equal(tournamentCombinedDivisionsReady({}), false);
+  const incompleteCombineContracts = [
+    ["the combine POST route", api => { delete api.paths[combinePath].post; }],
+    ["the correct combine request schema", api => { api.paths[combinePath].post.requestBody.content["application/json"].schema.$ref = "#/components/schemas/AdminTournamentDrawPoolsRequest"; }],
+    ["the multi-division roster field", api => { api.components.schemas.AdminTournamentDrawCombineRequest.properties.event_option_ids.type = "string"; }],
+    ["the supported division range", api => { api.components.schemas.AdminTournamentDrawCombineRequest.properties.event_option_ids.maxItems = 2; }],
+    ["the reviewed-state guard", api => { api.components.schemas.AdminTournamentDrawCombineRequest.required = ["event_option_ids", "name"]; }],
+    ["the complete state fingerprint", api => { api.components.schemas.AdminTournamentDrawCombineRequest.properties.expected_state_fingerprint.minLength = 0; }],
+    ["explicit confirmation", api => { delete api.components.schemas.AdminTournamentDrawCombineRequest.properties.confirmation_text; }],
+  ].map(([reason, change]) => {
+    const previousApi = structuredClone(contract);
+    change(previousApi);
+    assert.equal(tournamentCombinedDivisionsReady(previousApi), false, reason);
+    return [reason, previousApi];
+  });
   const incompletePoolContracts = [
     ["the pool save route", (api) => { delete api.paths[poolsPath].put; }],
     ["the guarded pool request", (api) => { api.paths[poolsPath].put.requestBody.content["application/json"].schema.$ref = "#/components/schemas/OldRequest"; }],
@@ -288,6 +317,18 @@ contract.components.schemas.AdminTournamentDayLivePlayoffConfiguration = { prope
         json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? previousApi : contract) : ready }) });
     assert.equal(contracts, 2, `The pool interface waits for ${reason} before release`);
   }
+  for (const [reason, previousApi] of incompleteCombineContracts) {
+    clock = 0;
+    contracts = 0;
+    await waitForProductionApi({ environment: "production", now: () => clock,
+      pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+        json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? previousApi : contract) : ready }) });
+    assert.equal(contracts, 2, `The combined-division interface waits for ${reason} before release`);
+  }
+  clock = 0;
+  await assert.rejects(waitForProductionApi({ environment: "production", timeoutMs: 10000,
+    now: () => clock, pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+      json: async () => url.endsWith('/openapi.json') ? incompleteCombineContracts[0][1] : ready }) }), /current website remains active/);
   clock = 0;
   await assert.rejects(waitForProductionApi({ environment: "production", timeoutMs: 10000,
     now: () => clock, pause: async () => { clock += 10000; }, request: async () => { throw new Error("Unavailable"); } }), /current website remains active/);
