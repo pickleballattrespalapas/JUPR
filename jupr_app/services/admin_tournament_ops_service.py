@@ -9,6 +9,7 @@ from jupr_app.domain.tournament_team_canonical_publish import (
     classify_team_child_publish_state,
 )
 from jupr_app.services.admin_player_updates_service import is_auto_player_updates_enabled
+from jupr_app.services.admin_tournament_player_link_service import unlinked_draw_registrations
 from jupr_app.services.production_tournament_guard import production_tournament_writes_enabled, require_production_tournament_writes
 from jupr_app.services.admin_tournament_guarded_operation import tournament_admin_guarded_runtime_enabled
 from jupr_app.services.admin_tournament_service import (
@@ -295,6 +296,8 @@ def get_admin_tournament_ops_snapshot(
         raise ValueError("tournament not found")
 
     warnings: list[str] = []
+    registrations: list[dict[str, Any]] = []
+    selections: list[dict[str, Any]] = []
     state_fingerprint: str | None = None
     try:
         state = _load_admin_tournament_ops_state(
@@ -311,6 +314,8 @@ def get_admin_tournament_ops_snapshot(
         podium = list(state_tables.get(OPS_TABLES["podium"]) or [])
         registration_days = list(state_tables.get("tournament_registration_days") or [])
         event_options = list(state_tables.get("tournament_event_options") or [])
+        registrations = list(state_tables.get("tournament_registrations") or [])
+        selections = list(state_tables.get("tournament_registration_selections") or [])
         team_match_games = (
             list(state_tables.get("tournament_team_match_games") or [])
             if team_feature_enabled
@@ -512,6 +517,7 @@ def get_admin_tournament_ops_snapshot(
         "rating_child_draws": rating_child_draws,
         "rating_child_publish_queue": rating_child_publish_queue,
         "players": players,
+        "unlinked_registrations": unlinked_draw_registrations(registrations, selections, draws),
         "state_fingerprint": state_fingerprint,
         "state_ready": bool(state_fingerprint),
         "operation_runtime": build_admin_tournament_ops_runtime_status(),
