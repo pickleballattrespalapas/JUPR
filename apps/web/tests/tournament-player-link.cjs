@@ -97,10 +97,11 @@ async function run() {
   // never a write until the admin confirms.
   let linkCalls = 0;
   await act(async () => { renderer = create(React.createElement(Review, {
-    registrations: [registration], players: [...players, { id: 3, name: "Alex Example", active: false }], disabled: false,
+    registrations: [registration], players: [...players, { id: 3, name: "Alex Example", active: false }, { id: 8, name: "Alex (merged into 1)", active: false }], disabled: false,
     onLink: async () => { linkCalls++; return interaction.actionSuccess("Linked", "Done"); },
   })); });
   assert.equal(linkCalls, 0);
+  assert.equal(React.Children.toArray(renderer.root.findByType(SearchablePlayerSelect).props.children).filter(option => option.props.value === 8).length, 0);
   assert.equal(button(renderer, "Link Alex Example").props.disabled, true);
   await act(async () => renderer.root.findByType(SearchablePlayerSelect).props.onValueChange("3"));
   assert.equal(button(renderer, "Link Alex Example").props.disabled, false);

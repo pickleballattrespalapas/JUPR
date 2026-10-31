@@ -22,7 +22,7 @@ def test_ops_snapshot_lists_only_unlinked_confirmed_draw_entrants(monkeypatch):
     tables["tournament_registrations"][0]["updated_at"] = BODY["expected_updated_at"]
     result = get_admin_tournament_ops_snapshot(FakeSupabase(tables), club_id="club", tournament_id="tour_1", draw_id="draw_1")
     assert result["unlinked_registrations"] == [{"id": "reg_1", "display_name": "Alex Example", "updated_at": BODY["expected_updated_at"], "draw_ids": ["draw_1"]}]
-    assert result["players"] == [{"id": 1, "name": "Alex Example", "active": True}]
+    assert {row["id"] for row in result["players"]} == {1, 8}, "Historical team labels still need retained merged profiles"
     assert "email" not in result["unlinked_registrations"][0]
     result = get_admin_tournament_ops_snapshot(FakeSupabase(tables), club_id="club", tournament_id="tour_1", draw_id="draw_2")
     assert result["unlinked_registrations"] == []
