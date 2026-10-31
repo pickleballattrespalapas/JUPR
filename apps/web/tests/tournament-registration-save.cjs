@@ -171,11 +171,20 @@ async function main() {
     assert.equal(field("Doubles skill").findByType("input").props.value, "5.11585375");
     assert.equal(field("Registration status").findByType("select").props.value, "confirmed");
     assert.equal(field("Gender").findByType("select").props.value, "Men");
-    assert.match(content(renderer.root), /Needs admin approval/);
-    await act(async () => renderer.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Approve eligibility").props.onConfirm("REVIEW GENDER ELIGIBILITY"));
+    assert.match(content(renderer.root), /Confirmed entries do not need a second eligibility approval/);
+    assert.doesNotMatch(content(renderer.root), /Needs admin approval/);
+    assert.equal(renderer.root.findAllByType(ConfirmAction).some(node => ["Approve eligibility", "Restore eligibility"].includes(node.props.triggerLabel)), false, "Pending eligibility does not introduce a second approval step");
+    assert.equal(eligibilityRequest, undefined, "Informational review notes do not submit an approval automatically");
+    await act(async () => renderer.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Decline eligibility").props.onConfirm("REVIEW GENDER ELIGIBILITY"));
+    assert.equal(eligibilityRequest.decision, "DECLINED");
+    assert.match(content(renderer.root), /Gender eligibility: Declined/);
+    assert.equal(renderer.root.findAllByType(ConfirmAction).some(node => node.props.triggerLabel === "Decline eligibility"), false);
+    await act(async () => renderer.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Restore eligibility").props.onConfirm("REVIEW GENDER ELIGIBILITY"));
     assert.equal(eligibilityRequest.decision, "APPROVED");
     assert.equal(eligibilityRequest.expected_review_version, "b".repeat(64));
-    assert.match(content(renderer.root), /Gender eligibility: Approved/);
+    assert.match(content(renderer.root), /This note does not block import/);
+    assert.doesNotMatch(content(renderer.root), /Gender eligibility: Declined/);
+    assert.equal(renderer.root.findAllByType(ConfirmAction).some(node => node.props.triggerLabel === "Restore eligibility"), false);
     await act(async () => field("Phone").findByType("input").props.onChange({ target: { value: "555-9999" } }));
     const save = () => renderer.root.findAllByType(ConfirmAction).find(node => node.props.confirmLabel === "Yes, save registration").props.onConfirm("SAVE REGISTRATION");
     let failure;
@@ -321,4 +330,33 @@ async function main() {
     global.fetch = originalFetch;
   }
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+async function verifyRegistrantListEligibilityNotes() {
+  const List = load("app/admin/tournaments/registration/registrants/TournamentRegistrantListPanel.tsx", {
+    "next/link": { __esModule: true, default: ({ children }) => children },
+    "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "fixture-session", loading: false }) },
+    "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),
+    "@/lib/tournamentRouteContext": { tournamentRouteHref: value => value },
+    "@/lib/tournamentCommerceApi": { getAdminTournamentCommerceDetail: async () => ({ data: null }) }
+  }).default;
+  const statuses = ["PENDING", "APPROVED", "DECLINED"];
+  const registrations = statuses.map(status => ({ id: status, display_name: `${status} Player`, registration_status: "confirmed" }));
+  const selections = statuses.map(status => ({ id: `entry-${status}`, registration_id: status, event_label: "Mixed 4.0", gender_review: { status } }));
+  const originalFetch = global.fetch;
+  let renderer;
+  global.fetch = async () => new Response(JSON.stringify({ registrations, selections }));
+  try {
+    await act(async () => { renderer = create(React.createElement(List, { apiBase: "http://fixture.local", clubId: "fixture", status: { enabled: true }, tournamentId: "t-fixture", tournamentName: "Fixture", drawId: "" })); });
+    for (const status of statuses) {
+      const card = renderer.root.findAllByType("article").find(node => node.findAllByType("h2").some(heading => content(heading) === `${status} Player`));
+      assert.ok(card);
+      if (status === "DECLINED") assert.match(content(card), /Mixed 4\.0: eligibility declined/);
+      else assert.doesNotMatch(content(card), /eligibility declined|needs.*approval/i, "Only explicit declines are flagged in the registrant list");
+    }
+    assert.doesNotMatch(content(renderer.root), /needs gender eligibility approval/i);
+    console.log("Registrant list eligibility: pending and approved entries remain unflagged; explicit declines stay visible.");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    global.fetch = originalFetch;
+  }
+}
+main().then(verifyRegistrantListEligibilityNotes).catch(error => { console.error(error); process.exitCode = 1; });

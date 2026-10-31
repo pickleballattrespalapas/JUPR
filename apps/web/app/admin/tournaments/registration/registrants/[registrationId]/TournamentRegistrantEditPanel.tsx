@@ -559,7 +559,7 @@ export default function TournamentRegistrantEditPanel({
       await requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/selections/${encodeURIComponent(row.id)}/gender-review`, {
         method: "POST", body: JSON.stringify({ decision, expected_review_version: row.gender_review.review_version, confirmation_text: confirmationText })
       });
-      const completion = actionSuccess("Eligibility decision saved", decision === "APPROVED" ? "This entry’s gender eligibility is approved." : "This entry remains blocked from draw import.");
+      const completion = actionSuccess("Eligibility decision saved", decision === "APPROVED" ? "This entry’s gender eligibility is restored. Other import checks still apply." : "This entry is blocked from draw import.");
       if (actionRequest.isCurrent(generation)) {
         await loadDetail(row.id);
         if (actionRequest.isCurrent(generation)) setMessage("Eligibility decision saved.");
@@ -1221,13 +1221,14 @@ export default function TournamentRegistrantEditPanel({
                           Entry {row.id}
                         </small>
                         {row.gender_review ? (
-                          <div style={{ marginTop: "0.75rem", color: row.gender_review.status === "APPROVED" ? "#166534" : "#92400e" }}>
-                            <strong>Gender eligibility: {row.gender_review.status === "PENDING" ? "Needs admin approval" : row.gender_review.status === "APPROVED" ? "Approved" : "Declined"}</strong>
+                          <div style={{ marginTop: "0.75rem", color: row.gender_review.status === "DECLINED" ? "#92400e" : "#475569" }}>
+                            <strong>{row.gender_review.status === "DECLINED" ? "Gender eligibility: Declined" : "Gender eligibility note"}</strong>
                             <p style={{ margin: "0.35rem 0" }}>{row.gender_review.reason}</p>
                             <p style={{ margin: "0.35rem 0" }}>Player: {row.gender_review.player_gender}{row.gender_review.partner_gender ? ` · Partner: ${row.gender_review.partner_gender}` : ""}</p>
+                            <p style={{ margin: "0.35rem 0" }}>{row.gender_review.status === "DECLINED" ? "An admin declined this entry for the current partner pair. Restore eligibility to allow draw import; other import checks still apply." : "Confirmed entries do not need a second eligibility approval for draw import. This note does not block import."}</p>
                             <small>Private admin review. No player notification is sent.</small>
                             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
-                              {row.gender_review.status !== "APPROVED" ? <ConfirmAction triggerLabel="Approve eligibility" title="Approve gender eligibility?" description="Allow this entry and current partner pair in this division. Other eligibility checks still apply." confirmLabel="Approve eligibility" confirmationText="REVIEW GENDER ELIGIBILITY" busy={busy} onConfirm={(text) => reviewGender(row, "APPROVED", text)} /> : null}
+                              {row.gender_review.status === "DECLINED" ? <ConfirmAction triggerLabel="Restore eligibility" title="Restore gender eligibility?" description="Remove the explicit decline for this entry and current partner pair. Other import checks still apply." confirmLabel="Restore eligibility" confirmationText="REVIEW GENDER ELIGIBILITY" busy={busy} onConfirm={(text) => reviewGender(row, "APPROVED", text)} /> : null}
                               {row.gender_review.status !== "DECLINED" ? <ConfirmAction triggerLabel="Decline eligibility" title="Decline gender eligibility?" description="Keep the registration on file and block this entry from draw import." confirmLabel="Decline eligibility" confirmationText="REVIEW GENDER ELIGIBILITY" tone="danger" busy={busy} onConfirm={(text) => reviewGender(row, "DECLINED", text)} /> : null}
                             </div>
                           </div>

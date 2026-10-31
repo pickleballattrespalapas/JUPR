@@ -225,7 +225,7 @@ export default function TournamentRegistrantListPanel({
       return {
         registration,
         events,
-        genderReviews: detail.selections.filter(selection => selection.registration_id === registration.id && selection.gender_review && selection.gender_review.status !== "APPROVED").map(selection => `${selection.event_label || "Event"}: ${selection.gender_review?.status === "DECLINED" ? "eligibility declined" : "needs gender eligibility approval"}`),
+        genderReviews: detail.selections.filter(selection => selection.registration_id === registration.id && selection.gender_review?.status === "DECLINED").map(selection => `${selection.event_label || "Event"}: eligibility declined`),
         extras: extraLabels(order),
         totalMinor: orderTotal(order)
       };

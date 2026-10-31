@@ -6,7 +6,9 @@ import pytest
 
 from jupr_app.services import admin_tournament_registration_import_service as service
 from jupr_app.services.admin_tournament_team_service import replace_admin_tournament_draw_teams
+from jupr_app.services.admin_tournament_service import get_admin_tournament_detail, review_admin_tournament_gender_eligibility
 from tests.test_admin_match_log_service import FakeSupabase
+from tests.test_public_tournament_registration_service import FakeSupabase as RegistrationSupabase
 from tests.test_api_contract_admin_tournament_registration_import import (
     tournament_registration_import_tables,
 )
@@ -67,7 +69,7 @@ def test_combined_import_preserves_source_divisions_and_confirmed_pairs(monkeypa
     )
     before = {name: deepcopy(tables[name]) for name in source_tables}
     checked_selection_ids = set()
-    monkeypatch.setattr(service, "require_tournament_gender_approvals_for_import", lambda _db, **kwargs: checked_selection_ids.update(kwargs["selection_ids"]))
+    monkeypatch.setattr(service, "require_no_declined_gender_reviews_for_import", lambda _db, **kwargs: checked_selection_ids.update(kwargs["selection_ids"]))
 
     result = import_teams(monkeypatch, tables)
 
@@ -96,6 +98,35 @@ def test_combined_import_atomic_payload_retains_original_selection_and_event(mon
     assert {row["source_selection_id"] for row in writes[0]["rows"]} == {"sel_1", "sel_4"}
     assert {row["source_event_option_id"] for row in writes[0]["rows"]} == {"event_1", "event_2"}
     assert result["teams"][1]["source_event_option_id"] == "event_2"
+
+
+@pytest.mark.parametrize("declined_selection", [None, "sel_1", "sel_4"])
+def test_combined_import_does_not_require_second_gender_approval(monkeypatch, declined_selection):
+    tables = combined_tables()
+    for event in tables["tournament_event_options"]:
+        event.update(event_type="MIXED_DOUBLES", gender_restriction="MIXED", event_family_label="Mixed doubles")
+    for registration in tables["tournament_registrations"]:
+        registration["gender"] = "Women"
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    db = RegistrationSupabase(tables)
+    detail = get_admin_tournament_detail(db, club_id="club", tournament_id="tour_1")
+    reviews = {row["id"]: row["gender_review"] for row in detail["selections"] if row.get("gender_review")}
+    assert set(reviews) == {"sel_1", "sel_2", "sel_4", "sel_5"}
+    assert all(review["status"] == "PENDING" for review in reviews.values())
+    if declined_selection:
+        review_admin_tournament_gender_eligibility(
+            db, club_id="club", tournament_id="tour_1", selection_id=declined_selection,
+            decision="DECLINED", expected_review_version=reviews[declined_selection]["review_version"],
+            actor_email="admin@example.com", actor_role="club_owner",
+        )
+        before = deepcopy(tables["tournament_teams"])
+        with pytest.raises(ValueError, match="administrator declined"):
+            import_teams(monkeypatch, tables)
+        assert tables["tournament_teams"] == before
+    else:
+        result = import_teams(monkeypatch, tables)
+        assert result["updated_count"] == 2
+        assert {team["source_event_option_id"] for team in result["teams"]} == {"event_1", "event_2"}
 
 
 def test_combined_append_preserves_existing_teams_and_skips_exact_pairs(monkeypatch):
