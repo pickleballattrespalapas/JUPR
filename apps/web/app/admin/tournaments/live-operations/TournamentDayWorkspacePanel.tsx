@@ -642,6 +642,7 @@ function PoolStandings({ draw, selectedSeeds }: { draw: AdminTournamentDayDraw; 
   if (!pools.length) return null;
   return <div>
     <p className={styles.muted}>Each pool is ranked independently. {draw.round_robin_complete ? "Recommended qualifiers are highlighted below." : "Qualifiers remain provisional until every pool match is complete."}</p>
+    <p className={styles.muted}>Playoff seeds group pool winners first, then runners-up and lower places. Within each group: win percentage, point differential per match, points scored per match, then original team number. With equal match counts, this is wins, total differential and total points scored. Pool rematches do not change seed order; you can review and override seeds before generating playoffs.</p>
     {pools.map(pool => <section key={pool.pool_id} aria-label={`${pool.pool_name} standings`}>
       <h4>{pool.pool_name} · {pool.advance_count} advance</h4>
       <div className={styles.standingsTableWrap}><table className={styles.standingsTable}>

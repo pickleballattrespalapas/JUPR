@@ -1,4 +1,5 @@
 from collections import Counter, defaultdict
+from copy import deepcopy
 from itertools import combinations
 
 import pytest
@@ -212,20 +213,104 @@ def test_larger_bracket_with_missing_bronze_is_not_a_two_team_podium():
     assert compute_podium_from_playoffs([*semifinals, final]) is None
 
 
-def test_three_pools_two_each_avoid_first_playoff_pool_rematch():
+def test_equal_records_keep_original_team_order_even_with_pool_rematches():
     roster = teams(9)
     config = config_for_sizes(3, 3, 3)
     games = score_games(build_draw_round_robin_games(tournament_id="tour", teams=roster, pool_config=config))
     qualifiers = recommend_pool_qualifiers(roster, games, config)
-    assert set(qualifiers) == {"team-1", "team-4", "team-7", "team-2", "team-5", "team-8"}
+    assert qualifiers == ["team-1", "team-4", "team-7", "team-2", "team-5", "team-8"]
     mapping = {team_id: pool["id"] for pool in config["pools"] for team_id in pool["team_ids"]}
     standings = [row for pool in compute_pool_standings(roster, games, config) for row in pool["standings"]]
     bracket = build_playoff_games(tournament_id="tour", advance_count=6, standings=standings, seed_team_ids=qualifiers)
     direct_games = [row for row in bracket if row["team_a_id"] and row["team_b_id"]]
     assert direct_games
-    assert all(mapping[row["team_a_id"]] != mapping[row["team_b_id"]] for row in direct_games)
+    assert any(mapping[row["team_a_id"]] == mapping[row["team_b_id"]] for row in direct_games)
     assert set(qualifiers[:3]) == {"team-1", "team-4", "team-7"}
     assert recommend_pool_qualifiers(roster, games, config) == qualifiers
+
+
+def games_from_scores(config, scores):
+    """Scores explicitly identify winners; fixture order never supplies seeds."""
+    roster = teams(sum(len(pool["team_ids"]) for pool in config["pools"]))
+    games = build_draw_round_robin_games(tournament_id="tour", teams=roster, pool_config=config)
+    for game in games:
+        a, b = (int(game[side].split("-")[-1]) for side in ("team_a_id", "team_b_id"))
+        left, right = sorted((a, b))
+        score_left, score_right = scores[left, right]
+        game["score_a"], game["score_b"] = (score_left, score_right) if a == left else (score_right, score_left)
+    return roster, games
+
+
+def test_nine_qualifiers_rank_every_place_by_record_and_ignore_pool_labels_and_order():
+    config = config_for_sizes(3, 3, 3)
+    for pool in config["pools"]:
+        pool["advance_count"] = 3
+    roster, games = games_from_scores(config, {
+        (1, 2): (11, 9), (1, 3): (11, 8), (2, 3): (11, 5),
+        (4, 5): (11, 4), (4, 6): (11, 2), (5, 6): (11, 8),
+        (7, 8): (11, 7), (7, 9): (11, 4), (8, 9): (11, 3),
+    })
+    # Winners: B +16, C +11, A +5. Runners-up: A/C +4, A wins
+    # the points-scored tie 20 to 18; B -4. Thirds: A -9, B -12, C -15.
+    expected = ["team-4", "team-7", "team-1", "team-2", "team-8", "team-5", "team-3", "team-6", "team-9"]
+    assert recommend_pool_qualifiers(roster, games, config) == expected
+    reordered = deepcopy(config)
+    reordered["pools"].reverse()
+    for index, pool in enumerate(reordered["pools"]):
+        pool["name"] = f"Renamed pool {index}"
+        pool["team_ids"].reverse()
+    assert recommend_pool_qualifiers(list(reversed(roster)), list(reversed(games)), reordered) == expected
+    standings = [row for pool in compute_pool_standings(roster, games, config) for row in pool["standings"]]
+    bracket = build_playoff_games(tournament_id="tour", advance_count=9, standings=standings, seed_team_ids=expected)
+    assert (bracket[0]["team_a_id"], bracket[0]["team_b_id"]) == ("team-6", "team-9")
+    assert bracket[1]["team_a_id"] == "team-4"
+    assert bracket[1]["team_b_source"] == {"winnerOf": bracket[0]["playoff_game_code"]}
+
+
+def test_pool_place_precedes_record_and_win_percentage_precedes_margin():
+    config = config_for_sizes(3, 3, 3)
+    for pool in config["pools"]:
+        pool["advance_count"] = 3
+    roster, games = games_from_scores(config, {
+        # Pool A is circular: all 1-1. A1 wins its pool on +8.
+        (1, 2): (11, 1), (1, 3): (9, 11), (2, 3): (11, 9),
+        (4, 5): (11, 9), (4, 6): (11, 9), (5, 6): (11, 0),
+        (7, 8): (11, 8), (7, 9): (11, 8), (8, 9): (11, 0),
+    })
+    seeds = recommend_pool_qualifiers(roster, games, config)
+    assert seeds[:3] == ["team-7", "team-4", "team-1"]
+    # B2 has a better differential than A1 but cannot pass a pool winner.
+    assert seeds[3:6] == ["team-5", "team-8", "team-3"]
+
+
+def test_uneven_pool_winners_use_per_match_points_instead_of_total_points():
+    config = config_for_sizes(4, 3)
+    roster, games = games_from_scores(config, {
+        (1, 2): (11, 9), (1, 3): (11, 9), (1, 4): (11, 9),
+        (2, 3): (11, 9), (2, 4): (11, 9), (3, 4): (11, 9),
+        (5, 6): (11, 8), (5, 7): (11, 8), (6, 7): (11, 0),
+    })
+    # Both winners have +6 total, but B earns +3/match versus A's +2.
+    # The A runner-up's 2-1 record beats B's 1-1 despite B's better margin.
+    assert recommend_pool_qualifiers(roster, games, config) == ["team-5", "team-1", "team-2", "team-6"]
+
+
+def test_equal_per_match_records_use_team_number_independent_of_pool_size_and_order():
+    config = config_for_sizes(2, 3)
+    config["pools"].reverse()
+    roster, games = games_from_scores(config, {
+        (1, 2): (11, 1), (3, 4): (11, 1), (3, 5): (11, 1), (4, 5): (11, 1),
+    })
+    assert recommend_pool_qualifiers(roster, games, config) == ["team-1", "team-3", "team-4", "team-2"]
+
+
+def test_unplayed_provisional_records_are_deterministic_and_follow_played_records():
+    config = config_for_sizes(3, 3)
+    roster = teams(6)
+    assert recommend_pool_qualifiers(roster, [], config) == ["team-1", "team-4", "team-2", "team-5"]
+    games = [{"stage": "ROUND_ROBIN", "team_a_id": "team-4", "team_b_id": "team-5", "score_a": 11, "score_b": 5}]
+    seeds = recommend_pool_qualifiers(roster, games, config)
+    assert seeds[:2] == ["team-4", "team-1"]
 
 
 def test_unequal_quotas_never_promote_runner_over_pool_winner_to_avoid_rematch():
