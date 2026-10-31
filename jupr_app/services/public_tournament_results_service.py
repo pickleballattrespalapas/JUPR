@@ -13,6 +13,11 @@ from jupr_app.domain.tournament_public_references import (
     build_public_tournament_reference,
 )
 from jupr_app.domain.tournaments import compute_round_robin_standings_with_tiebreaks
+from jupr_app.domain.tournaments.pools import (
+    compute_pool_standings,
+    normalize_pool_config,
+    validate_pool_schedule,
+)
 from jupr_app.services.tournament_round_robin_tiebreak_service import (
     build_round_robin_tiebreak_explanations,
     round_robin_ranking_policy,
@@ -239,6 +244,35 @@ def _round_robin_game_is_resolved(
     )
 
 
+def _public_standings(
+    standings: list[dict[str, Any]],
+    *,
+    tournament_id: str,
+    team_names: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Expose only public identities and statistics, including pool-local ranks."""
+
+    return [
+        {
+            "public_team_key": build_public_tournament_reference(
+                tournament_id=tournament_id,
+                namespace="standard-team",
+                source_id=str(row.get("team_id") or ""),
+            ),
+            "rank": row.get("pool_rank", row.get("seed")),
+            "team_name": team_names.get(str(row.get("team_id") or ""), "Team"),
+            "wins": row.get("wins"),
+            "losses": row.get("losses"),
+            "points_for": row.get("points_for"),
+            "points_against": row.get("points_against"),
+            "differential": row.get("differential"),
+            "competition_status": row.get("competition_status"),
+            "retired": bool(row.get("retired")),
+        }
+        for row in standings
+    ]
+
+
 def build_public_tournament_results(
     supabase: Any,
     *,
@@ -342,45 +376,73 @@ def build_public_tournament_results(
                 retired_team_ids=retired_team_ids,
             )
         ]
-        round_robin_result = compute_round_robin_standings_with_tiebreaks(
-            draw_teams,
-            resolved_rr_games,
-        )
-        named_standings = [
-            {
-                **row,
-                "team_name": team_names.get(str(row.get("team_id") or ""), "Team"),
-            }
-            for row in list(round_robin_result.get("standings") or [])
-        ]
-        standings = [
-            {
-                "public_team_key": build_public_tournament_reference(
-                    tournament_id=str(tournament_id),
-                    namespace="standard-team",
-                    source_id=str(row.get("team_id") or ""),
-                ),
-                "rank": row.get("seed"),
-                "team_name": team_names.get(str(row.get("team_id") or ""), "Team"),
-                "wins": row.get("wins"),
-                "losses": row.get("losses"),
-                "points_for": row.get("points_for"),
-                "points_against": row.get("points_against"),
-                "differential": row.get("differential"),
-                "competition_status": row.get("competition_status"),
-                "retired": bool(row.get("retired")),
-            }
-            for row in named_standings
-        ]
-        tiebreak_explanations = (
-            build_round_robin_tiebreak_explanations(
-                list(round_robin_result.get("tiebreaks") or []),
-                named_standings,
-                resolved_rr_games,
+        pool_config = normalize_pool_config(draw.get("pool_config"), draw_teams)
+        pool_by_team: dict[str, dict[str, Any]] = {}
+        public_pools: list[dict[str, Any]] = []
+        if pool_config:
+            validate_pool_schedule(draw_teams, rr_games, pool_config)
+            for pool in pool_config["pools"]:
+                for team_id in pool["team_ids"]:
+                    pool_by_team[str(team_id)] = pool
+            pool_results = compute_pool_standings(
+                draw_teams, resolved_rr_games, pool_config
             )
-            if resolved_rr_games
-            else []
-        )
+            for pool_result in pool_results:
+                pool_id = str(pool_result["pool_id"])
+                pool = next(row for row in pool_config["pools"] if row["id"] == pool_id)
+                pool_team_ids = set(pool["team_ids"])
+                pool_games = [
+                    game for game in resolved_rr_games
+                    if str(game.get("team_a_id") or "") in pool_team_ids
+                    and str(game.get("team_b_id") or "") in pool_team_ids
+                ]
+                named_pool_standings = [
+                    {**row, "team_name": team_names.get(str(row.get("team_id") or ""), "Team")}
+                    for row in pool_result["standings"]
+                ]
+                public_pools.append({
+                    "public_pool_key": build_public_tournament_reference(
+                        tournament_id=str(tournament_id),
+                        namespace="standard-pool",
+                        source_id=f"{draw_id}:{pool_id}",
+                    ),
+                    "name": _text(pool_result["pool_name"]),
+                    "advance_count": pool_result["advance_count"],
+                    "round_robin_complete": len(pool_games) == len(pool_team_ids) * (len(pool_team_ids) - 1) // 2,
+                    "standings": _public_standings(
+                        named_pool_standings,
+                        tournament_id=str(tournament_id),
+                        team_names=team_names,
+                    ),
+                    "tiebreak_explanations": build_round_robin_tiebreak_explanations(
+                        list(pool_result.get("tiebreaks") or []),
+                        named_pool_standings,
+                        pool_games,
+                    ) if pool_games else [],
+                })
+            # Teams from unequal pools must never be presented as one wins table.
+            standings = []
+            tiebreak_explanations = []
+        else:
+            round_robin_result = compute_round_robin_standings_with_tiebreaks(
+                draw_teams, resolved_rr_games
+            )
+            named_standings = [
+                {**row, "team_name": team_names.get(str(row.get("team_id") or ""), "Team")}
+                for row in list(round_robin_result.get("standings") or [])
+            ]
+            standings = _public_standings(
+                named_standings,
+                tournament_id=str(tournament_id),
+                team_names=team_names,
+            )
+            tiebreak_explanations = (
+                build_round_robin_tiebreak_explanations(
+                    list(round_robin_result.get("tiebreaks") or []),
+                    named_standings,
+                    resolved_rr_games,
+                ) if resolved_rr_games else []
+            )
         public_games = [
             {
                 "public_game_key": build_public_tournament_reference(
@@ -389,6 +451,16 @@ def build_public_tournament_results(
                     source_id=str(row.get("id") or ""),
                 ),
                 "stage": _text(row.get("stage"), limit=40).upper(),
+                "pool_name": (
+                    _text(pool_by_team.get(str(row.get("team_a_id") or ""), {}).get("name")) or None
+                ) if str(row.get("stage") or "").upper() == "ROUND_ROBIN" else None,
+                "public_pool_key": (
+                    build_public_tournament_reference(
+                        tournament_id=str(tournament_id),
+                        namespace="standard-pool",
+                        source_id=f"{draw_id}:{pool_by_team[str(row.get('team_a_id') or '')]['id']}",
+                    ) if str(row.get("team_a_id") or "") in pool_by_team else None
+                ) if str(row.get("stage") or "").upper() == "ROUND_ROBIN" else None,
                 "round_number": _integer(row.get("rr_round_number")),
                 "slot_number": _integer(row.get("rr_slot_number")),
                 "playoff_game_code": _text(row.get("playoff_game_code"), limit=40)
@@ -430,6 +502,10 @@ def build_public_tournament_results(
             for value in (event.get("scheduled_day_ids") or [registration_day_id])
             if str(value)
         ]
+        draw_state = _draw_public_state(matchup_games, draw_podium)
+        if public_pools and not all(pool["round_robin_complete"] for pool in public_pools):
+            if draw_state == "COMPLETE":
+                draw_state = "LIVE"
         output_draws.append(
             {
                 "public_draw_key": build_public_tournament_reference(
@@ -438,7 +514,7 @@ def build_public_tournament_results(
                     source_id=draw_id,
                 ),
                 "name": _text(draw.get("name") or "Tournament draw"),
-                "state": _draw_public_state(matchup_games, draw_podium),
+                "state": draw_state,
                 "event_family_label": _text(event.get("event_family_label") or "Event"),
                 "division_name": _text(event.get("division_name") or event.get("label") or "Division"),
                 "event_type": _text(event.get("event_type"), limit=40),
@@ -468,8 +544,12 @@ def build_public_tournament_results(
                     for row in draw_teams
                 ],
                 "standings": standings,
-                "round_robin_complete": bool(rr_games)
-                and len(resolved_rr_games) == len(rr_games),
+                "pool_standings": public_pools,
+                "round_robin_complete": (
+                    all(pool["round_robin_complete"] for pool in public_pools)
+                    if public_pools
+                    else bool(rr_games) and len(resolved_rr_games) == len(rr_games)
+                ),
                 "ranking_policy": round_robin_ranking_policy(),
                 "tiebreak_explanations": tiebreak_explanations,
                 # Keep the completed-score feed and bracket mutually exclusive:

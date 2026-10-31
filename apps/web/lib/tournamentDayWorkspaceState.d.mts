@@ -63,12 +63,15 @@ export type PlayoffReviewTemplate = {
 };
 
 export type PlayoffReviewContract = {
+  recommended_seed_team_ids?: readonly string[] | null;
+  configured_advance_count?: number | null;
   eligible_team_ids?: readonly string[] | null;
   templates?: readonly PlayoffReviewTemplate[] | null;
   scoring_formats?: readonly { code?: string | null }[] | null;
 };
 
 export type PlayoffReviewConfiguration = {
+  override_reason?: string | null;
   template_code?: string | null;
   seed_team_ids?: readonly string[] | null;
   round_scoring?: Readonly<Record<string, string>> | null;

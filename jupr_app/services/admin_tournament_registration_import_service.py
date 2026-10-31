@@ -375,6 +375,8 @@ def import_admin_tournament_registrations_to_draw(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    if draw.get("pool_config") is not None:
+        raise ValueError("Remove the pool split before replacing or importing teams, then review the pool assignments again.")
     event_option = _event_option_for_draw(
         supabase,
         tournament_id=clean_tournament_id,

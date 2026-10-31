@@ -141,6 +141,8 @@ def import_admin_tournament_bulk_teams(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    if draw.get("pool_config") is not None:
+        raise ValueError("Remove the pool split before replacing or importing teams, then review the pool assignments again.")
     reviewed_draw_version = _require_reviewed_draw_version(
         draw,
         expected_draw_updated_at=expected_draw_updated_at,

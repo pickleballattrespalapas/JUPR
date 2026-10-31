@@ -1,3 +1,5 @@
+import type { TournamentDrawPoolConfiguration } from "./adminTournamentApi";
+
 export type AdminTournamentDayCommandAction =
   | "activate_day"
   | "activate_draw"
@@ -65,6 +67,8 @@ export type AdminTournamentDayGameScore = AdminTournamentDayGameScoreInput & {
 };
 
 export type AdminTournamentDayGame = {
+  pool_id?: string | null;
+  pool_name?: string | null;
   id: string;
   draw_id: string;
   draw_name: string;
@@ -153,6 +157,10 @@ export type AdminTournamentDayHeldEntry = {
 };
 
 export type AdminTournamentDayRoundRobinStanding = {
+  pool_id?: string | null;
+  pool_name?: string | null;
+  pool_rank?: number;
+  recommended_qualifier?: boolean;
   seed: number;
   team_id: string;
   team_number?: number;
@@ -216,6 +224,8 @@ export type AdminTournamentDayPlayoffScoringFormat = {
 };
 
 export type AdminTournamentDayPlayoffReview = {
+  recommended_seed_team_ids?: string[];
+  configured_advance_count?: number | null;
   eligible_team_ids: string[];
   default_seed_team_ids: string[];
   templates: AdminTournamentDayPlayoffTemplate[];
@@ -225,7 +235,17 @@ export type AdminTournamentDayPlayoffReview = {
   default_scoring_format?: string | null;
 };
 
+export type AdminTournamentDayPoolStanding = {
+  pool_id: string;
+  pool_name: string;
+  advance_count: number;
+  standings: AdminTournamentDayRoundRobinStanding[];
+  tiebreak_explanations?: AdminTournamentDayTiebreakExplanation[];
+};
+
 export type AdminTournamentDayDraw = {
+  pool_config?: TournamentDrawPoolConfiguration | null;
+  pool_standings?: AdminTournamentDayPoolStanding[];
   id: string;
   name: string;
   state: string;
@@ -260,6 +280,7 @@ export type AdminTournamentDayDraw = {
     review_href?: string | null;
   };
   round_robin_summary?: {
+    pools?: AdminTournamentDayPoolStanding[];
     complete?: boolean;
     total_games?: number;
     finalized_games?: number;
@@ -372,6 +393,7 @@ export type AdminTournamentDayCommandPayload = {
   draw_id?: string;
   advance_count?: number;
   playoff_configuration?: {
+    override_reason?: string;
     template_code: string;
     seed_team_ids: string[];
     round_scoring: Record<string, string>;

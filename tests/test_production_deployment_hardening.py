@@ -215,7 +215,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 162
+    assert len(versions) == 165
     assert "20261030224214" in versions
     assert "public_registration_withdrawal" in contract["required_ledger_names"]
     assert "20261030183226" in versions
@@ -280,7 +280,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "interclub_commissioner_registration_window" in contract["required_ledger_names"]
     assert "interclub_pool_profile_matching_bulk_add" in contract["required_ledger_names"]
     assert {"20260906004056", "20260906005541", "20260906052216", "20260908052027", "20260908060747", "20260908060948", "20260908151701", "20260908173710"}.issubset(versions)
-    assert versions[-43:] == (
+    assert versions[-46:] == (
         "20261030010000",
         "20261030183226",
         "20261030224214",
@@ -324,11 +324,14 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004103",
         "20261109004104",
         "20261109004105",
+        "20261109010000",
+        "20261109010100",
+        "20261109010200",
     )
     assert {"20260908155131", "20260908164204"}.issubset(versions)
-    assert len(names) == 162
+    assert len(names) == 165
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 162
+    assert len(contract["required_ledger_names"]) == 165
     assert "interclub_conflicts_are_not_serialization_failures" in contract["required_ledger_names"]
     assert {"interclub_competition_operations", "southern_bcs_eligibility", "interclub_rating_ledger", "interclub_publication_review_guard", "interclub_meet_overlap_guard", "southern_bcs_missing_pairing_rosters", "interclub_lineup_refresh_deadline_guard"}.issubset(contract["required_ledger_names"])
     assert {"public_club_sites", "public_club_directory_sort"}.issubset(contract["required_ledger_names"])
@@ -377,6 +380,11 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "transactional_bulk_tournament_check_in" in contract[
         "required_ledger_names"
     ]
+    assert {
+        "tournament_draw_pools",
+        "tournament_pool_schedule_recovery",
+        "tournament_pool_playoff_progression",
+    }.issubset(contract["required_ledger_names"])
     assert contract["allow_additional_ledger_names"] is False
     assert contract["schema_contract_only_repository_migrations"] == (
         "tournament_registrations_player_id_postgrest_reload",
@@ -420,6 +428,9 @@ def test_reviewed_migration_contract_is_bound_to_sql_bytes(tmp_path: Path) -> No
     "badge_conflicts_are_not_serialization_failures",
     "unrated_match_activity",
     "restrict_team_match_admin_rpc_execution",
+    "tournament_draw_pools",
+    "tournament_pool_schedule_recovery",
+    "tournament_pool_playoff_progression",
 ])
 def test_audit_fix_migrations_are_required_in_the_deployment_ledger(missing_name: str) -> None:
     required_names = MIGRATION_CONTRACT["required_ledger_names"]
@@ -526,7 +537,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261109004105"
+    assert migrations[-1] == "20261109010200"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
