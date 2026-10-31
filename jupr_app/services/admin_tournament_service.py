@@ -1603,10 +1603,11 @@ def update_admin_tournament_selection(
     transfer_context = None
     if division_team:
         # This path moves an existing team; partner replacement is a separate
-        # operation and must never be combined with the division change.
+        # operation. A public note edit does not change the partnership and is
+        # saved with the move by the existing atomic division-transfer RPC.
         if partner_mode_changed or any(
             field in patch and patch.get(field) not in (before.get(field), before.get(field) or "")
-            for field in (*_PARTNER_EDIT_FIELDS, "partner_note")
+            for field in _PARTNER_EDIT_FIELDS
         ):
             raise ValueError("A division change keeps the confirmed partner. Save partner changes separately.")
         try:
@@ -1664,6 +1665,7 @@ def update_admin_tournament_selection(
         update_payload = {
             "event_option_id": next_event_id, "registration_day_id": day_id,
             "division_transfer_context": transfer_context,
+            **({"partner_note": update_payload["partner_note"]} if "partner_note" in update_payload else {}),
         }
     if not update_payload:
         raise ValueError("No supported event-entry fields were provided.")
