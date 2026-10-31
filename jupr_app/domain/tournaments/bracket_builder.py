@@ -83,6 +83,54 @@ PLAYOFF_TEMPLATES: dict[int, dict[str, Any]] = {
 }
 
 
+def _seeded_playoff_template(advance_count: int) -> dict[str, Any]:
+    """Single elimination with real first-round byes, no synthetic games."""
+    bracket_size = 2
+    positions = [1, 2]
+    while bracket_size < advance_count:
+        bracket_size *= 2
+        positions = [entry for seed in positions for entry in (seed, bracket_size + 1 - seed)]
+    sources: list[dict[str, Any] | None] = [
+        {"seed": seed} if seed <= advance_count else None for seed in positions
+    ]
+    games: list[dict[str, Any]] = []
+    semifinal_codes: list[str] = []
+    while len(sources) > 1:
+        round_name = {2: "Final", 4: "SF", 8: "QF", 16: "R16"}[len(sources)]
+        next_sources = []
+        slot = 0
+        for index in range(0, len(sources), 2):
+            left, right = sources[index:index + 2]
+            if left is None or right is None:
+                next_sources.append(left or right)
+                continue
+            slot += 1
+            code = f"P{len(games) + 1}"
+            round_label = {"SF": "Semifinal", "QF": "Quarterfinal", "R16": "Round of 16"}.get(round_name)
+            name = "Gold Medal Match" if round_name == "Final" else f"{round_label} {slot}"
+            games.append({"id": code, "name": name, "round": round_name,
+                          "slot": slot, "teamA": left, "teamB": right})
+            next_sources.append({"winnerOf": code})
+            if round_name == "SF":
+                semifinal_codes.append(code)
+        sources = next_sources
+    if len(semifinal_codes) == 2:
+        games.append({
+            "id": f"P{len(games) + 1}", "name": "Bronze Medal Match",
+            "round": "Bronze", "slot": 1,
+            "teamA": {"loserOf": semifinal_codes[0]},
+            "teamB": {"loserOf": semifinal_codes[1]},
+        })
+    return {"advanceCount": advance_count, "games": games}
+
+
+# Preserve historical codes and matchups for four, five and six qualifiers.
+SUPPORTED_PLAYOFF_COUNTS = tuple(range(2, 17))
+for _advance_count in SUPPORTED_PLAYOFF_COUNTS:
+    if _advance_count not in PLAYOFF_TEMPLATES:
+        PLAYOFF_TEMPLATES[_advance_count] = _seeded_playoff_template(_advance_count)
+
+
 @dataclass
 class TeamStanding:
     team_id: str
@@ -343,19 +391,30 @@ def compute_podium_from_rr(teams: list[dict[str, Any]], games: list[dict[str, An
 def compute_podium_from_playoffs(games: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
     final_game = next((g for g in games if g.get("playoff_round") == "Final"), None)
     bronze_game = next((g for g in games if g.get("playoff_round") == "Bronze"), None)
-    if not final_game or not bronze_game:
-        return None
-    if not final_game.get("finalized_at") or not bronze_game.get("finalized_at"):
+    if not final_game or not final_game.get("finalized_at"):
         return None
     if not final_game.get("winner_team_id") or not final_game.get("loser_team_id"):
         return None
-    if not bronze_game.get("winner_team_id"):
-        return None
-    return [
+    podium = [
         {"placement": 1, "team_id": final_game["winner_team_id"]},
         {"placement": 2, "team_id": final_game["loser_team_id"]},
-        {"placement": 3, "team_id": bronze_game["winner_team_id"]},
     ]
+    if bronze_game:
+        if not bronze_game.get("finalized_at") or not bronze_game.get("winner_team_id"):
+            return None
+        return [*podium, {"placement": 3, "team_id": bronze_game["winner_team_id"]}]
+    # Two qualifiers play a final only. Three qualifiers have one semifinal;
+    # its loser is third without inventing an opponent or a bronze result.
+    playoff_games = [game for game in games if game.get("playoff_round")]
+    semifinals = [game for game in playoff_games if game.get("playoff_round") == "SF"]
+    if len(playoff_games) == 1:
+        return podium
+    if len(playoff_games) == 2 and len(semifinals) == 1:
+        semifinal = semifinals[0]
+        if semifinal.get("finalized_at") and semifinal.get("loser_team_id"):
+            return [*podium, {"placement": 3, "team_id": semifinal["loser_team_id"]}]
+    # A larger bracket missing its bronze game is incomplete, not a small final.
+    return None
 
 
 def build_playoff_games(

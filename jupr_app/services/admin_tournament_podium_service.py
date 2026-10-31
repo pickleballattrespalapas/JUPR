@@ -247,8 +247,10 @@ def generate_admin_tournament_draw_podium(
     if playoff_games:
         podium = compute_podium_from_playoffs(playoff_games)
         if not podium:
-            raise ValueError("Playoff final and bronze games must be scored before generating the podium.")
+            raise ValueError("All required playoff medal results must be scored before generating the podium.")
     else:
+        if draw.get("pool_config") is not None:
+            raise ValueError("Pool draws require their combined playoffs before a division podium can be generated.")
         if not _all_games_complete(round_robin_games, stage="ROUND_ROBIN"):
             raise ValueError("All round-robin games must be scored before generating a round-robin podium.")
         podium = compute_podium_from_rr(teams, round_robin_games)

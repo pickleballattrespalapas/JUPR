@@ -359,6 +359,15 @@ export function validatePlayoffReviewConfiguration(review, configuration) {
     return { ok: false, message: "Every seeded team must still be eligible in the authoritative playoff review." };
   }
 
+  if (review?.configured_advance_count != null) {
+    const recommended = review.recommended_seed_team_ids || [];
+    const changed = Number(review.configured_advance_count) !== advanceCount
+      || recommended.join("\u0000") !== seedTeamIds.join("\u0000");
+    const reason = String(configuration?.override_reason || "").trim();
+    if (changed && !reason) return { ok: false, message: "Explain the qualifier or seed override before generating playoffs." };
+    if (reason.length > 500) return { ok: false, message: "Keep the override reason within 500 characters." };
+  }
+
   const formats = new Set(
     (Array.isArray(review?.scoring_formats) ? review.scoring_formats : [])
       .map((format) => String(format?.code || "").trim())

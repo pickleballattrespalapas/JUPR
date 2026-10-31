@@ -1,6 +1,7 @@
 "use client";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+import TournamentDrawPoolsPanel from "./TournamentDrawPoolsPanel";
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -12,7 +13,8 @@ import type {
   AdminTournamentOpsTeam,
   AdminTournamentResultsImportPreviewResponse,
   AdminTournamentStatusResponse,
-  AdminTournamentWriteResponse
+  AdminTournamentWriteResponse,
+  TournamentDrawPoolConfiguration
 } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
@@ -246,6 +248,7 @@ export default function TournamentOpsPanel({
     && status.mutation_runtime?.surface_flags?.operations?.enabled
     && status.operations_runtime?.operations_mutations_enabled
   );
+  const [poolDraftDirty, setPoolDraftDirty] = useState(false);
   const reviewedState = snapshot?.state_fingerprint || "";
   const selectedDraw = snapshot?.draws?.find((row) => String(row.id || "") === selectedDrawId) || null;
   const players = snapshot?.players || [];
@@ -279,9 +282,10 @@ export default function TournamentOpsPanel({
   const registrationImportBlocksWrites = registrationImportRecovery !== null;
   const guardedWriteDisabled = busy || !accessToken || !operationsWriteReady || !reviewedState || !registrationImportRecoveryLoaded || registrationImportBlocksWrites;
   const drawCasWriteDisabled = guardedWriteDisabled || !reviewedDrawUpdatedAt;
-  const registrationImportDisabled = drawCasWriteDisabled || !selectedDrawId || reviewedSourceGameVersions.length > 0;
+  const registrationImportDisabled = drawCasWriteDisabled || !selectedDrawId || reviewedSourceGameVersions.length > 0 || Boolean(selectedDraw?.pool_config);
   const teamSnapshotCasDisabled = drawCasWriteDisabled || !reviewedTeamVersions.length || reviewedTeamVersions.some((row) => !row.id || !row.updated_at);
   const gameSnapshotCasDisabled = teamSnapshotCasDisabled || !reviewedSourceGameVersions.length || reviewedSourceGameVersions.some((row) => !row.id || !row.updated_at);
+  useEffect(() => { setPoolDraftDirty(false); }, [selectedTournamentId, selectedDrawId, reviewedDrawUpdatedAt]);
   const shows = (name: Exclude<OpsWorkflow, "all">) => workflow === "all" || workflow === name;
   const showsLegacyDrawRuntime = workflow === "all";
 
@@ -649,7 +653,34 @@ export default function TournamentOpsPanel({
     }
   }
 
+  async function savePools(configuration: TournamentDrawPoolConfiguration | null, confirmationText: string): Promise<ActionCompletion> {
+    if (!selectedTournamentId || !selectedDrawId || !reviewedDrawUpdatedAt) throw new Error("Reload the selected draw before saving pools.");
+    const generation = actionRequest.begin();
+    const tournamentId = selectedTournamentId;
+    const drawId = selectedDrawId;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/pools`, {
+        method: "PUT",
+        body: JSON.stringify({ pool_config: configuration, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, confirmation_text: confirmationText, source: "next_tournament_ops_draw_pools" })
+      });
+      const completion = actionSuccess(configuration ? "Pools saved" : "Pool split removed", configuration ? "The saved teams and advancement counts are ready for schedule generation." : "The draw is ready to use one round-robin.");
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setPoolDraftDirty(false);
+      await loadOps(tournamentId, drawId);
+      if (actionRequest.isCurrent(generation)) setMessage(`${configuration ? "Pool setup saved" : "Pool split removed"}.${operationSuffix(payload)}`);
+      return completion;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save pools. Reload the draw before trying again.");
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
   async function generateGames(confirmationText: string): Promise<ActionCompletion> {
+    if (poolDraftDirty) throw new Error("Save or reset the pool changes before generating games.");
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating games.");
       throw new Error("Select a tournament and draw before generating games.");
@@ -1217,7 +1248,7 @@ export default function TournamentOpsPanel({
             <textarea value={bulkTeamText} onChange={(event) => setBulkTeamText(event.target.value)} style={{ ...inputStyle, minHeight: "8rem", fontFamily: "monospace" }} />
             <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
               <label><strong>Mode</strong><br /><select value={bulkTeamMode} onChange={(event) => setBulkTeamMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
-              <ConfirmAction triggerLabel="Import teams" title={`${bulkTeamMode === "REPLACE" ? "Replace" : "Append"} teams from this file?`} description={bulkTeamMode === "REPLACE" ? "This replaces the draw's current teams with the reviewed CSV or TSV contents." : "This appends teams from the reviewed CSV or TSV contents after the current teams."} confirmLabel={bulkTeamMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT TEAMS" tone={bulkTeamMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId} busy={busy} onConfirm={importBulkTeams} />
+              <ConfirmAction triggerLabel="Import teams" title={`${bulkTeamMode === "REPLACE" ? "Replace" : "Append"} teams from this file?`} description={bulkTeamMode === "REPLACE" ? "This replaces the draw's current teams with the reviewed CSV or TSV contents." : "This appends teams from the reviewed CSV or TSV contents after the current teams."} confirmLabel={bulkTeamMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT TEAMS" tone={bulkTeamMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId || Boolean(selectedDraw?.pool_config)} busy={busy} onConfirm={importBulkTeams} />
             </div>
           </article>
           ) : null}
@@ -1226,10 +1257,11 @@ export default function TournamentOpsPanel({
           {operationsWriteReady && shows("draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Team editor</h2>
+            {selectedDraw?.pool_config ? <p>Remove and save the pool split below before replacing or importing teams. Your existing pool membership uses the saved team list.</p> : null}
             <p style={{ color: "#475569" }}>For registered divisions, import confirmed registrations above first. Use this editor only for deliberate manual setup or pre-game corrections.</p>
             {selectedDrawId && teamEditorPlayerChoicesReady ? (
               <>
-                <ConfirmAction triggerLabel="Save teams" title="Replace the draw's saved teams?" description="This saves the currently reviewed team rows as the authoritative team list for the selected draw." confirmLabel="Yes, save teams" confirmationText="SAVE TEAMS" tone="danger" disabled={drawCasWriteDisabled || !manualTeamRowsReady} disabledReason={!manualTeamRowsReady ? "Choose Player 1 for at least one team before saving manually." : undefined} busy={busy} onConfirm={saveTeams} />
+                <ConfirmAction triggerLabel="Save teams" title="Replace the draw's saved teams?" description="This saves the currently reviewed team rows as the authoritative team list for the selected draw." confirmLabel="Yes, save teams" confirmationText="SAVE TEAMS" tone="danger" disabled={drawCasWriteDisabled || !manualTeamRowsReady || Boolean(selectedDraw?.pool_config)} disabledReason={!manualTeamRowsReady ? "Choose Player 1 for at least one team before saving manually." : undefined} busy={busy} onConfirm={saveTeams} />
                 <div style={{ overflowX: "auto", marginTop: "1rem" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "920px" }}>
                     <thead><tr>{["Team #", "Player 1", "Player 2", "Seed", "Notes", "Action"].map((header) => <th key={header} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>{header}</th>)}</tr></thead>
@@ -1248,6 +1280,17 @@ export default function TournamentOpsPanel({
             ) : <p style={{ color: "#64748b" }}>{selectedDrawId ? "Club player names are unavailable, so manual team setup is disabled. Reload the authoritative snapshot or use the guarded registration import." : "Create or select a draw before editing teams."}</p>}
           </article>
 
+          {selectedDraw ? <TournamentDrawPoolsPanel
+            key={`${selectedDraw.id}:${reviewedDrawUpdatedAt}`}
+            teams={(snapshot.teams || []).filter(team => String(team.draw_id || "") === selectedDrawId).map(team => ({ id: String(team.id || ""), label: teamLabel(team, players), seed: team.seed, team_number: team.team_number }))}
+            savedConfiguration={selectedDraw.pool_config || null}
+            hasGames={reviewedSourceGameVersions.length > 0 || (snapshot.games || []).some(game => String(game.draw_id || "") === selectedDrawId)}
+            disabled={teamSnapshotCasDisabled}
+            busy={busy}
+            onDirtyChange={setPoolDraftDirty}
+            onSave={savePools}
+          /> : null}
+
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Round-robin schedule</h2>
             <p style={{ color: "#475569" }}>
@@ -1256,9 +1299,9 @@ export default function TournamentOpsPanel({
               publication, award, podium, or day-live evidence exists.
             </p>
             <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap" }}>
-              <ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="This creates the schedule from the currently reviewed teams and draw version." confirmLabel="Yes, generate games" confirmationText="GENERATE GAMES" disabled={teamSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generateGames} />
-              <ConfirmAction triggerLabel="Reconcile missing games" title="Reconcile this partial round robin?" description="This preserves every valid existing game, including finalized games, and inserts only missing current-roster pairings." confirmLabel="Yes, reconcile games" confirmationText="RECONCILE GAMES" disabled={teamSnapshotCasDisabled || !selectedDrawId || !reviewedSourceGameVersions.length} busy={busy} onConfirm={(text) => recoverRoundRobin("reconcile", text)} />
-              <ConfirmAction triggerLabel="Rebuild unstarted games" title="Rebuild this unstarted round robin?" description="This removes the reviewed unstarted round-robin games and replaces them with one complete schedule. Any result or downstream evidence blocks the action." confirmLabel="Yes, rebuild games" confirmationText="REBUILD GAMES" tone="danger" disabled={teamSnapshotCasDisabled || !selectedDrawId || !reviewedSourceGameVersions.length} busy={busy} onConfirm={(text) => recoverRoundRobin("rebuild", text)} />
+              <ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="This creates the schedule from the currently reviewed teams and draw version." confirmLabel="Yes, generate games" confirmationText="GENERATE GAMES" disabled={teamSnapshotCasDisabled || !selectedDrawId || poolDraftDirty} disabledReason={poolDraftDirty ? "Save or reset the pool changes first." : undefined} busy={busy} onConfirm={generateGames} />
+              <ConfirmAction triggerLabel="Reconcile missing games" title="Reconcile this partial round robin?" description="This preserves every valid existing game, including finalized games, and inserts only missing current-roster pairings." confirmLabel="Yes, reconcile games" confirmationText="RECONCILE GAMES" disabled={teamSnapshotCasDisabled || !selectedDrawId || !reviewedSourceGameVersions.length || poolDraftDirty} busy={busy} onConfirm={(text) => recoverRoundRobin("reconcile", text)} />
+              <ConfirmAction triggerLabel="Rebuild unstarted games" title="Rebuild this unstarted round robin?" description="This removes the reviewed unstarted round-robin games and replaces them with one complete schedule. Any result or downstream evidence blocks the action." confirmLabel="Yes, rebuild games" confirmationText="REBUILD GAMES" tone="danger" disabled={teamSnapshotCasDisabled || !selectedDrawId || !reviewedSourceGameVersions.length || poolDraftDirty} busy={busy} onConfirm={(text) => recoverRoundRobin("rebuild", text)} />
             </div>
           </article>
           <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
@@ -1316,7 +1359,7 @@ export default function TournamentOpsPanel({
               </section>
             ) : null}
           </article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2><p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`This advances ${playoffAdvanceCount} teams from the reviewed round-robin results into the playoff bracket.`} confirmLabel="Yes, generate playoffs" confirmationText="GENERATE PLAYOFFS" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePlayoffs} /></div></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2>{selectedDraw?.pool_config ? <p>Use the Tournament Day Workspace to review pool qualifiers, overrides and the shared playoff.</p> : null}<p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`This advances ${playoffAdvanceCount} teams from the reviewed round-robin results into the playoff bracket.`} confirmLabel="Yes, generate playoffs" confirmationText="GENERATE PLAYOFFS" disabled={gameSnapshotCasDisabled || !selectedDrawId || Boolean(selectedDraw?.pool_config)} busy={busy} onConfirm={generatePlayoffs} /></div></article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate podium</h2><p style={{ color: "#475569" }}>Creates draw-scoped podium rows from finalized playoffs, or from completed round-robin standings when no playoffs exist.</p><ConfirmAction triggerLabel="Generate podium" title="Generate podium placements?" description="This calculates and stores podium rows from the currently reviewed final results." confirmLabel="Yes, generate podium" confirmationText="GENERATE PODIUM" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePodium} /></article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Review and award podium</h2><p style={{ color: "#475569" }}>Podium awards require current explicit review evidence and exact award versions. This legacy editor cannot mint awards.</p><Link href={tournamentRouteHref("/admin/tournaments/live-operations/podium", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open guarded Podium review</Link></article>
           </> : null}

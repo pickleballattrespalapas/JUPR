@@ -135,6 +135,8 @@ def generate_admin_tournament_playoff_games(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    if draw.get("pool_config") is not None:
+        raise ValueError("Use Day workspace to review and confirm pool qualifiers and playoff seeds.")
     reviewed_draw_version = _require_reviewed_draw_version(
         draw,
         expected_draw_updated_at=expected_draw_updated_at,
