@@ -65,6 +65,7 @@ import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import styles from "./TournamentDayWorkspacePanel.module.css";
+import TournamentPrintPanel from "./TournamentPrintPanel";
 
 export type TournamentDayWorkspacePanelFocus = "board" | "queue" | "draws" | "corrections";
 
@@ -2117,6 +2118,7 @@ export default function TournamentDayWorkspacePanel({
 
       {snapshot ? (
         <>
+          <TournamentPrintPanel key={`${snapshot.scope.tournament_id}:${snapshot.scope.registration_day_id}`} snapshot={snapshot} />
           <section className={styles.summaryGrid} aria-label="Tournament day summary">
             <article><span>Courts</span><strong>{snapshot.summary.courts}</strong></article>
             <article><span>Available</span><strong>{snapshot.summary.available_courts}</strong></article>

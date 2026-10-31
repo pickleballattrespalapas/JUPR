@@ -75,9 +75,13 @@ export type AdminTournamentDayGame = {
   state: string;
   stage: string;
   round_label: string;
+  rr_round_number?: number | null;
+  rr_slot_number?: number | null;
   slot_label?: string | null;
   playoff_game_code?: string | null;
   playoff_round?: string | null;
+  team_a_source?: Record<string, unknown> | null;
+  team_b_source?: Record<string, unknown> | null;
   team_a: AdminTournamentDaySide;
   team_b: AdminTournamentDaySide;
   score_a?: number | null;
