@@ -443,7 +443,8 @@ def _validate_gender_eligibility(
         return
     if result.get("issue_type") == "GENDER_NOT_ELIGIBLE":
         # Accept the entry without changing anyone's gender. Admin-only review
-        # is derived from the saved pair, and draw import requires approval.
+        # is derived from the saved pair. Confirmed entries can enter a draw
+        # without a second approval unless an administrator explicitly declines.
         return
     missing_fields = {str(value) for value in (result.get("missing_fields") or [])}
     if status == "MISSING_DATA" and str(partner_mode or "").upper() == "NEEDS_PARTNER" and missing_fields <= {"partner gender"}:

@@ -907,16 +907,17 @@ def review_admin_tournament_gender_eligibility(
     return {"ok": True, "gender_review": {**review, "status": decision, "reviewed_by": actor_email}}
 
 
-def require_tournament_gender_approvals_for_import(
+def require_no_declined_gender_reviews_for_import(
     supabase: Any, *, club_id: str, tournament_id: str, selection_ids: set[str],
 ) -> None:
+    """Confirmed entries need no second approval; honor explicit current declines."""
     if not selection_ids:
         return
     detail = get_admin_tournament_detail(supabase, club_id=club_id, tournament_id=tournament_id)
     blocked = [row for row in detail["selections"] if row["id"] in selection_ids
-               and row.get("gender_review") and row["gender_review"]["status"] != "APPROVED"]
+               and row.get("gender_review") and row["gender_review"]["status"] == "DECLINED"]
     if blocked:
-        raise ValueError("Gender eligibility needs administrator approval before these entries can enter the draw. Open Registrants to review the flagged entries.")
+        raise ValueError("An administrator declined gender eligibility for an entry in this import. Open Registrants to change that decision before importing it.")
 
 
 def build_admin_tournament_registration_import_handoff(
