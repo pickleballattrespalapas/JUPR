@@ -31,6 +31,49 @@ def test_ops_snapshot_lists_only_unlinked_confirmed_draw_entrants(monkeypatch):
     assert result["unlinked_registrations"] == [], "Players still looking for partners are not import blockers"
 
 
+def test_combined_draw_lists_unlinked_secondary_registrant_and_fingerprints_membership(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    tables = tournament_registration_import_tables(missing_player=True)
+    tables["tournament_registrations"][0]["updated_at"] = BODY["expected_updated_at"]
+    tables["tournament_registration_selections"][0]["event_option_id"] = "event_2"
+    database = FakeSupabase(tables)
+    before = get_admin_tournament_ops_snapshot(database, club_id="club", tournament_id="tour_1", draw_id="draw_1")
+    assert before["unlinked_registrations"] == []
+
+    tables["tournament_event_draws"][0]["source_event_option_ids"] = ["event_1", "event_2"]
+    after = get_admin_tournament_ops_snapshot(database, club_id="club", tournament_id="tour_1", draw_id="draw_1")
+
+    assert after["unlinked_registrations"] == [{
+        "id": "reg_1", "display_name": "Alex Example", "updated_at": BODY["expected_updated_at"],
+        "draw_ids": ["draw_1"],
+    }]
+    assert before["state_fingerprint"] and after["state_fingerprint"]
+    assert before["state_fingerprint"] != after["state_fingerprint"]
+    assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_2"
+    assert "email" not in after["unlinked_registrations"][0]
+
+
+@pytest.mark.parametrize("entry_event,entry_day,visible", [
+    ("event_1", "day_1", True),
+    ("event_2", "day_1", True),
+    ("event_2", "another_day", False),
+    ("unrelated_event", "day_1", False),
+])
+def test_combined_draw_profile_link_scope_keeps_day_and_source_boundaries(
+    monkeypatch, entry_event, entry_day, visible,
+):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    tables = tournament_registration_import_tables(missing_player=True)
+    tables["tournament_event_draws"][0]["source_event_option_ids"] = ["event_1", "event_2"]
+    tables["tournament_registration_selections"][0].update(
+        event_option_id=entry_event, registration_day_id=entry_day,
+    )
+
+    result = get_admin_tournament_ops_snapshot(FakeSupabase(tables), club_id="club", tournament_id="tour_1", draw_id="draw_1")
+
+    assert [row["id"] for row in result["unlinked_registrations"]] == (["reg_1"] if visible else [])
+
+
 @pytest.mark.parametrize("rpc_result,status", [
     ({"ok": True, "player_id": 1}, 200),
     ({"ok": True, "player_id": 1, "idempotent_replay": True}, 200),

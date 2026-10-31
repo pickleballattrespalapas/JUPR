@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "d218ae66379dcf3d8e84fd9a417e8d3f232578e115df28bbcef0ef63ac2134db",
+  "repository_migration_content_sha256": "a53b1c99f4200671b93e1660914c81d55390ae56374e0a352b76cd401c830928",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -28,6 +28,7 @@
     "club_admin_settings",
     "club_sponsor_directory",
     "club_staff_scopes",
+    "combined_division_live_guards",
     "combined_rating_team_tournaments",
     "communications_outbox_stale_guards",
     "complete_registration_cancellation",
@@ -138,6 +139,7 @@
     "tournament_best_of_three_game_scores",
     "tournament_check_in_day_attendance",
     "tournament_check_in_day_fk_index",
+    "tournament_combined_division_draws",
     "tournament_commerce",
     "tournament_complete_registration_editor",
     "tournament_day_court_reservations",

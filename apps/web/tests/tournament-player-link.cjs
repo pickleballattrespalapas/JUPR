@@ -32,6 +32,7 @@ const Panel = load("app/admin/tournaments/ops/TournamentOpsPanel.tsx", {
   ...shared,
   "./TournamentPlayerLinkReview": { __esModule: true, default: Review },
   "./TournamentDrawPoolsPanel": { __esModule: true, default: () => null },
+  "./CombineTournamentDivisionsPanel": load("app/admin/tournaments/ops/CombineTournamentDivisionsPanel.tsx", shared),
   "next/link": { __esModule: true, default: ({ children }) => children },
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "fixture-token", loading: false }) },
   "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),

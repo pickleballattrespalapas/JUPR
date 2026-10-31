@@ -124,6 +124,10 @@ export type TournamentDrawPoolConfiguration = {
 
 export type AdminTournamentDraw = {
   pool_config?: TournamentDrawPoolConfiguration | null;
+  source_event_option_ids?: string[];
+  combined_into_draw_id?: string | null;
+  draw_kind?: string | null;
+  hidden_from_primary_ops?: boolean;
   id: string;
   tournament_id?: string | null;
   registration_day_id?: string | null;
@@ -146,6 +150,7 @@ export type AdminTournamentOpsTeam = {
   draw_id?: string | null;
   registration_day_id?: string | null;
   event_option_id?: string | null;
+  source_event_option_id?: string | null;
   team_number?: number | null;
   player1_id?: number | null;
   player2_id?: number | null;
@@ -419,6 +424,8 @@ export type AdminTournamentLiveSnapshotResponse = AdminTournamentOpsSnapshotResp
 };
 
 export type AdminTournamentWriteResponse = {
+  moved_team_count?: number;
+  combined_source_draw_ids?: string[];
   registration_removed?: boolean;
   registrations_removed?: boolean;
   ok: boolean;

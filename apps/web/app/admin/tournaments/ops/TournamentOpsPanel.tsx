@@ -3,6 +3,7 @@
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import TournamentDrawPoolsPanel from "./TournamentDrawPoolsPanel";
 import TournamentPlayerLinkReview from "./TournamentPlayerLinkReview";
+import CombineTournamentDivisionsPanel, { drawSourceDivisionIds, sourceDivisionLabel } from "./CombineTournamentDivisionsPanel";
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -253,6 +254,11 @@ export default function TournamentOpsPanel({
   const [poolDraftDirty, setPoolDraftDirty] = useState(false);
   const reviewedState = snapshot?.state_fingerprint || "";
   const selectedDraw = snapshot?.draws?.find((row) => String(row.id || "") === selectedDrawId) || null;
+  const selectedDrawSourceIds = selectedDraw ? drawSourceDivisionIds(selectedDraw) : [];
+  const selectedDrawSourceLabels = selectedDrawSourceIds.map(id => {
+    const event = snapshot?.event_options?.find(row => String(row.id || "") === id);
+    return event ? sourceDivisionLabel(event) : "Saved division";
+  });
   const players = snapshot?.players || [];
   const unlinkedRegistrations = (snapshot?.unlinked_registrations || []).filter(row => row.draw_ids.includes(selectedDrawId));
   const teamsById = new Map((snapshot?.teams || []).map((team) => [String(team.id || ""), team]));
@@ -469,6 +475,45 @@ export default function TournamentOpsPanel({
       return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create draw.");
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function combineDivisions(eventOptionIds: string[], name: string, confirmationText: string): Promise<ActionCompletion> {
+    if (!selectedTournamentId || !selectedDrawId) throw new Error("Select a tournament draw before combining divisions.");
+    const generation = actionRequest.begin();
+    const tournamentId = selectedTournamentId;
+    const drawId = selectedDrawId;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/combine-divisions`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            event_option_ids: eventOptionIds,
+            name,
+            expected_state_fingerprint: reviewedState,
+            confirmation_text: confirmationText,
+            source: "next_tournament_ops_combine_divisions",
+          }),
+        },
+      );
+      const completion = actionSuccess("Divisions combined", `${name} now includes ${eventOptionIds.length} registration divisions. Import confirmed registrations next to include any remaining teams.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setRegistrationImportMode("APPEND");
+      await loadOps(tournamentId, drawId);
+      if (actionRequest.isCurrent(generation)) setMessage(`Divisions combined into ${name}. ${payload.moved_team_count ?? 0} existing team(s) moved. Import confirmed registrations to complete the roster.${operationSuffix(payload)}`);
+      return completion;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to combine divisions.");
+        await loadOps(tournamentId, drawId);
+        if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to combine divisions.");
+      }
       throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -1256,12 +1301,24 @@ export default function TournamentOpsPanel({
               <label><strong>Draw</strong><br /><select value={selectedDrawId} onChange={(event) => selectDraw(event.target.value)} disabled={busy} style={inputStyle}><option value="">Choose a draw…</option>{snapshot.draws.map((draw, index) => <option key={draw.id} value={draw.id}>{draw.name || `Unnamed draw ${index + 1}`}</option>)}</select></label>
               <button type="button" onClick={() => selectedTournamentId && selectedDrawId ? loadOps(selectedTournamentId, selectedDrawId) : undefined} disabled={!selectedTournamentId || !selectedDrawId || busy} style={ghostButtonStyle}>Reload selected draw</button>
             </div>
+            {selectedDrawSourceIds.length > 1 ? <p style={{ marginBottom: 0 }}><strong>Combined registration divisions:</strong> {selectedDrawSourceLabels.join(" + ")}. One shared draw and podium; original registrations are preserved.</p> : null}
           </article>
+
+          {operationsWriteReady && shows("draws") && selectedDraw ? <CombineTournamentDivisionsPanel
+            key={`${selectedDraw.id}:${selectedDraw.updated_at || reviewedState}`}
+            draw={selectedDraw}
+            draws={snapshot.draws}
+            eventOptions={snapshot.event_options || []}
+            hasGames={reviewedSourceGameVersions.length > 0 || snapshot.games.some(game => String(game.draw_id || "") === selectedDrawId)}
+            disabled={drawCasWriteDisabled || poolDraftDirty}
+            busy={busy}
+            onCombine={combineDivisions}
+          /> : null}
 
           {operationsWriteReady && (shows("import") || workflow === "draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Import confirmed registrations</h2>
-            <p style={{ color: "#475569" }}>Imports confirmed registration entries for the selected draw’s registration day/division. Review any missing player links below before importing.</p>
+            <p style={{ color: "#475569" }}>{selectedDrawSourceIds.length > 1 ? `Imports confirmed registration teams from all included divisions: ${selectedDrawSourceLabels.join(" + ")}. Original registration divisions are preserved.` : "Imports confirmed registration entries for the selected draw’s registration day/division."} Review any missing player links below before importing.</p>
             <TournamentPlayerLinkReview registrations={unlinkedRegistrations} players={players} disabled={guardedWriteDisabled} onLink={linkRegistrationPlayer} />
             <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
               <label><strong>Mode</strong><br /><select value={registrationImportMode} onChange={(event) => setRegistrationImportMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>

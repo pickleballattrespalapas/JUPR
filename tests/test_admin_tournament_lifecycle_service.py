@@ -489,6 +489,74 @@ def test_enabled_event_without_draw_blocks_completion_until_explicitly_disabled(
     )
 
 
+def test_combined_draw_covers_both_divisions_with_one_podium_and_award_set(monkeypatch) -> None:
+    tables, supabase = _ready_tables(monkeypatch)
+    tables["tournament_event_options"] = [
+        {
+            "id": event_id,
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "division_name": division,
+            "enabled": True,
+            "status": "active",
+        }
+        for event_id, division in (("event-1", "4.0"), ("event-2", "4.5"))
+    ]
+    tables["tournament_event_draws"][0].update(
+        {
+            "name": "Mixed 4.0 / 4.5",
+            "registration_day_id": "day-1",
+            "source_event_option_ids": ["event-1", "event-2"],
+        }
+    )
+    tables["tournament_event_draws"].append(
+        {
+            "id": "draw-combined-source",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-2",
+            "status": "cancelled",
+            "hidden_from_primary_ops": True,
+            "combined_into_draw_id": "draw-1",
+        }
+    )
+
+    lifecycle = build_admin_tournament_lifecycle(
+        supabase, club_id="club", tournament_id="tour-1"
+    )
+
+    assert lifecycle["counts"]["draws"] == 1
+    assert lifecycle["counts"]["podium_entries"] == 3
+    assert lifecycle["counts"]["expected_awards"] == 6
+    assert lifecycle["counts"]["verified_awards"] == 6
+    assert lifecycle["draws"][0]["source_event_option_ids"] == ["event-1", "event-2"]
+    assert not any(
+        row["code"] in {"EVENT_DRAW_MISSING", "COMBINED_DRAW_SOURCE_INVALID"}
+        for row in lifecycle["domain_readiness"]["completion"]["blockers"]
+    )
+
+    tables["tournament_event_options"][1]["event_type"] = "SINGLES"
+    incompatible = build_admin_tournament_lifecycle(
+        supabase, club_id="club", tournament_id="tour-1"
+    )
+    assert any(
+        row["code"] == "COMBINED_DRAW_SOURCE_INVALID"
+        for row in incompatible["domain_readiness"]["completion"]["blockers"]
+    )
+
+    # A historical cancelled draw is not coverage if the source is no longer
+    # explicitly included in an active combined draw.
+    tables["tournament_event_draws"][0]["source_event_option_ids"] = []
+    uncombined = build_admin_tournament_lifecycle(
+        supabase, club_id="club", tournament_id="tour-1"
+    )
+    missing_events = [
+        row["entity_id"]
+        for row in uncombined["domain_readiness"]["completion"]["blockers"]
+        if row["code"] == "EVENT_DRAW_MISSING"
+    ]
+    assert missing_events == ["event-2"]
+
+
 def test_event_option_evidence_failure_blocks_completion(monkeypatch) -> None:
     tables, supabase = _ready_tables(monkeypatch)
     _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")

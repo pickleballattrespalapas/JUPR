@@ -9,6 +9,10 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 from jupr_app.domain.tournament_admin_operations import (
     build_tournament_admin_operation_request,
 )
+from jupr_app.domain.tournament_draw_sources import (
+    draw_source_event_option_ids,
+    validate_draw_source_events,
+)
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
 from jupr_app.services.admin_tournament_game_service import _require_reviewed_draw_version
 from jupr_app.services.admin_tournament_team_service import _team_payload, write_admin_tournament_draw_teams_atomic
@@ -85,6 +89,30 @@ def _event_option_for_draw(
             "import was refused."
         )
     return rows[0]
+
+
+def _source_event_options_for_draw(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    draw: dict[str, Any],
+) -> list[dict[str, Any]]:
+    source_ids = draw_source_event_option_ids(draw)
+    if len(source_ids) < 2:
+        event = _event_option_for_draw(supabase, tournament_id=tournament_id, draw=draw)
+        return [event] if event else []
+    try:
+        events = _safe_rows(
+            supabase.table("tournament_event_options")
+            .select("*")
+            .eq("tournament_id", str(tournament_id))
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not verify the combined draw's source divisions; registration import was refused."
+        ) from exc
+    return validate_draw_source_events(draw, events)
 
 
 def _write_combined_rating_teams_atomic(
@@ -194,10 +222,10 @@ def _selections_for_draw(supabase: Any, *, tournament_id: str, draw: dict[str, A
         rows = _safe_rows(supabase.table("tournament_registration_selections").select("*").eq("tournament_id", str(tournament_id)).execute())
     except Exception as exc:
         raise RuntimeError("Could not load tournament registration selections; registration import was refused.") from exc
-    event_option_id = _clean_text(draw.get("event_option_id"), limit=120)
+    event_option_ids = set(draw_source_event_option_ids(draw))
     day_id = _clean_text(draw.get("registration_day_id"), limit=120)
-    if event_option_id:
-        rows = [row for row in rows if _clean_text(row.get("event_option_id"), limit=120) == event_option_id]
+    if event_option_ids:
+        rows = [row for row in rows if _clean_text(row.get("event_option_id"), limit=120) in event_option_ids]
     if day_id:
         rows = [row for row in rows if _clean_text(row.get("registration_day_id"), limit=120) == day_id]
     return rows
@@ -375,13 +403,16 @@ def import_admin_tournament_registrations_to_draw(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    if draw.get("combined_into_draw_id"):
+        raise ValueError("This draw was combined into another playing draw. Import registrations into the combined draw.")
     if draw.get("pool_config") is not None:
         raise ValueError("Remove the pool split before replacing or importing teams, then review the pool assignments again.")
-    event_option = _event_option_for_draw(
+    source_events = _source_event_options_for_draw(
         supabase,
         tournament_id=clean_tournament_id,
         draw=draw,
     )
+    event_option = source_events[0] if source_events else {}
     combined_rating_import = (
         str(event_option.get("eligibility_mode") or "").upper()
         == "COMBINED_RATING_CAP"
@@ -465,16 +496,24 @@ def import_admin_tournament_registrations_to_draw(
             for row in selections
             if _clean_text(row.get("id"), limit=120)
         }
-        links = _confirmed_partner_team_links(
-            supabase,
-            tournament_id=clean_tournament_id,
-            event_option_id=event_option_id,
-        )
-        members = _active_partner_team_members(
-            supabase,
-            tournament_id=clean_tournament_id,
-            event_option_id=event_option_id,
-        )
+        links = [
+            link
+            for source_event in source_events
+            for link in _confirmed_partner_team_links(
+                supabase,
+                tournament_id=clean_tournament_id,
+                event_option_id=_clean_text(source_event.get("id"), limit=120),
+            )
+        ]
+        members = [
+            member
+            for source_event in source_events
+            for member in _active_partner_team_members(
+                supabase,
+                tournament_id=clean_tournament_id,
+                event_option_id=_clean_text(source_event.get("id"), limit=120),
+            )
+        ]
         members_by_link: dict[str, list[dict[str, Any]]] = {}
         consumed_selection_ids: set[str] = set()
         for member in members:
@@ -487,6 +526,7 @@ def import_admin_tournament_registrations_to_draw(
             key=lambda row: _clean_text(row.get("id"), limit=120),
         ):
             link_id = _clean_text(link.get("id"), limit=120)
+            source_event_option_id = _clean_text(link.get("event_option_id"), limit=120)
             link_selection_ids = {
                 selection_id
                 for selection_id in (
@@ -520,6 +560,16 @@ def import_admin_tournament_registrations_to_draw(
                 or member_selection_ids != link_selection_ids
                 or member_orders != {1, 2}
                 or not link_selection_ids.issubset(selections_by_id)
+                or any(
+                    _clean_text(member.get("event_option_id"), limit=120) != source_event_option_id
+                    for member in active_members
+                )
+                or any(
+                    _clean_text(selections_by_id[selection_id].get("event_option_id"), limit=120)
+                    != source_event_option_id
+                    for selection_id in link_selection_ids
+                    if selection_id in selections_by_id
+                )
             ):
                 unresolved.append(link_id or "invalid confirmed partner team")
                 continue
@@ -587,6 +637,8 @@ def import_admin_tournament_registrations_to_draw(
                     )
                     or None,
                     "event_option_id": event_option_id or None,
+                    "source_event_option_id": source_event_option_id or None,
+                    "source_selection_id": _clean_text(active_members[0].get("selection_id"), limit=120) or None,
                     "team_number": start_slot + len(rows),
                     "player1_id": team_player_ids[0],
                     "player2_id": team_player_ids[1],
@@ -748,6 +800,8 @@ def import_admin_tournament_registrations_to_draw(
                 "draw_id": clean_draw_id,
                 "registration_day_id": _clean_text(draw.get("registration_day_id"), limit=120) or None,
                 "event_option_id": _clean_text(draw.get("event_option_id"), limit=120) or None,
+                "source_event_option_id": _clean_text(selection.get("event_option_id"), limit=120) or None,
+                "source_selection_id": _clean_text(selection.get("id"), limit=120) or None,
                 "team_number": start_slot + len(rows),
                 "player1_id": player1_id,
                 "player2_id": player2_id,
@@ -757,15 +811,6 @@ def import_admin_tournament_registrations_to_draw(
                     else "REGISTRATION"
                 ),
                 "notes": f"Imported from registration {_clean_text(registration.get('id'), limit=120)}",
-                **(
-                    {
-                        "source_selection_id": _clean_text(
-                            selection.get("id"), limit=120
-                        )
-                    }
-                    if combined_rating_import
-                    else {}
-                ),
                 "created_at": now,
             }
         )
@@ -780,6 +825,7 @@ def import_admin_tournament_registrations_to_draw(
         )
     if unresolved:
         raise ValueError("Some confirmed registrations could not be resolved to JUPR players: " + ", ".join(sorted(set(filter(None, unresolved)))))
+    skipped_existing_teams = 0
     if mode == "APPEND" and not combined_rating_import:
         current_player_ids = {
             player_id
@@ -790,13 +836,40 @@ def import_admin_tournament_registrations_to_draw(
             )
             if player_id is not None
         }
+        if len(source_events) > 1:
+            existing_pairs: dict[tuple[int, ...], int] = {}
+            existing_player_counts: dict[int, int] = {}
+            for team in current_teams:
+                pair = tuple(sorted(
+                    player_id for player_id in (_safe_int(team.get("player1_id")), _safe_int(team.get("player2_id")))
+                    if player_id is not None
+                ))
+                existing_pairs[pair] = existing_pairs.get(pair, 0) + 1
+                for player_id in pair:
+                    existing_player_counts[player_id] = existing_player_counts.get(player_id, 0) + 1
+            new_rows = []
+            for row in rows:
+                pair = tuple(sorted(
+                    player_id for player_id in (_safe_int(row.get("player1_id")), _safe_int(row.get("player2_id")))
+                    if player_id is not None
+                ))
+                if existing_pairs.get(pair) == 1 and all(existing_player_counts[player_id] == 1 for player_id in pair):
+                    skipped_existing_teams += 1
+                    continue
+                new_rows.append({**row, "team_number": start_slot + len(new_rows)})
+            rows = new_rows
+            selected_player_ids = [
+                player_id for row in rows
+                for player_id in (_safe_int(row.get("player1_id")), _safe_int(row.get("player2_id")))
+                if player_id is not None
+            ]
         overlaps = sorted(current_player_ids.intersection(selected_player_ids))
         if overlaps:
             raise ValueError(
                 "Player IDs already exist in the current draw and cannot be "
                 "appended: " + ", ".join(str(player_id) for player_id in overlaps)
             )
-    if not rows:
+    if not rows and not skipped_existing_teams:
         if combined_rating_import:
             raise ValueError(
                 "No eligible finalized combined-rating registrations were "
@@ -809,6 +882,18 @@ def import_admin_tournament_registrations_to_draw(
         selection_ids=imported_selection_ids,
     )
     before = [_team_payload(row) for row in current_teams]
+    if not rows:
+        return {
+            "ok": True,
+            "mode": "tournament_registration_team_import_preview" if dry_run else "tournament_registration_team_import",
+            "dry_run": bool(dry_run),
+            "write_count": 0,
+            "draw_id": clean_draw_id,
+            "import_mode": mode,
+            "updated_count": 0,
+            "teams": [],
+            "warnings": [*import_warnings, "All confirmed teams are already in this combined draw."],
+        }
     if dry_run:
         teams = [_team_payload(row) for row in rows]
         if combined_rating_import:

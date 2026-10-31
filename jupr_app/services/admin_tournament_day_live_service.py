@@ -17,6 +17,10 @@ from jupr_app.domain.tournament_admin_operations import (
     build_tournament_admin_operation_request,
 )
 from jupr_app.domain.tournament_podium import PODIUM_BADGE_MAP
+from jupr_app.domain.tournament_draw_sources import (
+    draw_source_event_option_ids,
+    validate_draw_source_events,
+)
 from jupr_app.domain.tournaments import (
     build_playoff_games,
     compute_round_robin_standings,
@@ -1425,19 +1429,47 @@ def build_admin_tournament_day_live_snapshot(
                 )
             )
         event = events.get(_text(draw.get("event_option_id")))
+        source_event_ids = draw_source_event_option_ids(draw)
+        unavailable_source_ids = [
+            event_id
+            for event_id in source_event_ids
+            if (
+                (source_event := events.get(event_id)) is None
+                or source_event.get("enabled") is not True
+                or _text(source_event.get("status") or "DRAFT").upper()
+                in {"CANCELLED", "CANCELED", "ARCHIVED", "DISABLED"}
+                or not _draw_scheduled_for_day(
+                    {**draw, "event_option_id": event_id},
+                    source_event,
+                    str(registration_day_id),
+                )
+            )
+        ]
         if (
-            not event
-            or event.get("enabled") is not True
-            or _text(event.get("status") or "DRAFT").upper()
-            in {"CANCELLED", "CANCELED", "ARCHIVED", "DISABLED"}
-            or not _draw_scheduled_for_day(draw, event, str(registration_day_id))
+            not source_event_ids
+            or unavailable_source_ids
         ):
             source_scope_blockers.append(
                 _blocker(
                     "DRAW_UNSCHEDULED",
-                    "New court assignments are stopped until the enabled draw event is restored to this day.",
+                    (
+                        "New court assignments are stopped until every combined registration division is enabled and scheduled for this day."
+                        if len(source_event_ids) > 1
+                        else "New court assignments are stopped until the enabled draw event is restored to this day."
+                    ),
+                    event_option_ids=unavailable_source_ids,
                 )
             )
+        elif len(source_event_ids) > 1:
+            try:
+                validate_draw_source_events(draw, events)
+            except ValueError as exc:
+                source_scope_blockers.append(
+                    _blocker(
+                        "DRAW_SOURCE_INVALID",
+                        f"New court assignments are stopped until the combined divisions are restored: {exc}",
+                    )
+                )
         if day_draw and _text(day_draw.get("source_draw_updated_at")) != _text(
             draw.get("updated_at")
         ):
@@ -1994,6 +2026,7 @@ def build_admin_tournament_day_live_snapshot(
                 "version": str((day_draw or {}).get("version") or draw.get("updated_at") or "0"),
                 "source_updated_at": draw.get("updated_at"),
                 "event_option_id": _text(draw.get("event_option_id")) or None,
+                "source_event_option_ids": source_event_ids,
                 "stage": "PLAYOFF" if playoff_games else "ROUND_ROBIN",
                 "pool_config": draw.get("pool_config"),
                 "pool_standings": display_pool_groups,
@@ -2460,12 +2493,30 @@ def build_admin_tournament_day_live_snapshot(
         "courts": live_courts,
         "queue": queue_rows,
         "participant_claims": claim_rows,
-        "draws": [{"id": row.get("id"), "updated_at": row.get("updated_at"), "pool_config": row.get("pool_config")} for row in draws],
+        "draws": [
+            {
+                "id": row.get("id"),
+                "updated_at": row.get("updated_at"),
+                "pool_config": row.get("pool_config"),
+                "source_event_option_ids": draw_source_event_option_ids(row),
+            }
+            for row in draws
+        ],
         "events": [
             {
                 "id": row.get("id"),
                 "enabled": row.get("enabled"),
                 "status": row.get("status"),
+                "registration_day_id": row.get("registration_day_id"),
+                "scheduled_day_ids": row.get("scheduled_day_ids"),
+                "event_family_key": row.get("event_family_key"),
+                "event_family_label": row.get("event_family_label"),
+                "event_type": row.get("event_type"),
+                "gender_restriction": row.get("gender_restriction"),
+                "partner_required": row.get("partner_required"),
+                "competition_format": row.get("competition_format"),
+                "eligibility_mode": row.get("eligibility_mode"),
+                "skill_mode": row.get("skill_mode"),
                 "scoring_override": row.get("scoring_override"),
                 "division_scoring": row.get("division_scoring"),
                 "scoring_default": row.get("scoring_default"),
@@ -2474,9 +2525,9 @@ def build_admin_tournament_day_live_snapshot(
             for row in events.values()
             if _text(row.get("id"))
             in {
-                _text(draw.get("event_option_id"))
+                event_option_id
                 for draw in draws
-                if _text(draw.get("event_option_id"))
+                for event_option_id in draw_source_event_option_ids(draw)
             }
         ],
         "teams": [
