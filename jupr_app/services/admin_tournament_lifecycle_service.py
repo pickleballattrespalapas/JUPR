@@ -8,6 +8,10 @@ from jupr_app.domain.tournament_admin_operations import (
     stable_tournament_admin_fingerprint,
 )
 from jupr_app.domain.tournament_podium import PODIUM_BADGE_MAP
+from jupr_app.domain.tournament_draw_sources import (
+    draw_source_event_option_ids,
+    validate_draw_source_events,
+)
 from jupr_app.domain.tournaments import compute_round_robin_standings, compute_podium_from_playoffs
 from jupr_app.domain.tournaments.bracket_builder import PLAYOFF_TEMPLATES
 from jupr_app.domain.tournaments.pools import compute_pool_standings, normalize_pool_config, validate_pool_schedule
@@ -1448,6 +1452,22 @@ def build_admin_tournament_lifecycle(
     }
     primary_draws = [row for row in draws_all if _is_active_primary_draw(row)]
     primary_draw_ids = {str(row.get("id") or "") for row in primary_draws if row.get("id")}
+    for draw in primary_draws:
+        if len(draw_source_event_option_ids(draw)) < 2:
+            continue
+        try:
+            validate_draw_source_events(draw, event_options)
+        except ValueError as exc:
+            global_evidence_blockers.append(
+                _blocker(
+                    "COMBINED_DRAW_SOURCE_INVALID",
+                    f"The combined draw {draw.get('name') or 'Tournament draw'} needs its source divisions restored: {exc}",
+                    scope="draw",
+                    draw_id=str(draw.get("id") or ""),
+                    entity_type="tournament_event_draw",
+                    entity_id=str(draw.get("id") or ""),
+                )
+            )
     active_team_parent_draws = [
         row
         for row in draws_all
@@ -1456,9 +1476,9 @@ def build_admin_tournament_lifecycle(
         not in INACTIVE_DRAW_STATUSES
     ]
     active_primary_event_option_ids = {
-        str(row.get("event_option_id") or "")
+        event_option_id
         for row in primary_draws
-        if str(row.get("event_option_id") or "")
+        for event_option_id in draw_source_event_option_ids(row)
     }
     enabled_event_options_without_draw = [
         row
@@ -2101,6 +2121,7 @@ def build_admin_tournament_lifecycle(
                 "status": str(draw.get("status") or "DRAFT").upper(),
                 "protected": not _is_primary_draw(draw),
                 "event_option_id": str(draw.get("event_option_id") or "") or None,
+                "source_event_option_ids": draw_source_event_option_ids(draw),
                 "counts": {
                     "teams": len(draw_teams),
                     **draw_counts,

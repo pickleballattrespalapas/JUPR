@@ -391,7 +391,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 184
+    assert len(versions) == 186
+    assert {"20261109011000", "20261109011100"}.issubset(versions)
+    assert {"tournament_combined_division_draws", "combined_division_live_guards"}.issubset(contract["required_ledger_names"])
     assert "20261030224214" in versions
     assert "public_registration_withdrawal" in contract["required_ledger_names"]
     assert "20261030183226" in versions
@@ -422,7 +424,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "tournament_gender_eligibility_reviews" in contract["required_ledger_names"]
     assert {"complete_registration_cancellation", "registration_cancellation_audit_policies"}.issubset(contract["required_ledger_names"])
     assert "20260909203736" in versions
-    assert versions[-48:] == (
+    assert versions[-50:] == (
         "20261030010000",
         "20261030183226",
         "20261030224214",
@@ -471,13 +473,15 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109010100",
         "20261109010200",
         "20261109010300",
+        "20261109011000",
+        "20261109011100",
     )
-    assert len(names) == 184
+    assert len(names) == 186
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 171
+    assert len(contract["required_ledger_names"]) == 173
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 171
-    assert contract["deployment_order"][-18:] == (
+    assert len(contract["deployment_order"]) == 173
+    assert contract["deployment_order"][-20:] == (
         "event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder",
         "badge_conflicts_are_not_serialization_failures", "unrated_match_activity",
         "round_robin_hub_atomic_operations", "play_generator_operation_surface", "round_robin_hub_participant_identities",
@@ -491,6 +495,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "tournament_pool_schedule_recovery",
         "tournament_pool_playoff_progression",
         "admin_tournament_registration_player_link",
+        "tournament_combined_division_draws", "combined_division_live_guards",
     )
     assert {"interclub_season_trophies", "event_season_history"}.issubset(contract["required_ledger_names"])
     assert set(contract["deployment_order"]) == set(
@@ -974,7 +979,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261109010300"
+    assert migrations[-1] == "20261109011100"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
@@ -1690,7 +1695,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow
-    assert 'EXPECTED_MIGRATION_HEAD: "20261031205606"' in workflow
+    assert 'EXPECTED_MIGRATION_HEAD: "20261031211639"' in workflow
     assert 'if [ "$GITHUB_REF" != "refs/heads/$PRODUCTION_SOURCE_BRANCH" ]; then' in workflow
     assert '"$HEAD_SHA" != "$GITHUB_SHA"' in workflow
     assert '"$HEAD_SHA" != "$PRODUCTION_SHA"' in workflow

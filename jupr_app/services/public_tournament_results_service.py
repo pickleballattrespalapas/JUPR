@@ -12,6 +12,7 @@ from jupr_app.domain.tournament_registration_repo import (
 from jupr_app.domain.tournament_public_references import (
     build_public_tournament_reference,
 )
+from jupr_app.domain.tournament_draw_sources import draw_source_event_option_ids
 from jupr_app.domain.tournaments import compute_round_robin_standings_with_tiebreaks
 from jupr_app.domain.tournaments.pools import (
     compute_pool_standings,
@@ -496,6 +497,13 @@ def build_public_tournament_results(
             )
         ]
         event = event_by_id.get(str(draw.get("event_option_id") or "")) or {}
+        source_event_ids = draw_source_event_option_ids(draw)
+        combined_divisions = len(source_event_ids) > 1
+        source_division_names = [
+            _text(source.get("division_name") or source.get("label") or "Division")
+            for event_id in source_event_ids
+            if (source := event_by_id.get(event_id))
+        ]
         registration_day_id = str(draw.get("registration_day_id") or "")
         scheduled_day_ids = [
             str(value)
@@ -516,7 +524,10 @@ def build_public_tournament_results(
                 "name": _text(draw.get("name") or "Tournament draw"),
                 "state": draw_state,
                 "event_family_label": _text(event.get("event_family_label") or "Event"),
-                "division_name": _text(event.get("division_name") or event.get("label") or "Division"),
+                "division_name": _text(
+                    draw.get("name") or " / ".join(source_division_names) or "Combined divisions"
+                ) if combined_divisions else _text(event.get("division_name") or event.get("label") or "Division"),
+                "source_division_names": source_division_names,
                 "event_type": _text(event.get("event_type"), limit=40),
                 "scheduled_days": [
                     {
