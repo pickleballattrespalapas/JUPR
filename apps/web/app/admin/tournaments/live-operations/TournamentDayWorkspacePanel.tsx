@@ -65,6 +65,7 @@ import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import styles from "./TournamentDayWorkspacePanel.module.css";
+import TournamentPrintPanel from "./TournamentPrintPanel";
 
 export type TournamentDayWorkspacePanelFocus = "board" | "queue" | "draws" | "corrections";
 
@@ -160,6 +161,7 @@ type PlayoffEditor = {
   reviewFingerprint: string;
   templateCode: string;
   seedTeamIds: string[];
+  overrideReason: string;
   roundScoring: Record<string, string>;
   error: string;
   expected: AdminTournamentDayCommandExpected;
@@ -235,7 +237,7 @@ function matchupLabel(game: AdminTournamentDayGame | undefined): string {
 
 function gameStageLabel(game: AdminTournamentDayGame | undefined): string {
   if (!game) return "Scheduled game";
-  return [game.draw_name, game.stage, game.round_label, game.slot_label]
+  return [game.draw_name, game.pool_name, game.stage, game.round_label, game.slot_label]
     .map((value) => String(value || "").trim())
     .filter(Boolean)
     .join(" · ");
@@ -571,6 +573,7 @@ function playoffRoundLabel(code: string): string {
   const known: Record<string, string> = {
     PLAY_IN: "Play-in",
     QUARTERFINAL: "Quarterfinal",
+    R16: "Round of 16",
     QUARTERFINALS: "Quarterfinals",
     QF: "Quarterfinals",
     SEMIFINAL: "Semifinal",
@@ -634,6 +637,30 @@ function tiebreakOutcomeLabel(outcome: string): string {
   return known[normalized] || statusLabel(normalized);
 }
 
+function PoolStandings({ draw, selectedSeeds }: { draw: AdminTournamentDayDraw; selectedSeeds?: string[] }) {
+  const pools = draw.round_robin_summary?.pools || draw.pool_standings || [];
+  if (!pools.length) return null;
+  return <div>
+    <p className={styles.muted}>Each pool is ranked independently. {draw.round_robin_complete ? "Recommended qualifiers are highlighted below." : "Qualifiers remain provisional until every pool match is complete."}</p>
+    {pools.map(pool => <section key={pool.pool_id} aria-label={`${pool.pool_name} standings`}>
+      <h4>{pool.pool_name} · {pool.advance_count} advance</h4>
+      <div className={styles.standingsTableWrap}><table className={styles.standingsTable}>
+        <caption>{pool.pool_name} standings</caption>
+        <thead><tr><th scope="col">Pool rank</th><th scope="col">Team</th><th scope="col">W–L</th><th scope="col">PF</th><th scope="col">PA</th><th scope="col">+/−</th><th scope="col">Advancement</th></tr></thead>
+        <tbody>{pool.standings.map((standing, index) => {
+          const selectedSeed = selectedSeeds?.indexOf(standing.team_id) ?? -1;
+          const retired = standing.retired || standing.eligible_for_playoffs === false;
+          return <tr key={standing.team_id} className={`${(selectedSeeds ? selectedSeed >= 0 : standing.recommended_qualifier) ? styles.qualifierRow : ""} ${retired ? styles.retiredStanding : ""}`}>
+            <td>{standing.pool_rank || index + 1}</td><th scope="row">{standingLabel(standing)}</th><td>{standing.wins}–{standing.losses}</td><td>{standing.points_for}</td><td>{standing.points_against}</td><td>{standing.differential > 0 ? "+" : ""}{standing.differential}</td>
+            <td>{retired ? "Retired · ineligible" : selectedSeed >= 0 ? `Selected seed ${selectedSeed + 1}${standing.recommended_qualifier ? " · recommended" : " · override"}` : standing.recommended_qualifier ? selectedSeeds ? "Recommended · not selected" : draw.round_robin_complete ? "Recommended qualifier" : "Projected qualifier" : "Eligible for override"}</td>
+          </tr>;
+        })}</tbody>
+      </table></div>
+      {pool.tiebreak_explanations?.length ? <details><summary>How ties were resolved in {pool.pool_name}</summary>{pool.tiebreak_explanations.map((explanation, index) => <div key={index}><strong>{explanation.title}</strong><p>{explanation.summary}</p><ol>{(explanation.steps || []).map((step, stepIndex) => <li key={stepIndex}>{step.detail}</li>)}</ol></div>)}</details> : null}
+    </section>)}
+  </div>;
+}
+
 function eligibleStandings(draw: AdminTournamentDayDraw): AdminTournamentDayRoundRobinStanding[] {
   const standings = draw.round_robin_summary?.standings || [];
   const eligibleIds = new Set((draw.playoff_review?.eligible_team_ids || []).map(String));
@@ -648,6 +675,13 @@ function playoffTemplate(draw: AdminTournamentDayDraw, code: string): AdminTourn
 function seedDefaults(draw: AdminTournamentDayDraw, template: AdminTournamentDayPlayoffTemplate): string[] {
   const review = draw.playoff_review;
   const eligibleIds = new Set((review?.eligible_team_ids || eligibleStandings(draw).map((standing) => standing.team_id)).map(String));
+  if (draw.pool_config) {
+    // A pool short of eligible qualifiers must leave empty seeds for an explicit
+    // override; never silently borrow another pool's next eligible team.
+    return [...(review?.recommended_seed_team_ids || template.default_seed_team_ids || [])]
+      .map(String).filter((id, index, rows) => eligibleIds.has(id) && rows.indexOf(id) === index)
+      .slice(0, Number(template.advance_count) || 0);
+  }
   const ordered = [
     ...(template.default_seed_team_ids || []),
     ...(review?.default_seed_team_ids || []),
@@ -1359,6 +1393,7 @@ export default function TournamentDayWorkspacePanel({
       reviewFingerprint,
       templateCode: template.code,
       seedTeamIds: seedDefaults(draw, template),
+      overrideReason: "",
       roundScoring: scoringDefaults(review, template),
       error: "",
       expected: expectedVersions({ draw_version: draw.version })
@@ -1394,7 +1429,8 @@ export default function TournamentDayWorkspacePanel({
     const configuration = {
       template_code: playoffEditor.templateCode,
       seed_team_ids: playoffEditor.seedTeamIds,
-      round_scoring: playoffEditor.roundScoring
+      round_scoring: playoffEditor.roundScoring,
+      override_reason: playoffEditor.overrideReason
     };
     const validation = validatePlayoffReviewConfiguration(review, configuration);
     if (!draw || !review || !validation.ok) {
@@ -1414,7 +1450,8 @@ export default function TournamentDayWorkspacePanel({
         playoff_configuration: {
           template_code: playoffEditor.templateCode,
           seed_team_ids: validation.seedTeamIds,
-          round_scoring: { ...validation.roundScoring }
+          round_scoring: { ...validation.roundScoring },
+          ...(draw.pool_config ? { override_reason: playoffEditor.overrideReason.trim() } : {})
         }
       },
       playoffEditor.expected
@@ -1948,14 +1985,18 @@ export default function TournamentDayWorkspacePanel({
     ? validatePlayoffReviewConfiguration(selectedPlayoffReview, {
         template_code: playoffEditor.templateCode,
         seed_team_ids: playoffEditor.seedTeamIds,
-        round_scoring: playoffEditor.roundScoring
+        round_scoring: playoffEditor.roundScoring,
+        override_reason: playoffEditor.overrideReason
       })
     : null;
   const playoffSeedsChanged = Boolean(
     selectedPlayoffDraw
       && selectedPlayoffTemplate
       && playoffEditor
-      && seedDefaults(selectedPlayoffDraw, selectedPlayoffTemplate).join("\u0000") !== playoffEditor.seedTeamIds.join("\u0000")
+      && (selectedPlayoffDraw.pool_config
+        ? Number(selectedPlayoffReview?.configured_advance_count) !== selectedPlayoffTemplate.advance_count
+          || (selectedPlayoffReview?.recommended_seed_team_ids || []).join("\u0000") !== playoffEditor.seedTeamIds.join("\u0000")
+        : seedDefaults(selectedPlayoffDraw, selectedPlayoffTemplate).join("\u0000") !== playoffEditor.seedTeamIds.join("\u0000"))
   );
   const playoffScoringChanged = Boolean(
     selectedPlayoffReview
@@ -2077,6 +2118,7 @@ export default function TournamentDayWorkspacePanel({
 
       {snapshot ? (
         <>
+          <TournamentPrintPanel key={`${snapshot.scope.tournament_id}:${snapshot.scope.registration_day_id}`} snapshot={snapshot} />
           <section className={styles.summaryGrid} aria-label="Tournament day summary">
             <article><span>Courts</span><strong>{snapshot.summary.courts}</strong></article>
             <article><span>Available</span><strong>{snapshot.summary.available_courts}</strong></article>
@@ -2626,6 +2668,7 @@ export default function TournamentDayWorkspacePanel({
                   <article key={draw.id} className={`${styles.drawCard} ${playoffReady ? styles.playoffReadyDraw : ""}`}>
                     <div className={styles.cardHeading}><h3>{draw.name}</h3><span className={String(draw.activation_state).toUpperCase() === "ACTIVE" ? styles.activeBadge : styles.neutralBadge}>{statusLabel(draw.activation_state || draw.state)}</span></div>
                     <p>{draw.finalized_games} of {draw.total_games} finalized · {draw.queued_games} queued · {draw.active_games} on court · {draw.held_games} held</p>
+                    {draw.pool_config ? <details><summary>Pool standings & advancement</summary><PoolStandings draw={draw} /></details> : null}
                     <h4>Court assignment evidence</h4><ReadinessBlockers readiness={assignmentReadiness} />
                     <h4>Draw activation</h4><ReadinessBlockers readiness={actionReadiness} />
                     <ConfirmAction
@@ -2703,7 +2746,7 @@ export default function TournamentDayWorkspacePanel({
               size="xwide"
               title={`Review playoffs · ${selectedPlayoffDraw.name}`}
               description="Inspect the completed round robin, choose the qualifying teams and seeds, then review the bracket and scoring before generating it once."
-              dirty={playoffSeedsChanged || playoffScoringChanged || selectedPlayoffTemplate.code !== selectedPlayoffDefaultTemplateCode}
+              dirty={playoffSeedsChanged || playoffScoringChanged || Boolean(playoffEditor.overrideReason) || selectedPlayoffTemplate.code !== selectedPlayoffDefaultTemplateCode}
               onRequestClose={() => setPlayoffEditor(null)}
               actions={uncertainResult ? (
                 <button type="button" className={styles.primaryButton} onClick={() => void resultAction.recover(uncertainResult.onRecover)}>
@@ -2772,7 +2815,7 @@ export default function TournamentDayWorkspacePanel({
                       </ol>
                     </section>
                   ) : null}
-                  <div className={styles.standingsTableWrap}>
+                  {selectedPlayoffDraw.pool_config ? <PoolStandings draw={selectedPlayoffDraw} selectedSeeds={playoffEditor.seedTeamIds} /> : <div className={styles.standingsTableWrap}>
                     <table className={styles.standingsTable}>
                       <caption>Completed round-robin standings and current playoff selections</caption>
                       <thead>
@@ -2805,7 +2848,7 @@ export default function TournamentDayWorkspacePanel({
                         })}
                       </tbody>
                     </table>
-                  </div>
+                  </div>}
                 </section>
 
                 <section className={styles.playoffReviewSection} aria-labelledby="playoff-structure-heading">
@@ -2847,7 +2890,7 @@ export default function TournamentDayWorkspacePanel({
                           <option value="">Choose eligible team…</option>
                           {eligibleStandings(selectedPlayoffDraw).map((standing) => (
                             <option key={standing.team_id} value={standing.team_id}>
-                              RR #{standing.seed} · {standingLabel(standing)}
+                              {standing.pool_name ? `${standing.pool_name} #${standing.pool_rank}` : `RR #${standing.seed}`} · {standingLabel(standing)}
                             </option>
                           ))}
                         </select>
@@ -2859,16 +2902,26 @@ export default function TournamentDayWorkspacePanel({
                       type="button"
                       className={styles.secondaryButton}
                       disabled={resultWorking || !playoffSeedsChanged}
-                      onClick={() => setPlayoffEditor({
-                        ...playoffEditor,
-                        seedTeamIds: seedDefaults(selectedPlayoffDraw, selectedPlayoffTemplate),
-                        error: ""
-                      })}
+                      onClick={() => {
+                        const resetTemplate = selectedPlayoffDraw.pool_config
+                          ? playoffTemplate(selectedPlayoffDraw, selectedPlayoffDefaultTemplateCode) || selectedPlayoffTemplate
+                          : selectedPlayoffTemplate;
+                        setPlayoffEditor({
+                          ...playoffEditor,
+                          templateCode: resetTemplate.code,
+                          seedTeamIds: seedDefaults(selectedPlayoffDraw, resetTemplate),
+                          roundScoring: scoringDefaults(selectedPlayoffReview, resetTemplate, playoffEditor.roundScoring),
+                          overrideReason: "",
+                          error: ""
+                        });
+                      }}
                     >
-                      Reset to round-robin order
+                      {selectedPlayoffDraw.pool_config ? "Reset to recommended pool qualifiers" : "Reset to round-robin order"}
                     </button>
                   </div>
-                  {playoffSeedsChanged ? <p className={styles.playoffWarning}><strong>Seed override:</strong> These qualifiers or seeds differ from the authoritative round-robin order. Review every matchup below.</p> : null}
+                  {selectedPlayoffDraw.pool_config ? <p className={styles.muted}>The saved pool advancement counts recommend {selectedPlayoffReview.configured_advance_count} playoff places. You may change the playoff size, choose other eligible teams, or reorder seeds. Explain any override so the decision is recorded.</p> : null}
+                  {playoffSeedsChanged ? <p className={styles.playoffWarning}><strong>Seed override:</strong> These selections differ from the recommended {selectedPlayoffDraw.pool_config ? "pool qualifiers" : "round-robin order"}. Review every matchup below.</p> : null}
+                  {selectedPlayoffDraw.pool_config && playoffSeedsChanged ? <label className={styles.field}>Reason for playoff size, qualifier or seed override<textarea value={playoffEditor.overrideReason} maxLength={500} disabled={resultWorking} onChange={event => setPlayoffEditor({ ...playoffEditor, overrideReason: event.target.value, error: "" })} placeholder="For example, the qualifying team withdrew; the next team in Pool A advances." /></label> : null}
 
                   <fieldset className={styles.roundScoringFieldset}>
                     <legend>Scoring by playoff round</legend>

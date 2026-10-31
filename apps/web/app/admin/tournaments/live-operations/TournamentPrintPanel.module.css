@@ -1,0 +1,18 @@
+.panel { border: 1px solid #d8ded9; border-radius: 12px; padding: 1rem 1.2rem; background: #fff; color: #202b24; }
+.panel summary { font-size: 1rem; font-weight: 700; cursor: pointer; }
+.panel p { line-height: 1.5; }
+.draws { border: 1px solid #d8ded9; border-radius: 8px; margin: 1rem 0; padding: .8rem 1rem; display: flex; flex-wrap: wrap; gap: .7rem 1.4rem; }
+.draws legend { font-weight: 600; padding: 0 .3rem; }
+.draws label { display: flex; align-items: center; gap: .5rem; }
+.selectionActions { width: 100%; display: flex; gap: .6rem; }
+.selectionActions button { background: transparent; border: 0; text-decoration: underline; color: inherit; cursor: pointer; padding: .2rem 0; }
+.options { display: flex; flex-wrap: wrap; gap: 1rem; }
+.options label { display: grid; gap: .35rem; font-weight: 600; font-size: .9rem; }
+.options select { font: inherit; font-weight: 400; padding: .6rem; border: 1px solid #bac5bd; border-radius: 6px; background: #fff; color: inherit; }
+.help { color: #526055; font-size: .88rem; }
+.notice { background: #fff5df; border: 1px solid #d8b872; border-radius: 6px; padding: .7rem; color: #65460c; }
+.actions { display: flex; flex-wrap: wrap; gap: .65rem; margin: 1rem 0; }
+.actions button { border: 1px solid #1d5136; border-radius: 7px; padding: .7rem .9rem; color: #fff; background: #1d5136; font: inherit; font-weight: 600; cursor: pointer; }
+.panel button:disabled, .panel select:disabled { opacity: .5; cursor: not-allowed; }
+.panel :is(button,select,input,summary):focus-visible { outline: 3px solid #528d6e; outline-offset: 3px; }
+@media (max-width: 650px) { .options, .actions { flex-direction: column; } .actions button { width: 100%; } .panel { padding: .9rem; } }

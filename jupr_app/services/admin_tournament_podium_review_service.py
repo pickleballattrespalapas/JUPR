@@ -4,6 +4,8 @@ from typing import Any
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
+from jupr_app.domain.tournaments import compute_podium_from_playoffs
+from jupr_app.domain.tournaments.pools import normalize_pool_config, validate_pool_schedule
 from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
 from jupr_app.services.admin_tournament_ops_service import get_admin_tournament_ops_state_fingerprint
 from jupr_app.services.admin_tournament_service import (
@@ -98,6 +100,7 @@ def _draw_projection(draw: dict[str, Any]) -> dict[str, Any]:
             "status",
             "draw_kind",
             "hidden_from_primary_ops",
+            "pool_config",
         )
     }
 
@@ -192,10 +195,12 @@ def build_admin_tournament_podium_review_fingerprint(
 
 def _validate_reviewable_podium(
     *,
+    draw: dict[str, Any] | None = None,
     teams: list[dict[str, Any]],
     games: list[dict[str, Any]],
     podium: list[dict[str, Any]],
 ) -> None:
+    draw = draw or {}
     if not games:
         raise ValueError("A podium cannot be reviewed until this draw has tournament games.")
     team_ids = {str(row.get("id") or "") for row in teams if row.get("id")}
@@ -236,13 +241,28 @@ def _validate_reviewable_podium(
     )
     placements = [row["placement"] for row in normalized]
     podium_team_ids = [str(row["team_id"]) for row in normalized]
+    playoff_games = [game for game in games if str(game.get("stage") or "").upper() == "PLAYOFF" and not game.get("series_parent_game_id")]
+    pool_config = normalize_pool_config(draw.get("pool_config"), teams)
+    if pool_config:
+        validate_pool_schedule(teams, games, pool_config, require_complete=True)
+        expected_podium = compute_podium_from_playoffs(playoff_games) or []
+        expected_pairs = {(row["placement"], str(row["team_id"])) for row in expected_podium}
+        actual_pairs = {(row["placement"], str(row["team_id"])) for row in normalized}
+        if not playoff_games or not expected_podium or expected_pairs != actual_pairs or len(normalized) != len(expected_podium):
+            raise ValueError("Pool podium review requires the exact medal placements from completed combined playoffs.")
+    final_only = bool(
+        len(playoff_games) == 1
+        and str(playoff_games[0].get("playoff_round") or "").upper() == "FINAL"
+        and pool_config is not None
+    )
+    required_placements = [1, 2] if final_only else [1, 2, 3]
     if (
-        placements != [1, 2, 3]
-        or len(set(podium_team_ids)) != 3
+        placements != required_placements
+        or len(set(podium_team_ids)) != len(required_placements)
         or any(team_id not in team_ids for team_id in podium_team_ids)
     ):
         raise ValueError(
-            "Podium review requires exactly one valid first-, second-, and third-place team."
+            "Podium review requires exactly the valid medal placements for this playoff format."
         )
 
 
@@ -404,7 +424,7 @@ def review_admin_tournament_draw_podium(
         raise StaleTournamentAdminStateError(
             "Tournament Ops state changed after podium review was opened. Reload Tournament Live."
         )
-    _validate_reviewable_podium(teams=teams, games=games, podium=podium)
+    _validate_reviewable_podium(draw=draw, teams=teams, games=games, podium=podium)
 
     review_fingerprint = build_admin_tournament_podium_review_fingerprint(
         draw=draw,

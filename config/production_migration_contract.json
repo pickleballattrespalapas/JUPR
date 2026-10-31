@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "tres-round-robin-hub-2026-10-20",
-  "repository_migration_content_sha256": "e011eb39cbf3d5d5aa3188773270926d56f57a5e028499f9e8f608f7281d2dec",
+  "repository_migration_content_sha256": "4334afcc6198e49f0883f8354e2b6a4bfc07b620d128762992602263752d8958",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -173,7 +173,10 @@
     "round_robin_operation_recovery",
     "round_robin_hub_shared_courts",
     "starting_rating_review",
-    "public_registration_withdrawal"
+    "public_registration_withdrawal",
+    "tournament_draw_pools",
+    "tournament_pool_schedule_recovery",
+    "tournament_pool_playoff_progression"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -321,6 +324,7 @@
     "tournament_day_live_ops",
     "tournament_day_operator_safety",
     "tournament_day_roster_authority",
+    "tournament_draw_pools",
     "tournament_gender_eligibility_reviews",
     "tournament_live_operations",
     "tournament_operations_guard_surface",
@@ -330,6 +334,8 @@
     "tournament_playoff_winner_bonus",
     "tournament_podium_badge_catalog",
     "tournament_podium_row_versions",
+    "tournament_pool_playoff_progression",
+    "tournament_pool_schedule_recovery",
     "tournament_registration_check_ins",
     "tournament_registration_player_projection_backfill",
     "tournament_setup_basics_metadata",
