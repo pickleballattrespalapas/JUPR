@@ -181,7 +181,11 @@ def test_partner_board_request_review_decline_cancel_accept_and_stale_contract(p
     assert len(storage["tournament_registration_team_members"]) == 2
 
 
-def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry(partner_client):
+@pytest.mark.parametrize("consent_field", ["wants_partner_board_contact", "show_on_partner_board"])
+@pytest.mark.parametrize("consent_value", [False, None, "missing"])
+def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry(
+    partner_client, consent_field, consent_value
+):
     api, storage = partner_client
     visible_registration, visible_selection, _visible_token = _register(
         api,
@@ -190,15 +194,21 @@ def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry
         email="visible@example.com",
         needs_partner=True,
     )
-    _private_registration, _private_selection, _private_token = _register(
+    private_registration, private_selection, _private_token = _register(
         api,
         storage,
         first_name="Private",
         email="private@example.com",
         needs_partner=True,
     )
-    private_row = next(row for row in storage["tournament_registrations"] if row["email"] == "private@example.com")
-    private_row["wants_partner_board_contact"] = False
+    if consent_field == "show_on_partner_board":
+        private_row = next(row for row in storage["tournament_registration_selections"] if row["id"] == private_selection)
+    else:
+        private_row = next(row for row in storage["tournament_registrations"] if row["id"] == private_registration)
+    if consent_value == "missing":
+        private_row.pop(consent_field)
+    else:
+        private_row[consent_field] = consent_value
     visible_row = next(row for row in storage["tournament_registrations"] if row["id"] == visible_registration)
     visible_row["notes"] = "Private message for tournament staff"
     visible_entry_selection = next(row for row in storage["tournament_registration_selections"] if row["id"] == visible_selection)
@@ -210,6 +220,13 @@ def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry
     payload = response.json()
     assert [row["player_name"] for row in payload["roster"]["players_needing_partners"]] == ["Visible Player"]
     assert [row["player_name"] for row in payload["roster"]["partner_board_entries"]] == ["Visible Player"]
+    # A hidden listing still needs a partner on the tournament roster.
+    private_roster = next(row for row in payload["roster"]["registrations_by_event"]
+        if row["members"][0]["display_name"] == "Private Player")
+    assert private_roster["status"] == "Needs Partner"
+    assert payload["summary"]["total_registrations"] == 2
+    assert payload["summary"]["players_needing_partners"] == 1
+    assert payload["summary"]["partner_board_entries"] == 1
     visible_entry = payload["roster"]["partner_board_entries"][0]
     assert visible_entry["player_entry_key"] == build_public_tournament_reference(
         tournament_id="t1",
@@ -229,3 +246,10 @@ def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry
     assert response.json()["roster"]["partner_board_entries"][0]["note"] == ""
     assert "Private message for tournament staff" not in response.text
     assert visible_row["notes"] == "Private message for tournament staff"
+
+    private_row[consent_field] = True
+    response = api.get("/clubs/tres-palapas/tournament-roster", params={"registration_slug": "tres-open"})
+    assert response.status_code == 200
+    assert {row["player_name"] for row in response.json()["roster"]["partner_board_entries"]} == {
+        "Visible Player", "Private Player"
+    }
