@@ -25,7 +25,7 @@ The draw supports 4–16 teams, split into 2–8 pools with at least two teams i
 
 Pool play is a **single round-robin**: each team plays every other team in its own pool once. Three-team pools have one rotating bye per team over three rounds. Double round-robin is not part of this control.
 
-With two qualifiers from each of two pools, the recommended semifinals are **Pool A first vs Pool B second**, and **Pool B first vs Pool A second**. Semifinal winners play for gold; losers play for bronze. This adds four matches per division, giving totals of **16 matches for the eight-team example** and **10 for the six-team example**.
+With two qualifiers from each of two pools, the pool winners receive seeds 1–2 and runners-up receive seeds 3–4, ordered by strength of record within each place as described below. Semifinals are **seed 1 vs seed 4** and **seed 2 vs seed 3**; a pool rematch is possible. Semifinal winners play for gold; losers play for bronze. This adds four matches per division, giving totals of **16 matches for the eight-team example** and **10 for the six-team example**.
 
 Every team receives the scheduled pool matches; playoff matches are additional for qualifiers. A three-team pool therefore guarantees only two scheduled matches per team. Forfeits or withdrawals can reduce actual play. These are match counts, regardless of whether an individual match uses one game or best of three.
 
@@ -36,6 +36,19 @@ Open **Live Operations → Day workspace**, choose the correct **Tournament day*
 In **Draws & progression**, expand **Pool standings & advancement** on the draw card. Each pool shows its own wins, losses, points for, points against, differential and projected qualifiers. Qualifiers remain provisional until all pool matches are finalized.
 
 Standings use wins, tied-team head-to-head, point differential, points scored, then original team number. Review the displayed tie-break explanations before confirming advancement. Uneven pools are allowed; teams are ranked within their pool, rather than comparing raw wins across pools of different sizes.
+
+### Playoff seed order across pools
+
+Pool finishing position comes first: all qualifying pool winners are seeded before runners-up, then third-place teams, and so on. Within each finishing position, compare:
+
+1. Win percentage (wins divided by wins plus losses).
+2. Point differential per match.
+3. Points scored per match.
+4. Original team number for a remaining exact tie.
+
+The per-match comparisons avoid favoring a larger pool. With equal completed match counts, this produces the same order as wins, total point differential and total points scored. Head-to-head only resolves standings inside a pool; teams in different pools have not played one another. Pool names, pool order and rematch avoidance do not change playoff seeds. The operator can still override seeds with a recorded reason.
+
+For **three pools of three advancing all nine teams**, set **Teams advancing = 3** in each pool. Seeds **1–3** are the pool winners ordered by record, **4–6** are the runners-up ordered by record, and **7–9** are the third-place teams ordered by record. Seed 8 plays seed 9, and that winner plays seed 1. Every pool match must be finalized before generating the reviewed playoff bracket. Already-generated brackets are not reseeded by this rule.
 
 ## Confirm or override the playoffs
 
