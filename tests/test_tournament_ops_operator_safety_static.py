@@ -171,7 +171,9 @@ def test_draw_setup_exposes_confirmed_registration_import_without_advanced_bulk_
     assert '{shows("import") ? (' in shared_import
     assert "Bulk import teams" in shared_import.split('{shows("import") ? (', 1)[1]
 
-    assert "const registrationImportDisabled = drawCasWriteDisabled || !selectedDrawId || reviewedSourceGameVersions.length > 0 || Boolean(selectedDraw?.pool_config);" in panel
+    import_disabled = panel.split("const registrationImportDisabled = ", 1)[1].split(";", 1)[0]
+    for guard in ("drawCasWriteDisabled", "!selectedDrawId", "unlinkedRegistrations.length > 0", "reviewedSourceGameVersions.length > 0", "Boolean(selectedDraw?.pool_config)"):
+        assert guard in import_disabled
     assert "For registered divisions, import confirmed registrations above first." in panel
     assert 'setRegistrationImportMode("REPLACE");' in panel.split("async function createDraw", 1)[1].split("async function executeRegistrationImport", 1)[0]
     assert "const manualTeamRowsReady = teamRows.some" in panel

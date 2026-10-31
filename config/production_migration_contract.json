@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "tres-round-robin-hub-2026-10-20",
-  "repository_migration_content_sha256": "4334afcc6198e49f0883f8354e2b6a4bfc07b620d128762992602263752d8958",
+  "repository_migration_content_sha256": "f1421753953437975bd427142a1a1d0992fe272f4303ec6c56610a9911f11dca",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -176,7 +176,8 @@
     "public_registration_withdrawal",
     "tournament_draw_pools",
     "tournament_pool_schedule_recovery",
-    "tournament_pool_playoff_progression"
+    "tournament_pool_playoff_progression",
+    "admin_tournament_registration_player_link"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -189,6 +190,7 @@
     "admin_diagnostics_guarded_operations",
     "admin_personal_notifications",
     "admin_player_merge_transactions",
+    "admin_tournament_registration_player_link",
     "allow_public_partner_board_source",
     "atomic_direct_match_entry",
     "atomic_league_roster_batch",
