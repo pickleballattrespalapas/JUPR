@@ -9,7 +9,6 @@ from jupr_app.domain.tournament_team_canonical_publish import (
     classify_team_child_publish_state,
 )
 from jupr_app.services.admin_player_updates_service import is_auto_player_updates_enabled
-from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.services.admin_tournament_player_link_service import unlinked_draw_registrations
 from jupr_app.services.admin_tournament_guarded_operation import tournament_admin_guarded_runtime_enabled
 from jupr_app.services.admin_tournament_service import (
@@ -80,8 +79,6 @@ def _player_options(supabase: Any, *, club_id: str) -> tuple[list[dict[str, Any]
 def _player_options_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     players: list[dict[str, Any]] = []
     for row in rows:
-        if is_merged_player(row):
-            continue
         try:
             player_id = int(float(row.get("id")))
         except Exception:

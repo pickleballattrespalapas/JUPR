@@ -41,11 +41,12 @@ function PlayerLinkRow({ registration, players, disabled, onLink }: Omit<Props, 
 
 export default function TournamentPlayerLinkReview(props: Props) {
   if (!props.registrations.length) return null;
+  const players = props.players.filter(player => !player.name.toLowerCase().includes("(merged into "));
   return <section aria-label="Link player profiles" style={{ border: "1px solid #f59e0b", borderRadius: 12, padding: "1rem", marginBottom: "1rem", background: "#fffbeb" }}>
     <h3 style={{ marginTop: 0 }}>Link player profiles</h3>
     <p>{props.registrations.length} confirmed {props.registrations.length === 1 ? "registration needs" : "registrations need"} a player profile before import. Review and link each player below.</p>
     <ul style={{ padding: 0, marginBottom: 0 }}>
-      {props.registrations.map(registration => <PlayerLinkRow key={`${registration.id}:${registration.updated_at}`} registration={registration} players={props.players} disabled={props.disabled} onLink={props.onLink} />)}
+      {props.registrations.map(registration => <PlayerLinkRow key={`${registration.id}:${registration.updated_at}`} registration={registration} players={players} disabled={props.disabled} onLink={props.onLink} />)}
     </ul>
     <p style={{ color: "#475569", marginBottom: 0 }}>If no profile exists, create the player in Players, then reload this draw to select them.</p>
   </section>;
