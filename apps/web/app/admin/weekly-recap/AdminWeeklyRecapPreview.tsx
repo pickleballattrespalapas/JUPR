@@ -4,8 +4,17 @@ import RecapEdition from "@/components/RecapEdition";
 import { WeeklyReportIntro, WeeklyReportEvents, WeeklyReportProgress, WeeklyReportUpcoming } from "@/components/WeeklyReportSections";
 import type { AdminWeeklyRecapRow } from "@/lib/adminWeeklyRecapApi";
 import type { WeeklyRecapJson, WeeklyRecapSpotlight, WeeklyRecapTournament } from "@/lib/weeklyRecapApi";
+import type { RecapOrderAction } from "@/lib/recapBuilder";
 
-type Props = { recap: AdminWeeklyRecapRow; printMode?: boolean };
+type Props = {
+  recap: AdminWeeklyRecapRow;
+  printMode?: boolean;
+  channel?: "edition" | "email_edition";
+  onReorder?: (action: RecapOrderAction) => void;
+  reorderDisabled?: boolean;
+};
+
+const controlsStyle = { display: "flex", flexWrap: "wrap" as const, gap: ".45rem", alignItems: "center", padding: ".45rem 0", marginBottom: ".5rem" };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white", breakInside: "avoid" as const };
 
@@ -28,9 +37,12 @@ function Podium({ tournament }: { tournament: WeeklyRecapTournament }) {
   return <article style={{ ...cardStyle, background: "#fff7ed" }}><h3>{tournament.tournament_name}</h3><div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem", textAlign: "center" }}><div>🥈 {podium.get(2) || "—"}</div><div>🥇 {podium.get(1) || "—"}</div><div>🥉 {podium.get(3) || "—"}</div></div></article>;
 }
 
-export default function AdminWeeklyRecapPreview({ recap: row, printMode = false }: Props) {
+export default function AdminWeeklyRecapPreview({ recap: row, printMode = false, channel = "edition", onReorder, reorderDisabled = false }: Props) {
   const savedFinal = row.final_json || {};
   const recap = (Object.keys(savedFinal).length ? savedFinal : (row.generated_json || {})) as WeeklyRecapJson;
+  const blocks = recap.report?.[channel];
+  const arranging = Boolean(onReorder && !printMode);
+  const channelLabel = channel === "email_edition" ? "email" : "website";
   const spotlight = (recap.spotlight || []).filter((item) => item.include !== false).sort((a, b) => Number(a.order ?? 999) - Number(b.order ?? 999));
   const around: Array<{ title: string; rows: string[] }> = [];
   for (const item of recap.around_club?.leagues || []) around.push({ title: item.league_name, rows: (item.highlights || []).map((highlight) => highlight.display).filter(Boolean) });
@@ -54,7 +66,18 @@ export default function AdminWeeklyRecapPreview({ recap: row, printMode = false 
         <p style={{ color: "#475569" }}>Version {row.row_version || 1} · Loaded {String(row.updated_at || "unknown update time")}</p>
         {!printMode ? <button type="button" className="admin-recap-no-print" onClick={() => window.print()} style={{ padding: "0.55rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "white", fontWeight: 800 }}>Print / save preview</button> : null}
       </header>
-      {recap.report?.edition ? <RecapEdition scopeText={recap.report.display_text?.scope} scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={recap.report.club_slug || ""} /> : <>
+      {blocks ? <RecapEdition scopeText={recap.report?.display_text?.scope} scopeLabel={recap.report?.scope_label} blocks={blocks} clubSlug={recap.report?.club_slug || ""}
+        sectionActions={arranging ? (block, index) => <div className="admin-recap-no-print" role="group" aria-label={`Arrange ${block.title || block.key} section`} style={controlsStyle}>
+          <strong>Section</strong>
+          <button type="button" disabled={reorderDisabled || index === 0} aria-label={`Move section ${block.title || block.key} up in ${channelLabel}`} onClick={() => onReorder?.({ type: "section", section: block.key, delta: -1 })}>↑ Move up</button>
+          <button type="button" disabled={reorderDisabled || index === blocks.length - 1} aria-label={`Move section ${block.title || block.key} down in ${channelLabel}`} onClick={() => onReorder?.({ type: "section", section: block.key, delta: 1 })}>↓ Move down</button>
+          {block.key === "events" && block.items.length > 1 ? <button type="button" disabled={reorderDisabled} onClick={() => onReorder?.({ type: "group_events" })}>Group events by type</button> : null}
+        </div> : undefined}
+        itemActions={arranging ? (block, item, index) => block.items.length > 1 && block.key !== "upcoming" ? <div className="admin-recap-no-print" role="group" aria-label={`Arrange ${item.title || item.text || "item"}`} style={controlsStyle}>
+          <button type="button" disabled={reorderDisabled || index === 0} aria-label={`Move ${item.title || item.text || "item"} up in ${channelLabel}`} onClick={() => onReorder?.({ type: "item", section: block.key, itemId: item.id, delta: -1 })}>↑ Move up</button>
+          <button type="button" disabled={reorderDisabled || index === block.items.length - 1} aria-label={`Move ${item.title || item.text || "item"} down in ${channelLabel}`} onClick={() => onReorder?.({ type: "item", section: block.key, itemId: item.id, delta: 1 })}>↓ Move down</button>
+        </div> : null : undefined}
+      /> : <>
       {recap.report?.version === 1 ? <WeeklyReportIntro report={recap.report} /> : null}
       <NumberStrip recap={recap} />
       {recap.report?.version === 1 ? <WeeklyReportEvents report={recap.report} clubSlug={recap.report.club_slug || ""} /> : null}

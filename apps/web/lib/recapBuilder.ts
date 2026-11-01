@@ -1,4 +1,4 @@
-import type { AdminWeeklyRecapCandidate } from "./adminWeeklyRecapApi";
+import type { AdminWeeklyRecapCandidate, AdminWeeklyRecapRow } from "./adminWeeklyRecapApi";
 import type { WeeklyRecapJson } from "./weeklyRecapApi";
 
 export const RECAP_SECTIONS = {
@@ -34,6 +34,7 @@ export type RecapItem = {
   results_label?: string;
   links?: Array<{ label: string; href: string }>;
   court_players?: Array<{ id: string; name: string }>;
+  selection_aliases?: string[];
 };
 
 export type CourtRecognition = {
@@ -277,10 +278,119 @@ export function layoutTemplate(config: BuilderConfig): BuilderConfig {
     ) as Record<SectionKey, SectionSetting>,
   };
 }
+export function resolveBuilderSelections(
+  builder: BuilderConfig,
+  groups: Partial<RecapCatalog>,
+): BuilderConfig {
+  const resolved = structuredClone(builder);
+  for (const key of Object.keys(RECAP_SECTIONS) as SectionKey[]) {
+    const items = groups[key] || [];
+    const current = new Set(items.map((item) => item.id));
+    const aliases = new Map<string, string[]>();
+    for (const item of items)
+      for (const alias of item.selection_aliases || [])
+        aliases.set(alias, [...(aliases.get(alias) || []), item.id]);
+    const settings = resolved.sections[key];
+    for (const field of ["item_ids", "email_item_ids"] as const)
+      if (settings[field])
+        settings[field] = [...new Set(settings[field].flatMap((id) =>
+          current.has(id) ? [id] : aliases.get(id) || [id],
+        ))];
+    const overrides = resolved.text_overrides;
+    for (const [alias, targets] of aliases)
+      if (targets.length === 1 && !current.has(alias) && overrides?.[alias])
+        overrides[targets[0]] ??= structuredClone(overrides[alias]);
+  }
+  return resolved;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(
+      ([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`,
+    ).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Only retry when the saved editorial work is exactly the version we loaded. */
+export function sourceOnlyRecapChange(before: AdminWeeklyRecapRow, after: AdminWeeklyRecapRow) {
+  return Boolean(before.id && before.id === after.id && before.club_id === after.club_id
+    && before.week_start === after.week_start && before.week_end === after.week_end
+    && before.status === "draft" && after.status === "draft"
+    && after.row_version > before.row_version
+    && canonicalJson(before.edits_json || {}) === canonicalJson(after.edits_json || {})
+    && canonicalJson(before.published_json ?? null) === canonicalJson(after.published_json ?? null));
+}
+
+export type RecapOrderAction =
+  | { type: "section"; section: SectionKey; delta: -1 | 1 }
+  | { type: "item"; section: SectionKey; itemId: string; delta: -1 | 1 }
+  | { type: "group_events" };
+
+/** Move what the administrator sees, including the combined ladder winners. */
+export function reorderRecapPreview(
+  builder: BuilderConfig,
+  groups: RecapCatalog,
+  channel: "edition" | "email_edition",
+  action: RecapOrderAction,
+): BuilderConfig {
+  const next = resolveBuilderSelections(builder, groups);
+  const blocks = projectEditions(groups, next)[channel];
+  if (action.type === "section") {
+    const index = blocks.findIndex((block) => block.key === action.section);
+    const neighbor = blocks[index + action.delta];
+    if (index < 0 || !neighbor) return builder;
+    const order = [...(channel === "email_edition" ? next.email_order || next.order : next.order)];
+    const from = order.indexOf(action.section), to = order.indexOf(neighbor.key);
+    [order[from], order[to]] = [order[to], order[from]];
+    if (channel === "email_edition") next.email_order = order;
+    else {
+      next.email_order ??= [...next.order];
+      next.order = order;
+    }
+    return next;
+  }
+  const section = action.type === "group_events" ? "events" : action.section;
+  const block = blocks.find((entry) => entry.key === section);
+  if (!block || section === "upcoming") return builder;
+  const ordered = [...block.items];
+  if (action.type === "item") {
+    const index = ordered.findIndex((item) => item.id === action.itemId);
+    const to = index + action.delta;
+    if (index < 0 || to < 0 || to >= ordered.length) return builder;
+    [ordered[index], ordered[to]] = [ordered[to], ordered[index]];
+  } else {
+    // Keep the first group's position and the order within each group.
+    const byKind = new Map<string, RecapItem[]>();
+    for (const item of ordered) {
+      const kind = item.id === "ladder-court-winners" ? "Ladder court" : item.kind || "Other";
+      byKind.set(kind, [...(byKind.get(kind) || []), item]);
+    }
+    ordered.splice(0, ordered.length, ...[...byKind.values()].flat());
+  }
+  const setting = next.sections[section];
+  const website = setting.item_ids || (groups[section] || []).map((item) => item.id);
+  const email = (setting.email_item_ids || website.slice(0, emailLimits[section] || 150))
+    .filter((id) => website.includes(id));
+  const selected = channel === "email_edition" ? email : website;
+  const courts = new Set((groups[section] || []).filter((item) => item.kind === "Ladder court").map((item) => item.id));
+  const visible = ordered.flatMap((item) => item.id === "ladder-court-winners"
+    ? selected.filter((id) => courts.has(id)) : [item.id]);
+  const order = [...new Set([...visible, ...selected.filter((id) => !visible.includes(id))])];
+  if (channel === "email_edition") setting.email_item_ids = order;
+  else {
+    setting.email_item_ids ??= email;
+    setting.item_ids = order;
+  }
+  return next;
+}
+
 export function projectEditions(
   groups: RecapCatalog,
   builder: BuilderConfig,
 ): { edition: RecapBlock[]; email_edition: RecapBlock[] } {
+  builder = resolveBuilderSelections(builder, groups);
   const result = {
     edition: [] as RecapBlock[],
     email_edition: [] as RecapBlock[],

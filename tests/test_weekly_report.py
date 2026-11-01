@@ -227,6 +227,20 @@ def test_tournament_podiums_are_division_scoped_and_use_closeout_week(monkeypatc
     assert not report['event_results']
 
 
+def test_tournament_draw_names_and_source_ids_distinguish_main_from_consolation(monkeypatch):
+    db = DB(tournament_lifecycle_receipts=[{'id':'receipt','club_id':'club','action':'complete','tournament_id':'t','created_at':'2026-10-13T12:00:00Z'}],tournaments=[{'id':'t','club_id':'club','name':'Club Open','status':'COMPLETED'}])
+    draws = [{'public_draw_key':key, 'name':name, 'division_name':'Mixed 3.5', 'event_family_label':'Mixed Doubles', 'podium':[{'placement':1,'team_name':winner}]} for key,name,winner in [('main','3.5 Championship','Alex + Bea'),('cons','3.5 Consolation','Cam + Dee')]]
+    monkeypatch.setattr('jupr_app.services.public_tournament_results_service.build_public_tournament_results', lambda *a,**k:{'draws':draws})
+    report = {'start_date':'2026-10-12','end_date':'2026-10-18','event_results':[]}
+    _add_tournament_draws(db,'club',[],report,{})
+    main, consolation = report['event_results']
+    assert main['id'] != consolation['id']
+    assert main['title'] == 'Club Open · 3.5 Championship'
+    assert consolation['title'] == 'Club Open · 3.5 Consolation'
+    assert main['legacy_title'] == consolation['legacy_title'] == 'Club Open · Mixed Doubles · Mixed 3.5'
+    assert main['details'] == ['1. Alex + Bea'] and consolation['details'] == ['1. Cam + Dee']
+
+
 def test_season_races_are_snapshots_and_show_progress_before_eligibility():
     from jupr_app.domain.recaps.weekly_report import _season_races
     matches = [match(i) for i in range(1, 5)] + [match(9,date='2026-11-01T12:00:00+00:00',score_t1=2,score_t2=11)]

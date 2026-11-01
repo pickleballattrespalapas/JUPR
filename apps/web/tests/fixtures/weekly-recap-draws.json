@@ -1,0 +1,352 @@
+{
+  "recap": {
+    "report": {
+      "event_results": [
+        {
+          "kind": "Tournament",
+          "title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.0",
+          "date": "",
+          "href": "tournament-results?tournament_id=fixture-open",
+          "summary": "Division podium",
+          "details": [
+            "1. Alex / Bea"
+          ]
+        },
+        {
+          "kind": "Tournament",
+          "title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.0",
+          "date": "",
+          "href": "tournament-results?tournament_id=fixture-open",
+          "summary": "Division podium",
+          "details": [
+            "1. Cam / Dee"
+          ]
+        },
+        {
+          "kind": "Tournament",
+          "title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.5",
+          "date": "",
+          "href": "tournament-results?tournament_id=fixture-open",
+          "summary": "Division podium",
+          "details": [
+            "1. Eli / Fern"
+          ]
+        },
+        {
+          "kind": "Tournament",
+          "title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.5",
+          "date": "",
+          "href": "tournament-results?tournament_id=fixture-open",
+          "summary": "Division podium",
+          "details": [
+            "1. Gus / Hana"
+          ]
+        }
+      ]
+    }
+  },
+  "catalog": {
+    "opening": [
+      {
+        "id": "opening-2b3fdf05c4dda4549989",
+        "title": "",
+        "text": "",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "numbers": [],
+    "events": [
+      {
+        "id": "events-e77b8d5fc5a9cfd19660",
+        "title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.0",
+        "text": "Division podium",
+        "kind": "Tournament",
+        "lines": [
+          "1. Alex / Bea"
+        ],
+        "href": "tournament-results?tournament_id=fixture-open",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [],
+        "selection_aliases": [
+          "events-7dca838fac1329310192"
+        ]
+      },
+      {
+        "id": "events-6181c979bf6287d6ccdc",
+        "title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.0",
+        "text": "Division podium",
+        "kind": "Tournament",
+        "lines": [
+          "1. Cam / Dee"
+        ],
+        "href": "tournament-results?tournament_id=fixture-open",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [],
+        "selection_aliases": [
+          "events-7dca838fac1329310192"
+        ]
+      },
+      {
+        "id": "events-4838a360e73e066d35d1",
+        "title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.5",
+        "text": "Division podium",
+        "kind": "Tournament",
+        "lines": [
+          "1. Eli / Fern"
+        ],
+        "href": "tournament-results?tournament_id=fixture-open",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [],
+        "selection_aliases": [
+          "events-b933aa6992420fccd0f0"
+        ]
+      },
+      {
+        "id": "events-502a3ea1a3021209d7c5",
+        "title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.5",
+        "text": "Division podium",
+        "kind": "Tournament",
+        "lines": [
+          "1. Gus / Hana"
+        ],
+        "href": "tournament-results?tournament_id=fixture-open",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [],
+        "selection_aliases": [
+          "events-b933aa6992420fccd0f0"
+        ]
+      }
+    ],
+    "spotlight": [],
+    "races": [],
+    "achievements": [],
+    "welcome": [],
+    "notes": [
+      {
+        "id": "notes-ab5aa97074c454a06320",
+        "title": "",
+        "text": "",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "custom": [],
+    "upcoming": []
+  },
+  "refreshed": {
+    "report": {
+      "event_results": [
+        {
+          "kind": "Tournament",
+          "title": "Club Open \u00b7 3.0 Championship",
+          "date": "",
+          "href": "tournament-results?tournament_id=fixture-open",
+          "summary": "Division podium",
+          "details": [
+            "1. Alex / Bea"
+          ],
+          "id": "tournament:fixture-open:draw:3.0-championship",
+          "legacy_title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.0"
+        },
+        {
+          "kind": "Tournament",
+          "title": "Club Open \u00b7 3.0 Consolation",
+          "date": "",
+          "href": "tournament-results?tournament_id=fixture-open",
+          "summary": "Division podium",
+          "details": [
+            "1. Cam / Dee"
+          ],
+          "id": "tournament:fixture-open:draw:3.0-consolation",
+          "legacy_title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.0"
+        },
+        {
+          "kind": "Tournament",
+          "title": "Club Open \u00b7 3.5 Championship",
+          "date": "",
+          "href": "tournament-results?tournament_id=fixture-open",
+          "summary": "Division podium",
+          "details": [
+            "1. Eli / Fern"
+          ],
+          "id": "tournament:fixture-open:draw:3.5-championship",
+          "legacy_title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.5"
+        },
+        {
+          "kind": "Tournament",
+          "title": "Club Open \u00b7 3.5 Consolation",
+          "date": "",
+          "href": "tournament-results?tournament_id=fixture-open",
+          "summary": "Division podium",
+          "details": [
+            "1. Gus / Hana"
+          ],
+          "id": "tournament:fixture-open:draw:3.5-consolation",
+          "legacy_title": "Club Open \u00b7 Mixed Doubles \u00b7 Mixed 3.5"
+        }
+      ]
+    }
+  },
+  "refreshed_catalog": {
+    "opening": [
+      {
+        "id": "opening-2b3fdf05c4dda4549989",
+        "title": "",
+        "text": "",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "numbers": [],
+    "events": [
+      {
+        "id": "events-29c55abdb06037e9ad58",
+        "title": "Club Open \u00b7 3.0 Championship",
+        "text": "Division podium",
+        "kind": "Tournament",
+        "lines": [
+          "1. Alex / Bea"
+        ],
+        "href": "tournament-results?tournament_id=fixture-open",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [],
+        "selection_aliases": [
+          "events-7dca838fac1329310192",
+          "events-e77b8d5fc5a9cfd19660"
+        ]
+      },
+      {
+        "id": "events-dec03d8a83e02d231e9d",
+        "title": "Club Open \u00b7 3.0 Consolation",
+        "text": "Division podium",
+        "kind": "Tournament",
+        "lines": [
+          "1. Cam / Dee"
+        ],
+        "href": "tournament-results?tournament_id=fixture-open",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [],
+        "selection_aliases": [
+          "events-7dca838fac1329310192",
+          "events-6181c979bf6287d6ccdc"
+        ]
+      },
+      {
+        "id": "events-7cc209282e0e6063ebd9",
+        "title": "Club Open \u00b7 3.5 Championship",
+        "text": "Division podium",
+        "kind": "Tournament",
+        "lines": [
+          "1. Eli / Fern"
+        ],
+        "href": "tournament-results?tournament_id=fixture-open",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [],
+        "selection_aliases": [
+          "events-b933aa6992420fccd0f0",
+          "events-4838a360e73e066d35d1"
+        ]
+      },
+      {
+        "id": "events-6ab568207b20f7e011ad",
+        "title": "Club Open \u00b7 3.5 Consolation",
+        "text": "Division podium",
+        "kind": "Tournament",
+        "lines": [
+          "1. Gus / Hana"
+        ],
+        "href": "tournament-results?tournament_id=fixture-open",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [],
+        "selection_aliases": [
+          "events-b933aa6992420fccd0f0",
+          "events-502a3ea1a3021209d7c5"
+        ]
+      }
+    ],
+    "spotlight": [],
+    "races": [],
+    "achievements": [],
+    "welcome": [],
+    "notes": [
+      {
+        "id": "notes-ab5aa97074c454a06320",
+        "title": "",
+        "text": "",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "custom": [],
+    "upcoming": []
+  },
+  "config": {
+    "sections": {
+      "events": {
+        "item_ids": [
+          "events-7dca838fac1329310192",
+          "events-b933aa6992420fccd0f0"
+        ],
+        "email_item_ids": [
+          "events-7dca838fac1329310192",
+          "events-b933aa6992420fccd0f0"
+        ]
+      }
+    }
+  },
+  "winners": [
+    "1. Alex / Bea",
+    "1. Cam / Dee",
+    "1. Eli / Fern",
+    "1. Gus / Hana"
+  ]
+}

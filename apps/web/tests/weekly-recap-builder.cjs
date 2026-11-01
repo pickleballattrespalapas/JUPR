@@ -16,12 +16,39 @@ function load(file) {
   new Function("module", "exports", code)(module, module.exports);
   return module.exports;
 }
-const { projectEditions, normalizeBuilder, layoutTemplate, previewRecap } =
+const { projectEditions, normalizeBuilder, layoutTemplate, previewRecap, resolveBuilderSelections, sourceOnlyRecapChange } =
   load("lib/recapBuilder.ts");
 const { buildWeeklyReportEmail } = load("lib/weeklyReportEmail.ts");
 // The Python suite independently verifies this shared projection fixture.
 const fixture = require("./fixtures/weekly-recap-builder.json");
 const groups = { ...fixture.catalog, custom: fixture.config.custom_blocks };
+const draws = require("./fixtures/weekly-recap-draws.json");
+for (const catalog of [draws.catalog, draws.refreshed_catalog]) {
+  const config = normalizeBuilder(draws.config);
+  const resolved = resolveBuilderSelections(config, catalog);
+  assert.equal(new Set(resolved.sections.events.item_ids).size, 4);
+  const editions = projectEditions(catalog, config);
+  const emailHtml = buildWeeklyReportEmail({ report: editions }, { origin: "", clubSlug: "test", compact: true });
+  for (const winner of draws.winners) assert(emailHtml.includes(winner), "Every explicitly selected podium appears in the actual email HTML, even beyond the default three");
+  for (const channel of ["edition", "email_edition"])
+    assert.deepEqual(editions[channel][0].items.map(item => item.lines[0]), draws.winners);
+  const selected = resolveBuilderSelections(normalizeBuilder({ sections: { events: {
+    item_ids: [draws.catalog.events[0].id, draws.catalog.events[3].id],
+    email_item_ids: [draws.catalog.events[3].id],
+  } } }), catalog);
+  const selective = projectEditions(catalog, selected);
+  assert.deepEqual(selective.edition[0].items.map(item => item.lines[0]), [draws.winners[0], draws.winners[3]]);
+  assert.deepEqual(selective.email_edition[0].items.map(item => item.lines[0]), [draws.winners[3]]);
+  assert.deepEqual(config, normalizeBuilder(draws.config), "Resolving old IDs leaves authored config untouched");
+}
+const sharedId = draws.config.sections.events.item_ids[0];
+const ambiguous = projectEditions(draws.catalog, normalizeBuilder({ ...draws.config, text_overrides: { [sharedId]: { title: "Wrong shared title" } } }));
+assert(!ambiguous.edition[0].items.some(item => item.title === "Wrong shared title"));
+const beforeRename = { id: "recap", club_id: "club", week_start: "2026-10-26", week_end: "2026-11-01", status: "draft", row_version: 2, edits_json: { editorial: { headline: "Our week", opening: "Welcome" } } };
+const renamed = { ...beforeRename, row_version: 3, generated_json: { title: "4.0 Round Robin" }, edits_json: { editorial: { opening: "Welcome", headline: "Our week" } } };
+assert(sourceOnlyRecapChange(beforeRename, renamed), "Source-only updates allow preserving local edits");
+for (const changed of [{ edits_json: { editorial: { headline: "Someone else's edits" } } }, { id: "replacement" }, { club_id: "other" }, { status: "published" }, { row_version: 2 }, { week_end: "2026-11-02" }])
+  assert(!sourceOnlyRecapChange(beforeRename, { ...renamed, ...changed }), "A conflicting editor, publication, or identity is never overwritten");
 assert.deepEqual(
   projectEditions(groups, normalizeBuilder(fixture.config)),
   fixture.expected,
