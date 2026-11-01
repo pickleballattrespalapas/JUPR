@@ -497,6 +497,9 @@ def send_pending_player_update_emails(
     club_id = str(ctx.club_id)
     if (start_date is None) != (end_date is None):
         raise ValueError("start_date and end_date must be provided together")
+    selected_query = {}
+    if outbox_items is not None:
+        selected_query["outbox_ids"] = [str((item or {}).get("id") or "") for item in outbox_items]
     pending_rows = list_outbox_rows(
         supabase,
         club_id,
@@ -504,6 +507,7 @@ def send_pending_player_update_emails(
         limit=max(1, int(limit)),
         week_start=start_date,
         week_end=end_date,
+        **selected_query,
     )
     if start_date is not None and end_date is not None:
         start_iso = start_date.isoformat()

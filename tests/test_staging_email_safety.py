@@ -52,7 +52,7 @@ def test_dry_run_does_not_call_smtp_send(monkeypatch):
 
     calls = {"smtp": 0, "status": []}
 
-    monkeypatch.setattr(sender, "list_outbox_rows", lambda *a, **k: [{"id": "o1", "subscription_id": "s1", "week_start": "2026-05-01", "week_end": "2026-05-07", "player_id": 9, "email": "real@example.com"}])
+    monkeypatch.setattr(sender, "list_outbox_rows", lambda *a, **k: [{"id": "o1", "subscription_id": "s1", "week_start": "2026-05-01", "week_end": "2026-05-07", "player_id": 9, "email": "real@example.com", "digest_snapshot_json": {"summary": {"matches_played": 1}, "links": {}}}])
     monkeypatch.setattr(sender, "claim_outbox_row_for_send", lambda *a, **k: {"id": "o1", "send_status": "sending", "row_version": 2, "delivery_attempt_id": "11111111-1111-1111-1111-111111111111"})
     monkeypatch.setattr(sender, "_safe_subscription", lambda *a, **k: {"id": "s1", "request_status": "active", "preferences_json": {"send_only_if_changed": False}})
     monkeypatch.setattr(sender, "_safe_digest_for_week", lambda *a, **k: {"final_json": {"summary": {"matches_played": 1}, "links": {}}})
@@ -86,7 +86,7 @@ def test_staging_redirect_sends_to_redirect_only(monkeypatch):
     monkeypatch.setenv("JUPR_STAGING_EMAIL_REDIRECT_TO", "safe@example.com")
 
     captured = {"to": None}
-    monkeypatch.setattr(sender, "list_outbox_rows", lambda *a, **k: [{"id": "o1", "subscription_id": "s1", "week_start": "2026-05-01", "week_end": "2026-05-07", "player_id": 9, "email": "real@example.com"}])
+    monkeypatch.setattr(sender, "list_outbox_rows", lambda *a, **k: [{"id": "o1", "subscription_id": "s1", "week_start": "2026-05-01", "week_end": "2026-05-07", "player_id": 9, "email": "real@example.com", "digest_snapshot_json": {"summary": {"matches_played": 1}, "links": {}}}])
     monkeypatch.setattr(sender, "claim_outbox_row_for_send", lambda *a, **k: {"id": "o1", "send_status": "sending", "row_version": 2, "delivery_attempt_id": "11111111-1111-1111-1111-111111111111"})
     monkeypatch.setattr(sender, "_safe_subscription", lambda *a, **k: {"id": "s1", "request_status": "active", "preferences_json": {"send_only_if_changed": False}})
     monkeypatch.setattr(sender, "_safe_digest_for_week", lambda *a, **k: {"final_json": {"summary": {"matches_played": 1}, "links": {}}})

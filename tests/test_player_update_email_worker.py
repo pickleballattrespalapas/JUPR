@@ -54,7 +54,7 @@ def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
         "public_base_url": "https://jupr.example.com",
     }
     assert summary == {
-        "ok": True,
+        "ok": False,
         "club_id": "tres_palapas",
         "key_source": "SUPABASE_SERVICE_ROLE_KEY",
         "attempted": 8,
@@ -64,6 +64,8 @@ def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
         "stale": 0,
         "uncertain": 0,
         "waiting_for_awards": 3,
+        "badge_jobs_processed": 0,
+        "badge_job_errors": 0,
         "email_mode": "dry_run",
     }
 
