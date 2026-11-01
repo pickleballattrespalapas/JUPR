@@ -164,6 +164,10 @@ jobs:
         with:
           version: "0.4.49"
 
+      - name: Use HTTPS for the Fly private-network tunnel
+        shell: bash
+        run: flyctl wireguard websockets enable
+
       - name: Validate protected production inputs and config
         shell: bash
         env:
