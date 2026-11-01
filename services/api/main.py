@@ -49,7 +49,7 @@ from scripts.deployment_verifier import (
     feature_flag_fingerprint,
 )
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
-from jupr_app.workers.player_update_email_scheduler import run_scheduler, scheduler_enabled
+from jupr_app.workers.player_update_email_scheduler import delivery_status, run_scheduler, scheduler_enabled
 from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS
 from services.api.auth import (
     authenticate_bearer,
@@ -918,6 +918,7 @@ def health() -> dict[str, Any]:
                         getattr(app.state, "player_email_task", None)
                         and not app.state.player_email_task.done()
                     ),
+                    "player_update_delivery": delivery_status(),
                     "live_player_update_email_enabled": os.getenv(
                         "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL", ""
                     ).strip().lower()

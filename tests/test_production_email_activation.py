@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import json
 import smtplib
-from uuid import NAMESPACE_URL, uuid5
+from jupr_app.domain.notifications.player_profile_update_repo import session_player_update_operation_key
 
 import pytest
 
@@ -44,6 +44,7 @@ def test_production_communication_controls_require_both_gates(monkeypatch):
 
 def test_api_starts_worker_and_stops_it_on_shutdown(monkeypatch):
     _enable(monkeypatch)
+    monkeypatch.setattr(scheduler, "deliver_pending_updates", lambda **_: {"next_cursor": None, "sent": 0, "examined": 0, "errors": 0})
     from fastapi.testclient import TestClient
     from services.api.main import app
     with TestClient(app) as client:
@@ -96,7 +97,7 @@ def test_scheduler_cannot_send_outside_approved_production(monkeypatch, name, va
     monkeypatch.setenv(name, value)
     monkeypatch.setattr(scheduler, "make_supabase", lambda *_: pytest.fail("must not access DB"))
     assert not scheduler.scheduler_enabled()
-    assert scheduler.deliver_pending_updates() == {"clubs": 0, "sent": 0, "errors": 0}
+    assert scheduler.deliver_pending_updates()["examined"] == 0
 
 
 def test_scheduler_only_delivers_pending_clubs_once_per_poll(monkeypatch):
@@ -121,17 +122,19 @@ def test_scheduler_only_delivers_pending_clubs_once_per_poll(monkeypatch):
             for i, club in enumerate(("a", "a", "b")):
                 rows.append({"id": str(i), "club_id": club, "subscription_id": "s",
                     "week_start": "2026-09-06", "week_end": "2026-09-06", "row_version": 1,
-                    "queue_operation_key": str(uuid5(NAMESPACE_URL, f"jupr:auto-player-update:{club}:s:2026-09-06:2026-09-06"))})
+                    "digest_snapshot_json": {"update_scope": "session", "match_ids": [101]},
+                    "queue_operation_key": session_player_update_operation_key(club, [101])})
             rows.append({"id": "manual", "club_id": "c", "queue_operation_key": "manual-operation"})
             return SimpleNamespace(data=rows)
     monkeypatch.setattr(scheduler, "make_supabase", lambda *_: Query())
     calls = []
     monkeypatch.setattr(scheduler, "run_player_update_email_worker", lambda club, **kw: calls.append((club, kw)) or {"sent": 2})
-    assert scheduler.deliver_pending_updates() == {"clubs": 2, "sent": 4, "errors": 0}
-    assert filters == [("send_status", "pending"), ("digest_snapshot_json", "{}")]
+    result = scheduler.deliver_pending_updates()
+    assert (result["clubs"], result["sent"], result["errors"]) == (2, 4, 0)
+    assert filters == [("send_status", "pending"), ("digest_snapshot_json->>update_scope", "session")]
     assert calls == [
-        ("a", {"limit": 25, "outbox_items": [{"id": "0", "expected_row_version": 1}, {"id": "1", "expected_row_version": 1}]}),
-        ("b", {"limit": 25, "outbox_items": [{"id": "2", "expected_row_version": 1}]}),
+        ("a", {"limit": 2, "advance_waiting_awards": True, "outbox_items": [{"id": "0", "expected_row_version": 1}, {"id": "1", "expected_row_version": 1}]}),
+        ("b", {"limit": 1, "advance_waiting_awards": True, "outbox_items": [{"id": "2", "expected_row_version": 1}]}),
     ]
 
 
