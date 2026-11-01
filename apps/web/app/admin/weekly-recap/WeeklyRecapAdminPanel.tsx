@@ -23,6 +23,7 @@ import {
   resolveBuilderSelections,
   sourceOnlyRecapChange,
   reorderRecapPreview,
+  setEmailOrderMode,
   type RecapOrderAction,
   type BuilderConfig,
   type Editorial,
@@ -1125,7 +1126,16 @@ export default function WeeklyRecapAdminPanel({
                 onClick={() => { setArranging(!arranging); setEditingText(false); }}
               >{arranging ? "Done arranging" : "Arrange content"}</button> : null}
             </div>
-            {arranging && !editingText && previewMode !== "print" ? <p>Move sections or individual results up and down. Group events by type to keep similar results together. Changes save automatically to the {previewMode === "email" ? "member email" : "website"} order.</p> : null}
+            {previewMode === "email" ? <div>
+              <label htmlFor="recap-member-email-order">Member email order</label>{" "}
+              <select id="recap-member-email-order" disabled={disabled} value={edits.builder.email_order_mode || "website"}
+                onChange={event => changeBuilder(setEmailOrderMode(edits.builder, generatedCatalog, event.target.value === "custom" ? "custom" : "website"))}>
+                <option value="website">Follow website order</option>
+                <option value="custom">Custom email order</option>
+              </select>
+              <p>Uses the same edited wording and card styles as the website. Email checkboxes choose what is included.</p>
+            </div> : null}
+            {arranging && !editingText && previewMode !== "print" ? <p>Move sections or individual results up and down. Group events by type to keep similar results together. {previewMode === "email" ? "Moving email content starts a custom email order." : "The member email follows these moves unless you choose a custom email order."} Changes save automatically.</p> : null}
             {editingText ? (
               <RecapTextEditor
                 catalog={generatedCatalog}

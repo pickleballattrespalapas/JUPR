@@ -16,7 +16,6 @@ SECTIONS = {
     "welcome": "Welcome to the courts", "notes": "Around the club",
     "custom": "Club stories", "upcoming": "Coming up",
 }
-EMAIL_LIMITS = {"events": 3, "spotlight": 2, "races": 2, "achievements": 3}
 TEXT_LIMITS = {"title": 240, "text": 3000, "kind": 80, "caption": 600, "credit": 160,
                "credit_label": 80, "results_label": 100, "link_label": 100, "alt": 240}
 DISPLAY_FIELDS = ("date", "scope", "footer_title", "footer_link")
@@ -186,6 +185,7 @@ def normalize_config(raw, *, template=False):
     custom = raw.get("custom_blocks") if isinstance(raw.get("custom_blocks"), list) else []
     blocks = [] if template else [clean_item(item) for item in custom[:12] if isinstance(item, dict)]
     result = {"version": 1, "order": order, "sections": sections, "custom_blocks": blocks,
+              "email_order_mode": "custom" if raw.get("email_order_mode") == "custom" else "website",
               "step": 0 if template else max(0, min(4, int(raw.get("step", 0) or 0)))}
     if isinstance(raw.get("email_order"), list):
         result["email_order"] = list(dict.fromkeys([key for key in raw["email_order"] if isinstance(key, str) and key in SECTIONS] + order))
@@ -234,15 +234,16 @@ def build_editions(recap, raw):
     editions = {}
     for channel in ("edition", "email_edition"):
         blocks = []
-        for key in (config.get("email_order", config["order"]) if channel == "email_edition" else config["order"]):
+        for key in (config.get("email_order", config["order"]) if channel == "email_edition" and config["email_order_mode"] == "custom" else config["order"]):
             settings = config["sections"][key]
             if not settings["enabled"] or (channel == "email_edition" and not settings["email_enabled"]):
                 continue
             available = {item["id"]: item if item.get("kind") == "Ladder court" else apply_text_override(item, config.get("text_overrides", {}).get(text_override_key(key, item), {})) for item in groups[key]}
             ids = settings.get("item_ids", list(available))
             if channel == "email_edition":
-                selected = set(ids)
-                ids = [i for i in settings.get("email_item_ids", ids[:EMAIL_LIMITS.get(key, 150)]) if i in selected]
+                selected = settings.get("email_item_ids", ids)
+                ids = ([i for i in selected if i in ids] if config["email_order_mode"] == "custom"
+                       else [i for i in ids if i in selected])
             items = [deepcopy(available[i]) for i in ids if i in available]
             for item in items:
                 if settings["detail"] == "brief" and key != "spotlight" and item.get("kind") != "Ladder court":

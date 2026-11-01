@@ -174,6 +174,7 @@ export type BuilderConfig = {
   version: 1;
   order: SectionKey[];
   email_order?: SectionKey[];
+  email_order_mode?: "website" | "custom";
   sections: Record<SectionKey, SectionSetting>;
   custom_blocks: RecapItem[];
   step: number;
@@ -212,12 +213,6 @@ export type RecapEdits = {
   builder: BuilderConfig;
   scope: { league_names: string[] };
 };
-const emailLimits: Partial<Record<SectionKey, number>> = {
-  events: 3,
-  spotlight: 2,
-  races: 2,
-  achievements: 3,
-};
 export function normalizeBuilder(
   value?: Partial<BuilderConfig> | null,
 ): BuilderConfig {
@@ -231,6 +226,7 @@ export function normalizeBuilder(
   return {
     version: 1,
     order,
+    email_order_mode: value?.email_order_mode === "custom" ? "custom" : "website",
     ...(Array.isArray(value?.email_order)
       ? {
           email_order: [
@@ -328,6 +324,22 @@ export type RecapOrderAction =
   | { type: "item"; section: SectionKey; itemId: string; delta: -1 | 1 }
   | { type: "group_events" };
 
+/** Start a separate email order from what the administrator currently sees. */
+export function setEmailOrderMode(builder: BuilderConfig, groups: RecapCatalog, mode: "website" | "custom"): BuilderConfig {
+  const next = resolveBuilderSelections(builder, groups);
+  if (mode === "custom" && next.email_order_mode !== "custom") {
+    next.email_order = [...next.order];
+    for (const key of Object.keys(RECAP_SECTIONS) as SectionKey[]) {
+      const section = next.sections[key];
+      const website = section.item_ids || (groups[key] || []).map(item => item.id);
+      const selected = new Set(section.email_item_ids || website);
+      section.email_item_ids = website.filter(id => selected.has(id));
+    }
+  }
+  next.email_order_mode = mode;
+  return next;
+}
+
 /** Move what the administrator sees, including the combined ladder winners. */
 export function reorderRecapPreview(
   builder: BuilderConfig,
@@ -335,7 +347,9 @@ export function reorderRecapPreview(
   channel: "edition" | "email_edition",
   action: RecapOrderAction,
 ): BuilderConfig {
-  const next = resolveBuilderSelections(builder, groups);
+  const next = channel === "email_edition"
+    ? setEmailOrderMode(builder, groups, "custom")
+    : resolveBuilderSelections(builder, groups);
   const blocks = projectEditions(groups, next)[channel];
   if (action.type === "section") {
     const index = blocks.findIndex((block) => block.key === action.section);
@@ -345,10 +359,7 @@ export function reorderRecapPreview(
     const from = order.indexOf(action.section), to = order.indexOf(neighbor.key);
     [order[from], order[to]] = [order[to], order[from]];
     if (channel === "email_edition") next.email_order = order;
-    else {
-      next.email_order ??= [...next.order];
-      next.order = order;
-    }
+    else next.order = order;
     return next;
   }
   const section = action.type === "group_events" ? "events" : action.section;
@@ -371,7 +382,7 @@ export function reorderRecapPreview(
   }
   const setting = next.sections[section];
   const website = setting.item_ids || (groups[section] || []).map((item) => item.id);
-  const email = (setting.email_item_ids || website.slice(0, emailLimits[section] || 150))
+  const email = (setting.email_item_ids || website)
     .filter((id) => website.includes(id));
   const selected = channel === "email_edition" ? email : website;
   const courts = new Set((groups[section] || []).filter((item) => item.kind === "Ladder court").map((item) => item.id));
@@ -396,7 +407,7 @@ export function projectEditions(
     email_edition: [] as RecapBlock[],
   };
   for (const channel of ["edition", "email_edition"] as const)
-    for (const key of channel === "email_edition"
+    for (const key of channel === "email_edition" && builder.email_order_mode === "custom"
       ? builder.email_order || builder.order
       : builder.order) {
       const setting = builder.sections[key];
@@ -417,9 +428,10 @@ export function projectEditions(
       let ids = setting.item_ids || [...available.keys()];
       if (channel === "email_edition") {
         const allowed = new Set(ids);
-        ids = (
-          setting.email_item_ids || ids.slice(0, emailLimits[key] || 150)
-        ).filter((id) => allowed.has(id));
+        const selected = setting.email_item_ids || ids;
+        ids = builder.email_order_mode === "custom"
+          ? selected.filter(id => allowed.has(id))
+          : ids.filter(id => selected.includes(id));
       }
       const selectedItems = ids.flatMap((id) => {
         const item = available.get(id);
