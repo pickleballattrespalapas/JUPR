@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -6,6 +6,13 @@ import type { MeetSignupBoard, PrivateMeetSignup } from "../lib/interclubMeetSig
 import type { PoolMember } from "../lib/interclubPlayerPool";
 import type { PublicLeague } from "../lib/interclubPublic";
 import { bootstrapStagingContext, expectedApiOrigin } from "./support/staging";
+
+async function openPublicControls(scope: Page | Locator) {
+  const panel = scope.locator("[data-public-controls-panel]:visible");
+  await expect(panel).toHaveCount(1);
+  if (await panel.getAttribute("open") === null) await panel.locator("summary").click();
+  await expect(panel).toHaveAttribute("open", "");
+}
 
 function expectLinkedPoolMember(members: PoolMember[], name: string, rating: number, gender: string) {
   const matching = members.filter(member => member.name === name);
@@ -192,10 +199,11 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(page.locator("input[data-interclub-score]")).toHaveCount(0);
   const reviewedResults = page.getByRole("region", { name: "Browse match results", exact: true });
   await expect(reviewedResults).toBeVisible();
+  await openPublicControls(reviewedResults);
   await expect(reviewedResults.getByRole("combobox", { name: "Filter results by club", exact: true })).toBeVisible();
   await expect(reviewedResults.getByRole("table", { name: "Game results", exact: true })).toBeVisible();
   await expect(reviewedResults.locator("tr[data-result-game]")).toHaveCount(scoreCount / 2);
-  await expect(reviewedResults.locator("details")).toHaveCount(0);
+  await expect(reviewedResults.locator("details:not([data-public-controls-panel])")).toHaveCount(0);
   await page.screenshot({ path: join(reportDir,"interclub-approved-meet.png"), fullPage: true });
 
   await page.goto(`/admin/interclub/season?season=${official.id}`);
@@ -599,6 +607,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPage.getByRole("heading",{ name: `Rehearsal ${state.run} full-season`, exact:true })).toBeVisible();
   await expect(publicPage.getByRole("heading", { name: "Overall Club Cup", exact: true })).toBeVisible();
   await expect(publicPage.getByText("Private revised note", { exact: false })).toHaveCount(0);
+  await openPublicControls(publicPage);
   await expect(publicPage.getByRole("tab", { name: "Overall standings", exact: true })).toHaveAttribute("aria-selected", "true");
   const cupTable = publicPage.getByRole("table", { name: "Club Cup standings", exact: true });
   await expect(cupTable).toBeVisible();
@@ -616,13 +625,14 @@ test("interclub paper packet, score entry, approval and public results", async (
   await publicPage.getByRole("tab", { name: "Results", exact: true }).click();
   const publicResults = publicPage.getByRole("region", { name: "Browse match results", exact: true });
   await expect(publicResults).toBeVisible();
+  await openPublicControls(publicResults);
   const clubFilter = publicResults.getByRole("combobox", { name: "Filter results by club", exact: true });
   await clubFilter.selectOption(club);
   const clubResults = published.document.competition_results!.filter(row => row.club_a === club || row.club_b === club);
   const expectedGames = clubResults.reduce((sum, row) => sum + row.pairings.reduce((n, pairing) => n + pairing.games.length, 0) + (row.tiebreak?.status === "completed" ? 1 : 0), 0);
   await expect(publicResults.locator("tr[data-result-game]")).toHaveCount(expectedGames);
   await expect(publicResults.getByText("Not needed — matchup decided 3–0", { exact: true })).toBeVisible();
-  await expect(publicResults.locator("details")).toHaveCount(0);
+  await expect(publicResults.locator("details:not([data-public-controls-panel])")).toHaveCount(0);
   await expect(publicResults.locator("tr[data-result-game] td:nth-child(3) strong")).toHaveText(Array(expectedGames).fill(selectedClubName));
   await publicPage.screenshot({ path: join(reportDir, "interclub-club-results-table.png"), fullPage: false });
   const meetFilter = publicResults.getByRole("combobox", { name: "Filter results by meet", exact: true });
@@ -654,6 +664,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPage.getByRole("region", { name: "Final season results", exact: true })).toContainText(selectedClubName);
   await expect(publicPage.getByRole("table", { name: "Club Cup standings", exact: true })).toBeVisible();
   const recipientList = publicPage.getByRole("region", { name: "Player awards", exact: true });
+  await openPublicControls(recipientList);
   await recipientList.getByRole("combobox", { name: "Filter player awards by club", exact: true }).selectOption(club);
   const awardedPlayers = new Set(reviewedAwards.awards.filter((award: any) => award.club_id === club && award.recipient_type === "player").map((award: any) => award.entry_id));
   await expect(recipientList.getByRole("listitem")).toHaveCount(awardedPlayers.size);
@@ -711,6 +722,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await publicPage.getByRole("link", { name: "View final season results", exact: true }).first().click();
   await expect(publicPage.getByRole("heading", { name: "Final season results", exact: true })).toBeVisible();
   await publicPage.getByRole("link", { name: "View all match results", exact: true }).click();
+  await openPublicControls(publicPage);
   await expect(publicPage.getByRole("tab", { name: "Results", exact: true })).toHaveAttribute("aria-selected", "true");
   await publicPage.goto(`/interclub/signup/${official.signup[club].share_id}`);
   await expect(publicPage.getByRole("heading", { name: "Season registration has closed.", exact: true })).toBeVisible();
@@ -782,6 +794,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(page.getByRole("link", { name: "Continue 2027 →", exact: true })).toHaveAttribute("href", nextSeason.admin_href);
   await expect(page.getByRole("link", { name: "Start next season →", exact: true })).toHaveCount(0);
   await publicPage.goto(`/interclub/${official.id}?view=history`);
+  await openPublicControls(publicPage);
   await expect(publicPage.getByRole("tab", { name: "History", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(publicPage.getByRole("region", { name: "Event history", exact: true }).getByRole("article")).toHaveCount(1);
   await expect(publicPage.getByRole("region", { name: "Event history", exact: true })).not.toContainText(nextSeasonName);
