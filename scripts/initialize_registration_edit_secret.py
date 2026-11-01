@@ -58,6 +58,8 @@ def fly(*args: str, payload: str | None = None, ssh: bool = False) -> str:
     env = dict(os.environ)
     if ssh:
         env["FLY_API_TOKEN"] = env.get("FLY_SSH_TOKEN") or env.get("FLY_API_TOKEN", "")
+        if env.get("FLY_SSH_MACHINE_ID"):
+            args = (*args, "--machine", env["FLY_SSH_MACHINE_ID"])
     try:
         result = subprocess.run(
             ["flyctl", *args, "--app", APP], input=payload,
