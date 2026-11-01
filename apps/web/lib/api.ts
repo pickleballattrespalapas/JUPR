@@ -216,6 +216,7 @@ export type PublicTrophy = {
   context_type?: string | null;
   context_label?: string | null;
   earned_at?: string | null;
+  award_key?: string;
 };
 
 export type PublicRelationship = {
