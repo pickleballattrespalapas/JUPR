@@ -696,11 +696,11 @@ test("interclub paper packet, score entry, approval and public results", async (
   await publicPage.setViewportSize({ width: 1280, height: 900 });
   await publicPage.goto(`/clubs/${club}/players/${official.browser_award_player}?section=trophies`);
   await expect(publicPage.getByRole("heading", { name: "Trophy case", exact: true })).toBeVisible();
-  await expect(publicPage.locator('[data-testid="player-trophy"]').filter({ hasText: "Season Participant" })).toHaveCount(1);
+  await expect(publicPage.locator('[data-testid="player-trophy"]').filter({ hasText: "Season Participant" })).toHaveCount(0);
   await expect(publicPage.locator('[data-testid="player-trophy"]').filter({ hasText: "League Champion" })).toHaveCount(1);
   await publicPage.screenshot({ path: join(reportDir, "interclub-player-trophy-case.png"), fullPage: true });
   await publicPage.goto(`/clubs/${club}/players/${official.browser_award_player}?section=badges`);
-  for (const badge of ["Win Matchup", "Sweep Matchup", "Undefeated Day"]) {
+  for (const badge of ["Win Matchup", "Sweep Matchup", "Undefeated Day", "Season Participant"]) {
     const card = publicPage.locator('[data-testid="player-badge"]').filter({ hasText: badge });
     await expect(card).toHaveCount(1);
     await card.getByText("Earned achievements", { exact: true }).click();

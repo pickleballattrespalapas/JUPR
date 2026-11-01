@@ -3,6 +3,11 @@ from __future__ import annotations
 
 from jupr_app.domain.interclub_awards import PERFORMANCE_BADGES, award_title, performance_awards
 
+_PLAYER_BADGES = {
+    **PERFORMANCE_BADGES,
+    "participation": {"title": "Season Participant", "requirement": "Play in an inter-club season."},
+}
+
 
 def _all(query):
     rows = []
@@ -83,7 +88,7 @@ def public_interclub_honors(db, **scope):
 def player_interclub_awards(db, *, club_id: str, player_id):
     rows = public_interclub_honors(db, club_id=club_id, player_id=player_id)
     badges = []
-    for kind, definition in PERFORMANCE_BADGES.items():
+    for kind, definition in _PLAYER_BADGES.items():
         earned = [row for row in rows if row["award_key"] == kind]
         if not earned:
             continue
@@ -92,7 +97,7 @@ def player_interclub_awards(db, *, club_id: str, player_id):
                        "prestige": 0, "rarity": None, "icon_key": "medal", "description": definition["requirement"],
                        "requirements": definition["requirement"], "count": len(earned), "last_earned_at": earned[0]["earned_at"],
                        "achievements": [{"id": row["id"], "earned_at": row["earned_at"],
-                                         "detail": f"{row['season_name']} · {row['detail']}", "results_href": row["results_href"]}
+                                         "detail": f"{row['season_name']} · {row.get('detail') or definition['requirement']}", "results_href": row["results_href"]}
                                         for row in earned]})
     return {"badges": badges, "trophies": _player_trophies(rows)}
 
@@ -102,7 +107,7 @@ def player_interclub_trophies(db, *, club_id: str, player_id):
 
 
 def _player_trophies(rows):
-    return [{"badge_id": row["id"], "title": row["title"], "placement": 1 if row["award_key"] != "participation" else None,
+    return [{"badge_id": row["id"], "title": row["title"], "placement": 1,
              "context_type": "interclub", "context_label": row["season_name"], "earned_at": row["earned_at"],
              "results_href": row["results_href"], "award_key": row["award_key"]}
-            for row in rows if row["award_key"] not in PERFORMANCE_BADGES]
+            for row in rows if row["award_key"] in {"division_champion", "club_cup_champion"}]

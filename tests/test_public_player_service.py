@@ -217,6 +217,69 @@ def test_player_cabinet_keeps_distinct_ids_for_repeated_partner_achievements():
     ]
 
 
+def test_trophy_case_uses_league_award_rank_and_keeps_progression_in_cabinet():
+    supabase = FakeSupabase()
+    base = {"club_id": "club-1", "player_id": 1, "earned_at": "2026-07-05T00:00:00Z", "context_type": "league"}
+    awards = [
+        {"badge_id": "top_performer_most_wins", "value_num": 66,
+         "context_id": "Summer:top_performer:most_wins:1",
+         "value_json": {"rank": 1, "metric_value": 66, "league_id": "Summer"}},
+        {"badge_id": "top_performer_most_improved", "value_num": 0.47,
+         "context_id": "Summer:top_performer:most_improved:2",
+         "value_json": '{"rank": 2, "metric_value": 0.47, "league_id": "Summer"}'},
+        {"badge_id": "top_performer_best_win_pct", "value_num": 87,
+         "context_id": "Summer:top_performer:best_win_pct:3"},
+        {"badge_id": "mountain_climber", "value_num": 27},
+        {"badge_id": "mountain_climber", "value_num": 1},
+        {"badge_id": "mountain_climber", "value_num": 47, "value_json": {"rank": 1}},
+    ]
+    supabase.rows_by_table["player_badges"].extend({**base, **award} for award in awards)
+    profile = get_public_player_profile(supabase, club_id="club-1", player_id=1)
+    result = profile["awards"]
+    assert result["trophy_count"] == 4
+    assert {row["badge_id"]: row["placement"] for row in result["trophies"]} == {
+        "tournament_champion": 1, "top_performer_most_wins": 1,
+        "top_performer_most_improved": 2, "top_performer_best_win_pct": 3,
+    }
+    assert next(row for row in result["trophies"] if row["badge_id"] == "top_performer_most_wins")["context_label"] == "Summer"
+    assert {row["badge_id"]: row["count"] for row in result["badges"]} == {"first_win": 1, "mountain_climber": 3}
+    assert result["badge_award_count"] == 4
+    assert len(supabase.rows_by_table["player_badges"]) == 8  # Display filtering preserves the earned records.
+
+
+@pytest.mark.parametrize("badge_id,context_type,evidence,expected", [
+    ("tournament_champion", "tournament", {"value_json": {"placement": 1}}, 1),
+    ("tournament_runner_up", "tournament", {"context_id": "cup:draw:open:podium:2", "value_num": 66}, 2),
+    ("tournament_third_place", "tournament", {"value_num": 3.0}, 3),
+    ("league_champion", "league", {}, 1),
+    ("league_runner_up", "league_end_award", {"value_json": {"podium_place": "2"}}, 2),
+    ("top_performer_most_wins", "league", {"value_json": {"rank": "3.0"}, "value_num": 66}, 3),
+    ("top_performer_most_wins", "league", {"value_num": 1, "value_json": {"category_key": "most_wins"}}, None),
+    ("top_performer_most_wins", "league", {"value_json": {"rank": 4}, "value_num": 1}, None),
+    ("top_performer_most_wins", "tournament", {"value_json": {"rank": 1}}, None),
+    ("mountain_climber", "league_end", {"value_json": {"placement": 1}}, None),
+    ("first_win", "tournament", {"context_id": "cup:podium:1"}, None),
+    ("tournament_champion", "overall", {"value_json": {"placement": 1}}, None),
+    ("tournament_champion", "tournament", {"value_json": {"placement": 27}}, None),
+    ("tournament_champion", "tournament", {"value_num": 66}, None),
+    ("tournament_champion", "tournament", {"value_json": {"placement": 0}, "context_id": "cup:podium:1"}, None),
+    ("tournament_champion", "tournament", {"value_json": {"placement": 1.5}}, None),
+    ("tournament_champion", "tournament", {"value_json": {"placement": True}}, None),
+    ("tournament_champion", "tournament", {"value_json": {"placement": "bad"}}, None),
+    ("tournament_champion", "tournament", {"value_json": {"placement": 1}, "revoked_at": "2026-07-06"}, None),
+])
+def test_public_trophy_case_requires_a_top_three_award(badge_id, context_type, evidence, expected):
+    supabase = FakeSupabase()
+    supabase.rows_by_table["player_badges"] = [{
+        "club_id": "club-1", "player_id": 1, "badge_id": badge_id,
+        "context_type": context_type, "earned_at": "2026-07-05", **evidence,
+    }]
+    awards = get_public_player_profile(supabase, club_id="club-1", player_id=1)["awards"]
+    assert [row["placement"] for row in awards["trophies"]] == ([] if expected is None else [expected])
+    assert awards["trophy_count"] == len(awards["trophies"])
+    assert awards["badge_award_count"] == int(expected is None and not evidence.get("revoked_at"))
+
+
 def test_public_directory_includes_inactive_profiles_even_for_legacy_status_filters():
     for status in (None, "all", "active", "inactive"):
         kwargs = {"status": status} if status else {}
