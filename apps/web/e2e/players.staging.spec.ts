@@ -60,7 +60,7 @@ test("player profile keeps positions, trophies, badges, relationships, and histo
   await openPublicControls(page);
   await page.getByTestId("player-section-trophies").click();
   await expect(page.getByTestId("player-trophies")).toBeVisible();
-  await expect(page.getByTestId("player-trophies")).toContainText(/major honors|tournament honors/i);
+  await expect(page.getByTestId("player-trophies")).toContainText(/top-three tournament podiums/i);
 
   await openPublicControls(page);
   await page.getByTestId("player-section-badges").click();
