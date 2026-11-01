@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from threading import Event
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from jupr_app.config import get_email_mode
 from jupr_app.data.client import make_supabase
@@ -56,13 +57,15 @@ def delivery_status() -> dict[str, Any]:
     return {**_delivery_status, "summary": dict(_delivery_status.get("summary") or {})}
 
 
-def deliver_pending_updates(*, scan_after: str | None = None) -> dict[str, Any]:
+def deliver_pending_updates(
+    *, scan_after: str | None = None, should_stop: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     totals = {name: 0 for name in (
         "clubs", "examined", "selected", "ignored", "attempted", "sent", "skipped",
         "errors", "stale", "uncertain", "waiting_for_awards", "badge_jobs_processed", "badge_job_errors",
     )}
     totals["next_cursor"] = None
-    if not scheduler_enabled():
+    if not scheduler_enabled() or (should_stop is not None and should_stop()):
         return totals
     client = make_supabase(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
     try:
@@ -102,11 +105,12 @@ def deliver_pending_updates(*, scan_after: str | None = None) -> dict[str, Any]:
     # Move through the queue even when an early session is waiting for awards.
     # Database row claims, not this in-memory scan cursor, prevent duplicates.
     for club_id, items in clubs.items():
-        if not scheduler_enabled():
+        if not scheduler_enabled() or (should_stop is not None and should_stop()):
             break
         try:
             result = run_player_update_email_worker(
                 club_id, limit=len(items), outbox_items=items, advance_waiting_awards=True,
+                **({"should_stop": should_stop} if should_stop is not None else {}),
             )
             totals["clubs"] += 1
             for key in ("attempted", "sent", "skipped", "errors", "stale", "uncertain",
@@ -118,12 +122,15 @@ def deliver_pending_updates(*, scan_after: str | None = None) -> dict[str, Any]:
     return totals
 
 
-async def run_scheduler() -> None:
+async def run_scheduler(*, stop_event: Event | None = None) -> None:
+    stop_event = stop_event or Event()
     scan_after = None
-    while True:
+    while not stop_event.is_set():
         _delivery_status["last_started_at"] = datetime.now(timezone.utc).isoformat()
         try:
-            result = await asyncio.to_thread(deliver_pending_updates, scan_after=scan_after)
+            result = await asyncio.to_thread(
+                deliver_pending_updates, scan_after=scan_after, should_stop=stop_event.is_set,
+            )
             scan_after = result.pop("next_cursor")
             _delivery_status.update(
                 last_completed_at=datetime.now(timezone.utc).isoformat(),
@@ -136,4 +143,8 @@ async def run_scheduler() -> None:
         except Exception as exc:
             _delivery_status["last_error_type"] = type(exc).__name__
             logger.error("Player email polling failed (%s)", type(exc).__name__)
-        await asyncio.sleep(POLL_SECONDS)
+        # Wake promptly for shutdown without cancelling an in-flight SMTP call.
+        for _ in range(POLL_SECONDS):
+            if stop_event.is_set():
+                break
+            await asyncio.sleep(1)

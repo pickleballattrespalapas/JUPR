@@ -249,7 +249,8 @@ def test_disabled_or_nonproduction_scheduler_never_accesses_database(monkeypatch
 def test_scheduler_records_heartbeat_without_exposing_cursor(monkeypatch):
     scheduler._delivery_status.clear()
     def poll(**kwargs):
-        assert kwargs == {"scan_after": None}
+        assert kwargs["scan_after"] is None
+        assert not kwargs["should_stop"]()
         return {"next_cursor": "private-outbox-id", "examined": 1, "sent": 1, "errors": 0}
     async def stop(_): raise asyncio.CancelledError
     monkeypatch.setattr(scheduler, "deliver_pending_updates", poll)
@@ -284,3 +285,77 @@ def test_missing_required_run_marker_prevents_delivery(delivery, monkeypatch):
     result = scheduler.deliver_pending_updates()
     assert result["errors"] == 1 and not sent
     assert db.closed == 2
+
+
+def test_shutdown_finishes_claimed_email_and_leaves_next_row_pending(delivery, monkeypatch):
+    from threading import Event
+    db, sent, _ = delivery
+    first = queue(db)
+    second = queue(db, player=2)
+    stop_event = Event()
+    compute = sender.compute_player_weekly_digest
+    def stop_during_render(*args, **kwargs):
+        stop_event.set()
+        return compute(*args, **kwargs)
+    monkeypatch.setattr(sender, "compute_player_weekly_digest", stop_during_render)
+    result = scheduler.deliver_pending_updates(should_stop=stop_event.is_set)
+    assert result["sent"] == result["attempted"] == len(sent) == 1
+    assert {first["send_status"], second["send_status"]} == {"sent", "pending"}
+    assert sum(row.get("attempt_count", 0) for row in (first, second)) == 1
+    monkeypatch.setattr(sender, "compute_player_weekly_digest", compute)
+    assert scheduler.deliver_pending_updates()["sent"] == 1
+    assert first["attempt_count"] == second["attempt_count"] == 1
+
+
+def test_api_shutdown_waits_for_inflight_smtp_and_worker_receipt(delivery, monkeypatch):
+    from threading import Event
+    from services.api import main
+    db, _, _ = delivery
+    first = queue(db)
+    second = queue(db, player=2)
+    entered, release = Event(), Event()
+    def smtp(**kwargs):
+        entered.set()
+        assert release.wait(5)
+        return "<drained-message>"
+    monkeypatch.setattr(sender, "send_email_with_inline_chart", smtp)
+    monkeypatch.setattr(main, "_log_runtime_guardrails", lambda: None)
+    monkeypatch.setattr(main, "scheduler_enabled", lambda: True)
+    async def exercise():
+        await main.startup_checks()
+        try:
+            assert await asyncio.to_thread(entered.wait, 3)
+            shutdown = asyncio.create_task(main.stop_player_email_worker())
+            await asyncio.sleep(0)
+            assert main.app.state.player_email_stop.is_set()
+            assert not shutdown.done()
+        finally:
+            release.set()
+        await asyncio.wait_for(shutdown, 3)
+        assert not main.app.state.player_email_task.cancelled()
+    asyncio.run(exercise())
+    assert {first["send_status"], second["send_status"]} == {"sent", "pending"}
+    assert sum(row.get("attempt_count", 0) for row in (first, second)) == 1
+    assert db.tables["worker_run_log"][0]["status"] == "success"
+
+
+def test_already_stopped_scheduler_does_not_access_queue(monkeypatch):
+    from threading import Event
+    stop = Event()
+    stop.set()
+    monkeypatch.setattr(scheduler, "deliver_pending_updates", lambda **kw: pytest.fail("already stopped"))
+    asyncio.run(scheduler.run_scheduler(stop_event=stop))
+
+
+def test_shutdown_during_award_read_does_not_claim_next_email(delivery, monkeypatch):
+    from threading import Event
+    db, sent, _ = delivery
+    row = queue(db)
+    stop = Event()
+    def awards_ready(*args):
+        stop.set()
+        return True
+    monkeypatch.setattr(sender, "_session_awards_ready", awards_ready)
+    result = scheduler.deliver_pending_updates(should_stop=stop.is_set)
+    assert result["attempted"] == 0 and not sent
+    assert row["send_status"] == "pending" and not row.get("attempt_count")

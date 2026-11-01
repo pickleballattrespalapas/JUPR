@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 import os
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote, urlencode
 
 from jupr_app.domain.notifications.player_profile_update_repo import (
@@ -482,6 +482,7 @@ def send_pending_player_update_emails(
     outbox_items: list[dict[str, Any]] | None = None,
     actor_email: str = "",
     enforce_next_live_gate: bool = False,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, int | str]:
     """Claim and deliver pending outbox rows through one shared CAS path.
 
@@ -550,7 +551,11 @@ def send_pending_player_update_emails(
             "Live Player Updates email is disabled for the Next workflow. Use dry_run/staging_redirect or enable JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL."
         )
 
+    attempted = 0
     for outbox in pending_rows:
+        if should_stop is not None and should_stop():
+            break
+        attempted += 1
         outbox_id = str(outbox.get("id") or "")
         claimed_version: int | None = None
         external_delivery_attempted = False
@@ -564,6 +569,9 @@ def send_pending_player_update_emails(
                         continue
                 except SessionAwardsRecoveryRequiredError as exc:
                     award_failure = exc
+            if should_stop is not None and should_stop():
+                attempted -= 1
+                break
             expected_version = expected_versions.get(outbox_id, int(outbox.get("row_version") or 1))
             claimed = claim_outbox_row_for_send(
                 supabase,
@@ -719,7 +727,7 @@ def send_pending_player_update_emails(
             errors += 1
 
     return {
-        "attempted": len(pending_rows),
+        "attempted": attempted,
         "sent": sent,
         "skipped": skipped,
         "errors": errors,

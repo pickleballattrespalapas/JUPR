@@ -4,7 +4,7 @@ import argparse
 import datetime as dt
 import json
 import os
-from typing import Any
+from typing import Any, Callable
 
 from jupr_app.config import get_next_web_base_url
 from jupr_app.data.client import make_supabase
@@ -34,6 +34,7 @@ def _is_missing_table_error(exc: Exception) -> bool:
 def run_player_update_email_worker(
     club_id: str, *, limit: int = 250, outbox_items: list[dict[str, Any]] | None = None,
     advance_waiting_awards: bool = False,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     url, key, key_source = _resolve_supabase_config()
     supabase = make_supabase(url, key)
@@ -57,9 +58,12 @@ def run_player_update_email_worker(
 
         try:
             selected = {"outbox_items": outbox_items} if outbox_items is not None else {}
+            if should_stop is not None:
+                selected["should_stop"] = should_stop
             summary = send_pending_player_update_emails(ctx, limit=max(1, int(limit)), public_base_url=public_base_url, **selected)
             badge_summary = {"processed": 0, "errored": 0}
-            if advance_waiting_awards and int(summary.get("waiting_for_awards") or 0):
+            if (advance_waiting_awards and int(summary.get("waiting_for_awards") or 0)
+                    and not (should_stop is not None and should_stop())):
                 # A publisher may have stopped after queuing its award job.
                 # Advance bounded work off the request thread, then let the next
                 # email poll recheck the exact job. Never send before it finishes.
