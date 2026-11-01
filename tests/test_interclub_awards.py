@@ -176,7 +176,16 @@ def test_public_projection_is_club_and_player_scoped_private_fields_removed_and_
     assert all("player_id" not in row and "email" not in row and "entry_id" not in row for row in own)
     assert own[0]["results_href"] == "/interclub/season/final-results"
     assert [row["id"] for row in public_interclub_trophies(db, club_id="alpha")] == ["club"]
-    assert player_interclub_trophies(db, club_id="alpha", player_id=1)[0]["placement"] is None
+    assert player_interclub_trophies(db, club_id="alpha", player_id=1) == []
+    profile = player_interclub_awards(db, club_id="alpha", player_id=1)
+    assert profile["trophies"] == []
+    assert profile["badges"][0]["badge_id"] == "interclub_participation"
+    assert profile["badges"][0]["count"] == 1001
+    assert all(award["detail"] == "Season · Play in an inter-club season." for award in profile["badges"][0]["achievements"])
+    rows += [{**rows[0], "id": kind, "award_key": kind} for kind in ("division_champion", "club_cup_champion")]
+    assert {row["award_key"]: row["placement"] for row in player_interclub_trophies(db, club_id="alpha", player_id=1)} == {
+        "division_champion": 1, "club_cup_champion": 1,
+    }
 
 
 def regular_season():
@@ -270,12 +279,13 @@ def test_published_achievements_reconcile_without_waiting_for_season_close_and_s
     assert all(a["recipient_key"] == "original" and a["earned_at"] == "2026-09-30T15:00:00Z" for a in public)
     assert all("player_id" not in a and "entry_id" not in a for a in public)
     profile = player_interclub_awards(db, club_id="alpha", player_id=1)
-    assert len(profile["badges"]) == 3 and len(profile["trophies"]) == 1
+    assert len(profile["badges"]) == 4 and profile["trophies"] == []
+    assert next(b for b in profile["badges"] if b["badge_id"] == "interclub_participation")["count"] == 1
     assert profile["badges"][0]["count"] == 1 and profile["badges"][0]["achievements"][0]["results_href"].endswith("?view=results")
     tables["pcs_interclub_publications"][0]["published"] = deepcopy(doc)
     games = tables["pcs_interclub_publications"][0]["published"]["competition_results"][0]["pairings"][0]["games"]
     for game in games: game.update(a=5, b=11)
-    assert not player_interclub_awards(db, club_id="alpha", player_id=1)["badges"]
-    assert len(player_interclub_awards(db, club_id="beta", player_id=1)["badges"]) == 3
+    assert [b["badge_id"] for b in player_interclub_awards(db, club_id="alpha", player_id=1)["badges"]] == ["interclub_participation"]
+    assert len(player_interclub_awards(db, club_id="beta", player_id=1)["badges"]) == 4
     tables["pcs_interclub_publications"][0]["published"] = None
     assert player_interclub_awards(db, club_id="alpha", player_id=1) == {"badges": [], "trophies": []}
