@@ -33,6 +33,7 @@ def _is_missing_table_error(exc: Exception) -> bool:
 
 def run_player_update_email_worker(
     club_id: str, *, limit: int = 250, outbox_items: list[dict[str, Any]] | None = None,
+    advance_waiting_awards: bool = False,
 ) -> dict[str, Any]:
     url, key, key_source = _resolve_supabase_config()
     supabase = make_supabase(url, key)
@@ -57,8 +58,20 @@ def run_player_update_email_worker(
         try:
             selected = {"outbox_items": outbox_items} if outbox_items is not None else {}
             summary = send_pending_player_update_emails(ctx, limit=max(1, int(limit)), public_base_url=public_base_url, **selected)
+            badge_summary = {"processed": 0, "errored": 0}
+            if advance_waiting_awards and int(summary.get("waiting_for_awards") or 0):
+                # A publisher may have stopped after queuing its award job.
+                # Advance bounded work off the request thread, then let the next
+                # email poll recheck the exact job. Never send before it finishes.
+                from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+                try:
+                    badge_summary = process_badge_eval_queue(
+                        supabase, club_id, max_jobs=1, time_budget_seconds=2,
+                    )
+                except Exception:
+                    badge_summary["errored"] = 1
             result = {
-                "ok": True,
+                "ok": not (summary.get("errors") or summary.get("uncertain") or badge_summary.get("errored")),
                 "club_id": club_id,
                 "key_source": key_source,
                 "attempted": int(summary.get("attempted") or 0),
@@ -68,12 +81,14 @@ def run_player_update_email_worker(
                 "stale": int(summary.get("stale") or 0),
                 "uncertain": int(summary.get("uncertain") or 0),
                 "waiting_for_awards": int(summary.get("waiting_for_awards") or 0),
+                "badge_jobs_processed": int(badge_summary.get("processed") or 0),
+                "badge_job_errors": int(badge_summary.get("errored") or 0),
                 "email_mode": str(summary.get("email_mode") or "unknown"),
             }
             if run_id:
                 supabase.table("worker_run_log").update(
                     {
-                        "status": "success",
+                        "status": "success" if result["ok"] else "failed",
                         "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                         "summary_json": {
                             "attempted": result["attempted"],
@@ -83,6 +98,8 @@ def run_player_update_email_worker(
                             "stale": result["stale"],
                             "uncertain": result["uncertain"],
                             "waiting_for_awards": result["waiting_for_awards"],
+                            "badge_jobs_processed": result["badge_jobs_processed"],
+                            "badge_job_errors": result["badge_job_errors"],
                             "email_mode": result["email_mode"],
                         },
                     }
