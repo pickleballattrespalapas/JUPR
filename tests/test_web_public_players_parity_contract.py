@@ -58,7 +58,7 @@ def test_profile_renders_every_parity_projection_and_format_label():
     assert "coordinates.filter(({ point }) => point.match_format === definition.format)" in source
     assert "Leaderboard snapshot" not in source
     assert "Badge codex" not in source
-    assert "Major honors only" in source
+    assert "Top-three tournament podiums and end-of-league awards" in source
     assert "{error}" not in source
 
 

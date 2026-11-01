@@ -28,27 +28,33 @@ DIRECTORY_SORTS = {"rating", "singles", "matches", "name", "win_pct", "recent"}
 PUBLIC_PROFILE_HISTORY_LIMIT = 500
 PUBLIC_PROFILE_RECENT_LIMIT = 12
 _HTML_TAG_RE = re.compile(r"<[^>]*>")
-_FORMAL_TROPHY_CONTEXTS = {
+_LEAGUE_TROPHY_CONTEXTS = {
     "league",
     "league_award",
     "league_end",
     "league_end_award",
     "season_award",
+}
+_TOURNAMENT_TROPHY_CONTEXTS = {
     "tournament",
     "tournament_award",
     "tournament_podium",
     "podium",
 }
-_FORMAL_TROPHY_CONTEXT_TOKENS = (":podium:", ":top_performer:", ":league_award:")
-_REPEATABLE_BADGE_TOKENS = (
-    "level_up",
-    "hot_streak",
-    "rocket_start",
-    "blowout_artist",
-    "bounce_back",
-    "first_win",
-    "participant",
-)
+_PODIUM_BADGE_PLACEMENTS = {
+    "tournament_champion": 1,
+    "tournament_runner_up": 2,
+    "tournament_third_place": 3,
+    "league_champion": 1,
+    "league_runner_up": 2,
+    "league_third_place": 3,
+}
+_LEAGUE_TOP_PERFORMER_BADGES = {
+    "top_performer_highest_rating",
+    "top_performer_most_improved",
+    "top_performer_best_win_pct",
+    "top_performer_most_wins",
+}
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -446,17 +452,38 @@ def _fetch_badge_definitions(supabase: Any) -> dict[str, dict[str, Any]]:
 
 
 def _placement_from_award(row: dict[str, Any]) -> int | None:
+    """Read an award's rank, never a win total or rating gain as a place."""
+
+    def placement(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        number = _float_or_none(value)
+        return int(number) if number is not None and number.is_integer() else None
+
     value_json = _json_object(row.get("value_json"))
-    placement = _int_or_none(value_json.get("placement")) or _int_or_none(row.get("value_num"))
-    if placement is not None:
-        return placement
-    match = re.search(r":podium:(\d+)$", str(row.get("context_id") or ""))
-    return _int_or_none(match.group(1)) if match else None
+    for key in ("placement", "podium_place", "rank"):
+        if value_json.get(key) not in (None, ""):
+            return placement(value_json[key])
+    match = re.search(
+        r":(?:podium|top_performer:[^:]+):(\d+)$",
+        str(row.get("context_id") or "").strip(),
+        re.IGNORECASE,
+    )
+    if match:
+        return placement(match.group(1))
+    badge_id = str(row.get("badge_id") or "").strip().casefold()
+    # Legacy podium badges store a place in value_num. Other badges store
+    # performance metrics there, including end-of-league Top Performer awards.
+    if badge_id in _PODIUM_BADGE_PLACEMENTS or badge_id == "podium":
+        if row.get("value_num") not in (None, ""):
+            return placement(row["value_num"])
+        return _PODIUM_BADGE_PLACEMENTS.get(badge_id)
+    return None
 
 
 def _award_context_label(row: dict[str, Any]) -> str | None:
     value_json = _json_object(row.get("value_json"))
-    for key in ("tournament_name", "league_name", "league", "season_label"):
+    for key in ("tournament_name", "league_name", "league", "league_id", "season_label"):
         label = _plain_text(value_json.get(key), limit=160)
         if label:
             return label
@@ -467,29 +494,20 @@ def _award_context_label(row: dict[str, Any]) -> str | None:
 
 
 def _is_formal_trophy(row: dict[str, Any], badge_id: str) -> bool:
-    """Keep the public Trophy Case for one-time major honors only.
+    """Only top-three tournament podiums and end-of-league award ranks qualify."""
 
-    Repeatable progression badges can be issued in a league or tournament
-    context too, so context alone is not enough.  A trophy needs durable
-    evidence of an end-of-league award or a tournament podium placement.
-    """
-
-    normalized_badge_id = badge_id.casefold()
-    if any(token in normalized_badge_id for token in _REPEATABLE_BADGE_TOKENS):
-        return False
+    normalized_badge_id = badge_id.strip().casefold()
     context_type = str(row.get("context_type") or "").strip().casefold()
-    if context_type not in _FORMAL_TROPHY_CONTEXTS:
-        return False
-    context_id = str(row.get("context_id") or "").casefold()
-    value_json = _json_object(row.get("value_json"))
-    if _placement_from_award(row) is not None:
-        return True
-    if any(token in context_id for token in _FORMAL_TROPHY_CONTEXT_TOKENS):
-        return True
-    return any(
-        value_json.get(key) not in (None, "")
-        for key in ("award_key", "category_key", "category_label", "podium_place")
+    is_tournament_podium = context_type in _TOURNAMENT_TROPHY_CONTEXTS and (
+        normalized_badge_id == "podium"
+        or (normalized_badge_id.startswith("tournament_") and normalized_badge_id in _PODIUM_BADGE_PLACEMENTS)
     )
+    is_league_end_award = context_type in _LEAGUE_TROPHY_CONTEXTS and (
+        normalized_badge_id in _LEAGUE_TOP_PERFORMER_BADGES
+        or normalized_badge_id == "podium"
+        or (normalized_badge_id.startswith("league_") and normalized_badge_id in _PODIUM_BADGE_PLACEMENTS)
+    )
+    return (is_tournament_podium or is_league_end_award) and _placement_from_award(row) in {1, 2, 3}
 
 
 def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict[str, Any]:
