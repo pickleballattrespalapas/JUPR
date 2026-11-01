@@ -19,6 +19,7 @@ import type { PublicPlayer } from "@/lib/api";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import type { StartingRatingReviewRow } from "@/components/StartingRatingReview";
+import { clearLeagueLiveSetupDraft, leagueLiveSetupDraftKey, readLeagueLiveSetupDraft, writeLeagueLiveSetupDraft, type SetupDraftSaveState } from "@/lib/leagueLiveSetupDraft";
 
 const StartingRatingReview = dynamic(() => import("@/components/StartingRatingReview"), { ssr: false });
 const CourtReserveRosterImport = dynamic(() => import("@/components/CourtReserveRosterImport"), { ssr: false });
@@ -150,6 +151,53 @@ type LeagueLivePlayerOperationResponse = {
   error_text?: string | null;
   recovery_required?: boolean;
 };
+
+type LeagueLiveSetupDraft = {
+  workflowStep: 1 | 2 | 3;
+  weekTag: string;
+  roundNumber: string;
+  totalRounds: string;
+  roundLabel: string;
+  matchDate: string;
+  sessionNotes: string;
+  attendeePlayerIds: number[];
+  requestedStartingRatings: Record<string, string>;
+  pastedPlayerText: string;
+  pastedPlayerResolutions: PastedPlayerResolution[];
+  pasteDuplicateNames: string[];
+  pasteResolutionCurrent: boolean;
+  pastedSelectedPlayerIds: number[];
+  missingPlayerDrafts: MissingPlayerDraft[];
+  sessionRoster: LeagueLiveRosterRow[];
+  rosterSuggestion: LeagueLiveRosterSuggestion | null;
+  courts: CourtDraft[];
+  benchOverrideIds: number[];
+  benchOverrideReason: string;
+  selectedPlayers: PublicPlayer[];
+  createRecovery?: LeagueLiveCreateRecovery | null;
+  playerCreateRecovery?: LeagueLivePlayerCreateRecovery | null;
+};
+
+function isLeagueLiveSetupDraft(value: unknown): value is LeagueLiveSetupDraft {
+  if (!value || typeof value !== "object") return false;
+  const draft = value as LeagueLiveSetupDraft;
+  const ids = (value: unknown) => Array.isArray(value) && value.every(id => Number.isSafeInteger(id) && id > 0);
+  const strings = (value: unknown) => Array.isArray(value) && value.every(item => typeof item === "string");
+  const recovery = (value: LeagueLiveCreateRecovery | null | undefined) => value == null || [value.operationKey, value.status, value.message].every(item => typeof item === "string");
+  return [1, 2, 3].includes(draft.workflowStep)
+    && recovery(draft.createRecovery) && recovery(draft.playerCreateRecovery)
+    && [draft.weekTag, draft.roundNumber, draft.totalRounds, draft.roundLabel, draft.matchDate, draft.sessionNotes, draft.pastedPlayerText, draft.benchOverrideReason].every(item => typeof item === "string")
+    && ids(draft.attendeePlayerIds) && ids(draft.pastedSelectedPlayerIds) && ids(draft.benchOverrideIds)
+    && strings(draft.pasteDuplicateNames) && typeof draft.pasteResolutionCurrent === "boolean"
+    && !!draft.requestedStartingRatings && typeof draft.requestedStartingRatings === "object"
+    && Object.values(draft.requestedStartingRatings).every(item => typeof item === "string")
+    && Array.isArray(draft.pastedPlayerResolutions) && draft.pastedPlayerResolutions.every(row => row && typeof row.inputName === "string" && ["existing", "missing", "ambiguous"].includes(row.status))
+    && Array.isArray(draft.missingPlayerDrafts) && draft.missingPlayerDrafts.every(row => row && typeof row.name === "string" && typeof row.startingJupr === "string")
+    && Array.isArray(draft.courts) && draft.courts.every(row => row && [row.court, row.formatType, row.playerNames].every(item => typeof item === "string"))
+    && Array.isArray(draft.sessionRoster) && draft.sessionRoster.every(row => row && Number.isSafeInteger(row.player_id) && typeof row.player_name === "string" && ["active", "bench"].includes(row.status))
+    && (!draft.rosterSuggestion || (Array.isArray(draft.rosterSuggestion.roster) && Array.isArray(draft.rosterSuggestion.bench) && Array.isArray(draft.rosterSuggestion.courts)))
+    && Array.isArray(draft.selectedPlayers) && draft.selectedPlayers.every(player => player && Number.isSafeInteger(Number(player.id)) && typeof player.name === "string");
+}
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", minWidth: 0, boxSizing: "border-box" as const, padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
@@ -629,6 +677,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [checkingCreateRecovery, setCheckingCreateRecovery] = useState(false);
   const [roundPublished, setRoundPublished] = useState(false);
   const [lastPublishedRound, setLastPublishedRound] = useState<number | null>(null);
+  const [setupDraftSaveState, setSetupDraftSaveState] = useState<SetupDraftSaveState | null>(null);
+  const [setupDraftRestored, setSetupDraftRestored] = useState(false);
+  const hydratedSetupDraftRef = useRef("");
+  const setupOperatorId = session?.user?.id || session?.user?.email || session?.capabilities?.user?.email || "";
+  const setupDraftKey = leagueLiveSetupDraftKey(clubId, setupOperatorId, leagueName);
   const restoringRoundDraftRef = useRef(false);
   const createSessionOperationRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const createPlayersOperationRef = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -691,6 +744,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
 
   function retainCreateRecovery(recovery: LeagueLiveCreateRecovery) {
     setCreateRecovery(recovery);
+    retainSetupOperation({ createRecovery: recovery });
     try {
       globalThis.sessionStorage?.setItem(
         createRecoveryStorageKey,
@@ -703,6 +757,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
 
   function clearCreateRecovery() {
     setCreateRecovery(null);
+    retainSetupOperation({ createRecovery: null });
     createSessionOperationRef.current = null;
     try {
       globalThis.sessionStorage?.removeItem(createRecoveryStorageKey);
@@ -713,6 +768,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
 
   function retainPlayerCreateRecovery(recovery: LeagueLivePlayerCreateRecovery) {
     setPlayerCreateRecovery(recovery);
+    retainSetupOperation({ playerCreateRecovery: recovery });
     try {
       globalThis.sessionStorage?.setItem(
         playerCreateRecoveryStorageKey,
@@ -725,6 +781,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
 
   function clearPlayerCreateRecovery() {
     setPlayerCreateRecovery(null);
+    retainSetupOperation({ playerCreateRecovery: null });
     createPlayersOperationRef.current = null;
     try {
       globalThis.sessionStorage?.removeItem(playerCreateRecoveryStorageKey);
@@ -876,6 +933,65 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const hasEnteredRoundScores = Object.values(scores).some(scoreHasValue) || Object.keys(gameEdits).length > 0;
   const courtEditingLocked = busy || hasEnteredRoundScores || scoresPublished || roundPublished || (sessionIsCurrentLeague && sessionStatus !== "active");
   const hasUnsubmittedRoundWork = Boolean(!scoresPublished && sessionIsCurrentLeague && preview && (hasEnteredRoundScores || scoresReviewed || movementPlan));
+
+  useEffect(() => {
+    // Hydrate only after the authenticated league read. Auth refresh, league
+    // switching, and session loading must never autosave their empty resets.
+    if (!accessToken || !setupDraftKey || hydratedSetupDraftRef.current !== setupDraftKey || loadedSessionId || sessionId || loadedLeagueName !== leagueName || !detail) return;
+    const draft: LeagueLiveSetupDraft = {
+      workflowStep: workflowStep <= 3 ? workflowStep as 1 | 2 | 3 : 3,
+      weekTag, roundNumber, totalRounds, roundLabel, matchDate, sessionNotes,
+      attendeePlayerIds, requestedStartingRatings, pastedPlayerText,
+      pastedPlayerResolutions, pasteDuplicateNames, pasteResolutionCurrent,
+      pastedSelectedPlayerIds, missingPlayerDrafts, sessionRoster,
+      rosterSuggestion, courts, benchOverrideIds, benchOverrideReason,
+      selectedPlayers: knownPlayers.filter(player => attendeePlayerIds.includes(Number(player.id))),
+      createRecovery, playerCreateRecovery,
+    };
+    setSetupDraftSaveState(writeLeagueLiveSetupDraft(setupDraftKey, draft));
+  }, [accessToken, setupDraftKey, loadedSessionId, sessionId, loadedLeagueName, leagueName, detail, workflowStep, weekTag, roundNumber, totalRounds, roundLabel, matchDate, sessionNotes, attendeePlayerIds, requestedStartingRatings, pastedPlayerText, pastedPlayerResolutions, pasteDuplicateNames, pasteResolutionCurrent, pastedSelectedPlayerIds, missingPlayerDrafts, sessionRoster, rosterSuggestion, courts, benchOverrideIds, benchOverrideReason, knownPlayers, createRecovery, playerCreateRecovery]);
+
+  function retainSetupOperation(recovery: Pick<LeagueLiveSetupDraft, "createRecovery" | "playerCreateRecovery">) {
+    // Write before sending the request, without waiting for a React effect.
+    // A closed tab must reconcile that same operation, not submit a duplicate.
+    const saved = readLeagueLiveSetupDraft(setupDraftKey, isLeagueLiveSetupDraft);
+    if (saved) setSetupDraftSaveState(writeLeagueLiveSetupDraft(setupDraftKey, { ...saved.data, ...recovery }));
+  }
+
+  function restoreSetupDraft(selectedLeague: string): boolean {
+    const key = leagueLiveSetupDraftKey(clubId, setupOperatorId, selectedLeague);
+    const saved = readLeagueLiveSetupDraft(key, isLeagueLiveSetupDraft);
+    hydratedSetupDraftRef.current = key;
+    if (!saved) return false;
+    const draft = saved.data;
+    setWeekTag(draft.weekTag); setRoundNumber(draft.roundNumber); setTotalRounds(draft.totalRounds);
+    setRoundLabel(draft.roundLabel); setMatchDate(draft.matchDate); setSessionNotes(draft.sessionNotes);
+    setAttendeePlayerIds(draft.attendeePlayerIds); setRequestedStartingRatings(draft.requestedStartingRatings);
+    setPastedPlayerText(draft.pastedPlayerText); setPastedPlayerResolutions(draft.pastedPlayerResolutions);
+    setPasteDuplicateNames(draft.pasteDuplicateNames); setPasteResolutionCurrent(draft.pasteResolutionCurrent);
+    setPastedSelectedPlayerIds(draft.pastedSelectedPlayerIds); setMissingPlayerDrafts(draft.missingPlayerDrafts);
+    setSessionRoster(draft.sessionRoster); setRosterSuggestion(draft.rosterSuggestion); setCourts(draft.courts);
+    setBenchOverrideIds(draft.benchOverrideIds); setBenchOverrideReason(draft.benchOverrideReason);
+    if (draft.createRecovery) setCreateRecovery(draft.createRecovery);
+    if (draft.playerCreateRecovery) setPlayerCreateRecovery(draft.playerCreateRecovery);
+    setKnownPlayers(current => {
+      const byId = new Map(draft.selectedPlayers.map(player => [Number(player.id), player]));
+      for (const player of current) byId.set(Number(player.id), player);
+      return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+    });
+    setWorkflowStep(draft.workflowStep);
+    setSetupDraftRestored(true);
+    // Starting-rating eligibility and preview are revalidated against the API;
+    // the operator's selected players and arranged positions stay intact.
+    setMessage("Restored your unfinished setup. Review the saved date and continue where you left off.");
+    return true;
+  }
+
+  async function discardSetupDraft(): Promise<ActionCompletion> {
+    if (!clearLeagueLiveSetupDraft(setupDraftKey)) throw new Error("Unable to clear the saved setup. Check browser storage before starting again.");
+    await loadLeagueDetail();
+    return actionSuccess("Setup restarted", "A new setup is ready for this league.");
+  }
 
   useEffect(() => {
     if (restoringRoundDraftRef.current || !sessionIsCurrentLeague || !loadedSessionId || !sessionUpdatedAt) return;
@@ -1077,6 +1193,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   function clearPersistedSessionBinding(selectedSessionId = "") {
+    hydratedSetupDraftRef.current = "";
+    setSetupDraftSaveState(null);
+    setSetupDraftRestored(false);
     setSessionId(selectedSessionId);
     setLoadedSessionId("");
     setRequestedStartingRatings({});
@@ -1359,6 +1478,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         ? createPlayersOperationRef.current.key
         : `league-live-players:${globalThis.crypto.randomUUID()}`;
       createPlayersOperationRef.current = { fingerprint: requestFingerprint, key: idempotencyKey };
+      retainPlayerCreateRecovery({ operationKey: idempotencyKey, status: "checking", message: "Player creation was requested. Check its saved outcome before trying again.", leagueName });
       const payload = await requestJson<AdminMatchUploaderCreatePlayersResult>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/players`, {
         method: "POST",
         body: JSON.stringify({
@@ -1387,6 +1507,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         return player ? { ...row, status: "existing", playerId: Number(player.id), playerName: player.name } : row;
       }));
       setMissingPlayerDrafts([]);
+      clearPlayerCreateRecovery();
       invalidateFlexRosterPlan(`Created or confirmed ${payload.accepted_count ?? createdIds.length} player profile${(payload.accepted_count ?? createdIds.length) === 1 ? "" : "s"} and added them to this session.`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unable to create the missing players.";
@@ -1401,7 +1522,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           setMessage(`${errorMessage} The outcome is uncertain; inspect Player Editor before retrying.`);
         }
       } else {
-        createPlayersOperationRef.current = null;
+        clearPlayerCreateRecovery();
         setMessage(errorMessage);
       }
     } finally {
@@ -1624,6 +1745,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setDetail(payload);
       setMatchStructure(matchStructureFromDetail(payload));
       setLoadedLeagueName(selectedLeague);
+      if (restoreSetupDraft(selectedLeague)) return;
       if (participationModeFromDetail(payload) === "flex") {
         setAttendeePlayerIds([]);
         setRosterSuggestion(null);
@@ -1760,6 +1882,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     if (!recovered.session) throw new Error("The completed operation did not include its League Live session.");
     const leagueDetail = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(recovered.session.league_name)}`);
     applySession(recovered.session, recovered.courts || [], recovered.rounds || [], [], leagueDetail);
+    clearLeagueLiveSetupDraft(leagueLiveSetupDraftKey(clubId, setupOperatorId, recovered.session.league_name));
     setMatchDate("");
     setWorkflowStep(1);
     setLiveSessions((current) => resumableSessionsForLeague([
@@ -1870,6 +1993,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       ? createSessionOperationRef.current.key
       : `league-live:${globalThis.crypto.randomUUID()}`;
     createSessionOperationRef.current = { fingerprint: requestFingerprint, key: idempotencyKey };
+    retainCreateRecovery({ operationKey: idempotencyKey, status: "checking", message: "Session creation was requested. Check its saved outcome before creating another session." });
     setBusy(true);
     setMessage(null);
     try {
@@ -1880,6 +2004,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       createSessionOperationRef.current = null;
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the League Live creation response was applied.");
       applySession(payload.session, payload.courts || [], [], [], detail);
+      hydratedSetupDraftRef.current = "";
+      clearLeagueLiveSetupDraft(setupDraftKey);
+      clearCreateRecovery();
       setPreview(retainedPreview);
       setScores(retainedScores);
       setGameEdits(retainedGameEdits);
@@ -1906,7 +2033,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           () => reconcileCreateSession(recovery)
         );
       }
-      createSessionOperationRef.current = null;
+      clearCreateRecovery();
       throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -3023,6 +3150,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
 
       {sessionIsCurrentLeague ? <LeagueSavedRoundScores key={loadedSessionId} rounds={roundHistory} playerNames={playerNamesById} busy={busy} onRefresh={() => void refreshSavedRoundScores()} /> : null}
 
+      {!sessionId && setupDraftSaveState ? <section aria-label="Setup draft saving" style={{ ...cardStyle, background: setupDraftSaveState === "saved" ? "#f0fdf4" : "#fffbeb" }}>
+        <p role="status" style={{ marginTop: 0 }}>{setupDraftSaveState === "saved"
+          ? `${setupDraftRestored ? "Restored setup. " : ""}Setup automatically saved on this browser. You can close this tab and continue here later.`
+          : setupDraftSaveState === "tab_only"
+            ? "Setup is saved only in this tab. Browser storage is unavailable; keep this tab open until the session is created."
+            : "Setup could not be saved. Keep this page open until browser storage is available or the session is created."}</p>
+        <ConfirmAction triggerLabel="Discard setup and start again" title="Discard this unfinished setup?" description="Clears this browser's setup draft for this league, including selected players and court arrangements." confirmLabel="Discard setup" confirmationText="DISCARD SETUP" disabled={busy || Boolean(createRecovery) || Boolean(playerCreateRecovery)} busy={busy} onConfirm={discardSetupDraft} />
+      </section> : null}
+
       <nav aria-label="League Live workflow" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))", gap: "0.5rem" }}>
         {WORKFLOW_STEPS.map((step) => {
           const active = workflowStep === step.id;
@@ -3291,7 +3427,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
             </section>
           ) : null}
 
-          {sessionIsCurrentLeague ? <p style={{ color: "#475569" }}><strong>Active persisted session:</strong> {loadedSessionId}</p> : <p style={{ color: "#92400e" }}>This session will be persisted after the court preview is ready.</p>}
+          {sessionIsCurrentLeague ? <p style={{ color: "#475569" }}><strong>Active persisted session:</strong> {loadedSessionId}</p> : <p style={{ color: "#475569" }}>Setup saves automatically on this browser. Create the session after reviewing the courts to make it available from other devices.</p>}
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center" }}>
             <button type="button" onClick={() => setWorkflowStep(2)} disabled={busy} style={ghostButtonStyle}>Back to Players</button>
             {sessionIsCurrentLeague ? (
