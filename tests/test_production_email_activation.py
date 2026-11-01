@@ -50,7 +50,7 @@ def test_api_starts_worker_and_stops_it_on_shutdown(monkeypatch):
     with TestClient(app) as client:
         assert client.get("/health").json()["write_prerequisites"]["player_update_worker_running"]
         task = app.state.player_email_task
-    assert task.cancelled()
+    assert task.done() and not task.cancelled()
 
 
 def test_tournament_handoff_queues_without_delivering_admin_drafts(monkeypatch):
