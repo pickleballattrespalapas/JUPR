@@ -50,6 +50,32 @@ def test_refresh_preserves_explicit_selection_and_omits_removed_sources():
     assert not any(b['key'] == 'events' for b in apply_builder(raw, config)['report']['edition'])
 
 
+def test_email_follows_website_order_and_all_selected_content_until_explicitly_customized():
+    raw = fixture()
+    raw['report']['event_results'] = [
+        {'id': f'draw-{i}', 'kind': 'Tournament', 'title': f'Draw {i}', 'summary': 'Winners', 'details': []}
+        for i in range(8)
+    ]
+    ids = [item['id'] for item in catalog(raw)['events']]
+    config = normalize_config({'order': ['events', 'numbers'], 'email_order': ['numbers', 'events'],
+                               'sections': {'events': {'item_ids': ids[::-1]}}})
+    editions = build_editions(raw, config)
+    assert editions['email_edition'] == editions['edition']
+    assert len(editions['email_edition'][0]['items']) == 8
+    config['sections']['events']['email_item_ids'] = [ids[0], ids[-1]]
+    linked = build_editions(raw, config)['email_edition']
+    assert [item['id'] for item in linked[0]['items']] == [ids[-1], ids[0]]
+    config['email_order_mode'] = 'custom'
+    custom = build_editions(raw, config)['email_edition']
+    assert [block['key'] for block in custom][:2] == ['numbers', 'events']
+    assert [item['id'] for item in custom[1]['items']] == [ids[0], ids[-1]]
+    assert normalize_config(config, template=True)['email_order_mode'] == 'custom'
+    config['email_order_mode'] = 'website'
+    assert build_editions(raw, config)['email_edition'] == linked
+    config['sections']['events']['email_item_ids'] = []
+    assert not any(block['key'] == 'events' for block in build_editions(raw, config)['email_edition'])
+
+
 def test_templates_keep_statistics_and_drop_week_specific_stories():
     config = normalize_config({'sections': {'numbers': {'item_ids': ['matches']}, 'events': {'item_ids': ['event-1']}}, 'custom_blocks': [{'id': 'story', 'text': 'Old story'}], 'step': 4}, template=True)
     assert config['sections']['numbers']['item_ids'] == ['matches']

@@ -348,6 +348,9 @@ async function confirm(page, label, text) {
       .getByLabel("Summary", { exact: true })
       .fill("Celebrating our division winners");
     await tournamentText
+      .getByLabel("Type label", { exact: true })
+      .fill("Halloween Tournament");
+    await tournamentText
       .getByLabel("Detail 1", { exact: true })
       .fill("Gold: Alex and Bea — well played!");
     const leagueText = textEditor
@@ -380,6 +383,7 @@ async function confirm(page, label, text) {
       (await preview.innerText()).includes("Gold: Alex and Bea — well played!"),
     );
     assert((await preview.innerText()).includes("Explore the league results"));
+    const websiteItemOrder = await preview.locator("[data-recap-item]").evaluateAll(nodes => nodes.map(node => node.dataset.recapItem));
     await page
       .getByRole("button", { name: "Member email", exact: true })
       .click();
@@ -389,6 +393,20 @@ async function confirm(page, label, text) {
     await emailFrame
       .getByText("Club tournament champions", { exact: true })
       .waitFor();
+    await emailFrame.getByText("Halloween Tournament", { exact: true }).waitFor();
+    await emailFrame.getByRole("link", { name: "Explore the league results", exact: true }).waitFor();
+    await emailFrame.getByText("Gold: Alex and Bea — well played!", { exact: true }).waitFor();
+    const emailOrderMode = page.getByLabel("Member email order", { exact: true });
+    assert.equal(await emailOrderMode.inputValue(), "custom");
+    await emailOrderMode.selectOption("website");
+    await emailFrame.getByText("Club tournament champions", { exact: true }).waitFor();
+    const emailItemOrder = await emailFrame.locator("[data-recap-item]").evaluateAll(nodes => nodes.map(node => node.dataset.recapItem));
+    assert.deepEqual(emailItemOrder, websiteItemOrder.filter(id => emailItemOrder.includes(id)), "The actual email HTML follows website order while retaining email selections");
+    await page.screenshot({ path: path.join(output, "email-follows-website.png"), fullPage: true });
+    await page.getByRole("button", { name: "Arrange content", exact: true }).click();
+    await page.getByRole("button", { name: "Move Autumn social up in email", exact: true }).click();
+    assert.equal(await emailOrderMode.inputValue(), "custom", "A deliberate email move starts a separate order");
+    await page.getByRole("button", { name: "Done arranging", exact: true }).click();
     await page.getByRole("button", { name: "Edit text", exact: true }).click();
     assert.equal(
       await tournamentText.getByLabel("Title", { exact: true }).inputValue(),

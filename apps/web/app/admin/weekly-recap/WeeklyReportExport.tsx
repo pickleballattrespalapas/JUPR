@@ -81,17 +81,17 @@ export default function WeeklyReportExport({
         Exports use the content selected in your current preview.
       </p>
       <label>
-        Content size{" "}
+        Export content{" "}
         <select
           value={compact ? "compact" : "full"}
           onChange={(e) => setCompact(e.target.value === "compact")}
         >
-          <option value="compact">Compact newsletter section</option>
-          <option value="full">Full weekly report</option>
+          <option value="compact">Member email selections</option>
+          <option value="full">Website edition</option>
         </select>
       </label>
       <p style={{ fontSize: 14 }}>
-        The compact section uses your email selections. Published reports
+        The member email keeps your edited text and card styles. Published reports
         include a link to the complete report.
       </p>
       <div style={{ display: "flex", flexWrap: "wrap", gap: ".6rem" }}>

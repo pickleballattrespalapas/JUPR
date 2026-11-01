@@ -130,12 +130,6 @@ const otherGroups: Array<{
     description: "Choose the totals you want to show members.",
   },
 ];
-const emailLimits: Partial<Record<SectionKey, number>> = {
-  events: 3,
-  races: 2,
-  achievements: 3,
-  spotlight: 2,
-};
 type Spotlight = RecapEdits["spotlight_overrides"][string];
 
 export default function RecapEvidencePicker({
@@ -223,7 +217,7 @@ export default function RecapEvidencePicker({
   function emailSelected(section: SectionKey) {
     return (
       builder.sections[section].email_item_ids ||
-      selected(section).slice(0, emailLimits[section] || 150)
+      selected(section)
     );
   }
   const activeGroups = groups.filter((group) =>

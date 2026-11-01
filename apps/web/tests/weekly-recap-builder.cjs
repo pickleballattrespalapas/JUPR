@@ -234,6 +234,7 @@ const editedHtml = buildWeeklyReportEmail(
 );
 for (const copy of [
   "Thursday champions",
+  "Social play",
   "Congratulations, Cam!",
   "See our recorded league week",
   "Courtesy of Morgan",
@@ -245,6 +246,13 @@ for (const copy of [
   "Read the entire recap",
 ])
   assert(editedHtml.includes(copy), copy);
+assert(editedHtml.includes("data-number-cards") && editedHtml.includes("font-size:26px"), "Email preserves the website's number-card presentation");
+assert(!editedHtml.includes("letter-spacing:1.7px"), "Edited section headings retain normal heading formatting");
+const draftEditedReport = structuredClone(editedEditions);
+for (const channel of ["edition", "email_edition"]) draftEditedReport[channel].find(block => block.key === "events").items.find(item => item.title === "Thursday champions").href = "round-robin-generator/shared/test-session/standings";
+const draftEditedHtml = buildWeeklyReportEmail({ report: draftEditedReport }, { origin: "https://staging.example.invalid", clubSlug: "test", published: false });
+assert(draftEditedHtml.includes("See the final standings") && draftEditedHtml.includes("See our recorded league week"), "Draft email previews retain edited results-link wording");
+assert(draftEditedHtml.includes("DRAFT PREVIEW") && !draftEditedHtml.includes("View the full weekly report"), "An unpublished recap still has no live recap link");
 assert(!editedHtml.includes("Must never appear"));
 assert.equal(layoutTemplate(textConfig).text_overrides, undefined);
 assert.equal(layoutTemplate(textConfig).display_text, undefined);
