@@ -64,6 +64,54 @@ def test_shared_client_server_projection_fixture():
     assert build_editions(fixture(), shared['config']) == shared['expected']
 
 
+def test_tournament_draws_with_same_legacy_title_keep_their_own_podiums():
+    shared = json.loads(Path('apps/web/tests/fixtures/weekly-recap-draws.json').read_text())
+    raw = shared['recap']
+    before = deepcopy(raw)
+    groups = catalog(raw)
+    assert groups == shared['catalog']
+    ids = [item['id'] for item in groups['events']]
+    assert len(ids) == len(set(ids)) == 4
+    # Old checkboxes selected both draws via one ID. Expand that exact choice.
+    for key in ('edition', 'email_edition'):
+        items = build_editions(raw, shared['config'])[key][0]['items']
+        assert [item['lines'][0] for item in items] == shared['winners']
+    reordered = deepcopy(raw)
+    reordered['report']['event_results'].reverse()
+    assert {item['lines'][0]: item['id'] for item in catalog(reordered)['events']} == {
+        item['lines'][0]: item['id'] for item in groups['events']}
+    config = {'sections': {'events': {'item_ids': [ids[0], ids[3]], 'email_item_ids': [ids[3]]}}}
+    editions = build_editions(raw, config)
+    assert [item['lines'][0] for item in editions['edition'][0]['items']] == [shared['winners'][0], shared['winners'][3]]
+    assert [item['lines'][0] for item in editions['email_edition'][0]['items']] == [shared['winners'][3]]
+    assert raw == before
+
+
+def test_tournament_refresh_preserves_selections_without_transferring_ambiguous_edits():
+    shared = json.loads(Path('apps/web/tests/fixtures/weekly-recap-draws.json').read_text())
+    old_catalog = catalog(shared['recap'])
+    current = shared['refreshed']
+    assert catalog(current) == shared['refreshed_catalog']
+    selected = old_catalog['events'][0]['id']
+    config = {'sections': {'events': {'item_ids': [selected]}}, 'text_overrides': {
+        selected: {'title': 'Featured champions'}, shared['config']['sections']['events']['item_ids'][0]: {'title': 'Ambiguous edit'}}}
+    items = build_editions(current, config)['edition'][0]['items']
+    assert len(items) == 1 and items[0]['lines'][0] == shared['winners'][0]
+    assert items[0]['title'] == 'Featured champions'
+    all_config = deepcopy(shared['config'])
+    all_config['text_overrides'] = {shared['config']['sections']['events']['item_ids'][0]: {'title': 'Ambiguous edit'}}
+    all_items = build_editions(current, all_config)['edition'][0]['items']
+    assert [item['lines'][0] for item in all_items] == shared['winners']
+    assert all(item['title'] != 'Ambiguous edit' for item in all_items)
+    public = sanitize_public_recap_json(apply_builder(deepcopy(current), config), week_start='2026-10-26', week_end='2026-11-01')
+    assert 'selection_aliases' not in public['report']['edition'][0]['items'][0]
+    before = [item['id'] for item in catalog(current)['events']]
+    renamed = deepcopy(current)
+    renamed['report']['event_results'][0]['title'] = 'A renamed championship draw'
+    renamed['report']['event_results'][0]['details'][0] = '1. Corrected names'
+    assert [item['id'] for item in catalog(renamed)['events']] == before
+
+
 def test_compact_ladder_recognition_uses_selected_courts_and_retains_every_name():
     shared = json.loads(Path('apps/web/tests/fixtures/weekly-recap-courts.json').read_text())
     recap = {'report': {'event_results': [{**item, 'summary': item['text'], 'details': item['lines']} for item in shared['events']]}}

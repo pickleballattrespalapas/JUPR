@@ -1,4 +1,5 @@
-import type { RecapBlock } from "@/lib/recapBuilder";
+import type { ReactNode } from "react";
+import type { RecapBlock, RecapItem } from "@/lib/recapBuilder";
 import { reportPath, emailUrl } from "@/lib/weeklyReportEmail";
 import Link from "@/components/PublicClubLink";
 
@@ -7,11 +8,15 @@ export default function RecapEdition({
   clubSlug,
   scopeLabel,
   scopeText,
+  sectionActions,
+  itemActions,
 }: {
   blocks: RecapBlock[];
   clubSlug: string;
   scopeLabel?: string;
   scopeText?: string;
+  sectionActions?: (block: RecapBlock, index: number) => ReactNode;
+  itemActions?: (block: RecapBlock, item: RecapItem, index: number) => ReactNode;
 }) {
   const scope =
     scopeText ??
@@ -19,12 +24,13 @@ export default function RecapEdition({
   return (
     <div className="recap-edition" data-testid="recap-edition">
       {scope ? <p>{scope}</p> : null}
-      {blocks.map((block) => (
+      {blocks.map((block, blockIndex) => (
         <section
           key={block.key}
           data-section={block.key}
           style={{ marginBottom: "1.8rem", breakInside: "avoid" }}
         >
+          {sectionActions?.(block, blockIndex)}
           {block.title ? (
             <h2
               style={{
@@ -42,7 +48,7 @@ export default function RecapEdition({
                 : { display: "grid", gap: "1rem" }
             }
           >
-            {block.items.map((item) => (
+            {block.items.map((item, itemIndex) => (
               <article
                 key={item.id}
                 data-recap-item={item.id}
@@ -68,6 +74,7 @@ export default function RecapEdition({
                     : {}),
                 }}
               >
+                {itemActions?.(block, item, itemIndex)}
                 {item.kind && ["events", "custom"].includes(block.key) ? (
                   <small
                     style={{
