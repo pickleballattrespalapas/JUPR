@@ -52,7 +52,8 @@ const Panel = load("app/admin/league-manager/live/LeagueLiveRoundPanel.tsx", {
   "@/components/ConfirmAction": { ConfirmAction },
   "@/components/interaction": load("components/interaction/types.ts"),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "test-token", session: {} }), adminSessionLabel: () => "Signed in" },
-  "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts")
+  "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),
+  "@/lib/leagueLiveSetupDraft": load("lib/leagueLiveSetupDraft.ts")
 }).default;
 
 const leagueName = "Sunday Ladder";
