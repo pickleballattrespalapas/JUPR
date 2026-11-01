@@ -1,5 +1,5 @@
 import type { WeeklyRecapJson } from "./weeklyRecapApi";
-import type { RecapItem } from "./recapBuilder";
+import type { RecapItem, SectionKey } from "./recapBuilder";
 
 const font = "font-family:Arial,Helvetica,sans-serif;";
 const body = `${font}font-size:16px;line-height:26px;color:#263e3a;`;
@@ -54,10 +54,10 @@ function p(value: unknown) {
   return `<p style="${body}margin:0 0 12px;">${esc(value).replace(/\n/g, "<br>")}</p>`;
 }
 function list(values: string[]) {
-  return `<ul style="${body}margin:0 0 12px;padding-left:22px;">${values.map((v) => `<li style="margin:0 0 5px;">${esc(v)}</li>`).join("")}</ul>`;
+  return `<ul style="${body}margin:0 0 12px;padding-left:22px;">${values.map((v) => `<li style="margin:0 0 5px;">${esc(v).replace(/\n/g, "<br>")}</li>`).join("")}</ul>`;
 }
 function section(label: string, content: string, sand = false) {
-  return `<tr data-recap-block><td bgcolor="${sand ? "#f8f3e9" : "#ffffff"}" style="padding:24px;border-top:1px solid #e6e8e1;"><h2 style="${font}font-size:12px;line-height:18px;font-weight:bold;letter-spacing:1.7px;color:#17665c;margin:0 0 14px;">${esc(label)}</h2>${content}</td></tr>`;
+  return `<tr data-recap-block><td bgcolor="${sand ? "#f8f3e9" : "#ffffff"}" style="padding:24px;border-top:1px solid #e6e8e1;">${label ? `<h2 style="${font}font-size:19px;line-height:26px;font-weight:bold;color:#123e37;margin:0 0 14px;">${esc(label)}</h2>` : ""}${content}</td></tr>`;
 }
 function button(label: string, url: string) {
   return url && label
@@ -72,7 +72,7 @@ export type WeeklyEmailOptions = {
   clubSlug: string;
   published?: boolean;
 };
-function story(item: RecapItem, options: WeeklyEmailOptions) {
+function story(item: RecapItem, options: WeeklyEmailOptions, sectionKey?: SectionKey) {
   const image =
     emailUrl(item.image_url) ||
     (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(
@@ -95,7 +95,7 @@ function story(item: RecapItem, options: WeeklyEmailOptions) {
     ? `<img src="${esc(image)}" alt="${esc(item.alt ?? item.title)}" width="${width}" style="display:block;width:100%;max-width:${width}px;${item.image_fit === "cover" ? `height:${Math.round((width * 9) / 16)}px;object-fit:cover;` : "height:auto;"}border-radius:8px;margin:0 0 8px;" />${caption ? `<p style="${font}font-size:13px;line-height:19px;color:#526762;margin:0 0 12px;">${esc(caption)}</p>` : ""}`
     : "";
   const url = emailUrl(item.url);
-  return `<div data-recap-item="${esc(item.id)}" data-card-style="${esc(item.layout || "plain")}" style="${decoration}margin:0 0 16px;overflow-wrap:anywhere;">${styled && item.kind ? `<p style="${font}font-size:12px;line-height:18px;color:#17665c;margin:0 0 6px;">${esc(item.kind)}</p>` : ""}${item.title ? `<h3 style="${h}">${esc(item.title)}</h3>` : ""}${photo}${item.text ? p(item.text) : ""}${item.lines?.length ? list(item.lines) : ""}${options.published && reportPath(options.clubSlug, item.href) ? pLink(item.results_label ?? "View results", reportLink(options.origin, options.clubSlug, item.href!)) : ""}${options.published ? (item.links || []).map((link) => pLink(link.label, reportLink(options.origin, options.clubSlug, link.href))).join("") : ""}${url ? (item.layout === "promotion" ? button(item.link_label ?? "Learn more", url) : pLink(item.link_label ?? "Learn more", url)) : ""}</div>`;
+  return `<div data-recap-item="${esc(item.id)}" data-card-style="${esc(item.layout || "plain")}" style="${decoration}margin:0 0 16px;overflow-wrap:anywhere;">${["events", "custom"].includes(sectionKey || "") && item.kind ? `<p style="${font}font-size:12px;line-height:18px;color:#17665c;margin:0 0 6px;">${esc(item.kind)}</p>` : ""}${item.title ? `<h3 style="${h}">${esc(item.title)}</h3>` : ""}${photo}${item.text ? (sectionKey === "numbers" ? `<p style="${body}font-size:26px;line-height:32px;margin:0 0 12px;">${esc(item.text).replace(/\n/g, "<br>")}</p>` : p(item.text)) : ""}${item.lines?.length ? list(item.lines) : ""}${reportPath(options.clubSlug, item.href) ? pLink(item.results_label ?? "View results", reportLink(options.origin, options.clubSlug, item.href!)) : ""}${(item.links || []).map((link) => pLink(link.label, reportLink(options.origin, options.clubSlug, link.href))).join("")}${url ? (item.layout === "promotion" ? button(item.link_label ?? "Learn more", url) : pLink(item.link_label ?? "Learn more", url)) : ""}</div>`;
 }
 /** Self-contained table fragment fits inside the Tres 620px newsletter. No footer/signoff duplication. */
 export function buildWeeklyReportEmail(
@@ -127,7 +127,9 @@ export function buildWeeklyReportEmail(
       ? report.email_edition || report.edition
       : report.edition;
     for (const block of blocks) {
-      const content = block.items.map((item) => story(item, options)).join("");
+      const content = block.key === "numbers"
+        ? `<table role="presentation" data-number-cards width="100%" cellspacing="0" cellpadding="0">${Array.from({ length: Math.ceil(block.items.length / 3) }, (_, row) => `<tr>${block.items.slice(row * 3, row * 3 + 3).map(item => `<td width="33%" valign="top" style="padding:0 12px 12px 0;">${story(item, options, block.key)}</td>`).join("")}</tr>`).join("")}</table>`
+        : block.items.map((item) => story(item, options, block.key)).join("");
       rows += section(
         block.title,
         content,

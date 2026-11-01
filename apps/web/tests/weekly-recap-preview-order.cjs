@@ -25,11 +25,10 @@ const item = (id, kind, title) => ({ id, kind, title, text: "Winner: Alex", line
 catalog.events = [catalog.events[0], item("rr", "Round robin", "Monday Round Robin"), catalog.events[2], item("court1", "Ladder court", "Court 1"), item("money", "Moneyball", "Moneyball"), item("court2", "Ladder court", "Court 2")];
 catalog.custom = [item("story", "", "Club story")];
 const initial = lib.normalizeBuilder();
-const initialEmail = lib.projectEditions(catalog, initial).email_edition;
 const eventItems = config => lib.projectEditions(catalog, config).edition.find(block => block.key === "events").items;
 let moved = lib.reorderRecapPreview(initial, catalog, "edition", { type: "item", section: "events", itemId: "rr", delta: -1 });
 assert.equal(eventItems(moved)[0].id, "rr");
-assert.deepEqual(lib.projectEditions(catalog, moved).email_edition, initialEmail, "Website movement preserves implicit email selection and order");
+assert.deepEqual(lib.projectEditions(catalog, moved).email_edition, lib.projectEditions(catalog, moved).edition, "Email follows website moves by default");
 const before = new Set(moved.sections.events.item_ids);
 moved = lib.reorderRecapPreview(moved, catalog, "edition", { type: "item", section: "events", itemId: "ladder-court-winners", delta: 1 });
 assert.equal(eventItems(moved).at(-1).id, "ladder-court-winners");
@@ -39,9 +38,24 @@ const grouped = lib.reorderRecapPreview(moved, catalog, "edition", { type: "grou
 assert.deepEqual(eventItems(grouped).map(item => item.kind || item.id), ["Round robin", "Tournament", "Tournament", "Moneyball", "ladder-court-winners"]);
 const movedSection = lib.reorderRecapPreview(initial, catalog, "edition", { type: "section", section: "custom", delta: -1 });
 assert.deepEqual(lib.projectEditions(catalog, movedSection).edition.map(block => block.key), ["custom", "events"]);
-assert.deepEqual(lib.projectEditions(catalog, movedSection).email_edition, initialEmail);
+assert.deepEqual(lib.projectEditions(catalog, movedSection).email_edition, lib.projectEditions(catalog, movedSection).edition);
 const emailMove = lib.reorderRecapPreview(movedSection, catalog, "email_edition", { type: "item", section: "events", itemId: "rr", delta: -1 });
 assert.deepEqual(lib.projectEditions(catalog, emailMove).edition, lib.projectEditions(catalog, movedSection).edition, "Email rearrangement does not change the website");
+assert.equal(emailMove.email_order_mode, "custom");
+const websiteAfterCustom = lib.reorderRecapPreview(emailMove, catalog, "edition", { type: "item", section: "events", itemId: "money", delta: -1 });
+assert.deepEqual(lib.projectEditions(catalog, websiteAfterCustom).email_edition, lib.projectEditions(catalog, emailMove).email_edition, "Explicit custom email order remains independent");
+const relinked = lib.setEmailOrderMode(websiteAfterCustom, catalog, "website");
+assert.deepEqual(lib.projectEditions(catalog, relinked).email_edition, lib.projectEditions(catalog, relinked).edition, "Returning to website order applies all website moves");
+const staleOrder = lib.normalizeBuilder({ order: ["custom", "events"], email_order: ["events", "custom"], sections: { events: { item_ids: ["money", "rr", catalog.events[0].id], email_item_ids: ["rr", "money"] } } });
+const linked = lib.projectEditions(catalog, staleOrder);
+assert.deepEqual(linked.email_edition.map(block => block.key), ["custom", "events"], "Legacy independent section order no longer overrides the default");
+assert.deepEqual(linked.email_edition[1].items.map(item => item.id), ["money", "rr"], "Email follows website order within the explicit checkbox subset");
+const customFromLinked = lib.setEmailOrderMode(staleOrder, catalog, "custom");
+assert.deepEqual(lib.projectEditions(catalog, customFromLinked).email_edition, linked.email_edition, "Switching to custom starts from the visible order without changing selections");
+assert.deepEqual(staleOrder.sections.events.email_item_ids, ["rr", "money"], "Changing modes does not mutate the existing draft");
+assert.equal(lib.projectEditions(catalog, lib.normalizeBuilder({ sections: { events: { email_item_ids: [] } } })).email_edition.some(block => block.key === "events"), false, "An explicitly empty email selection stays empty");
+const manyItems = { events: Array.from({ length: 8 }, (_, i) => item(`event-${i}`, "Tournament", `Draw ${i}`)), spotlight: Array.from({ length: 6 }, (_, i) => item(`spotlight-${i}`, "", `Player ${i}`)) };
+assert.deepEqual(lib.projectEditions(manyItems, initial).email_edition.map(block => block.items.length), [8, 6], "Every selected result appears without hidden email limits");
 assert.strictEqual(lib.reorderRecapPreview(initial, catalog, "edition", { type: "section", section: "events", delta: -1 }), initial, "Top boundary is a no-op");
 
 (async () => {

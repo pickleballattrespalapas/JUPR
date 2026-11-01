@@ -6,7 +6,7 @@ import type {
   SectionKey,
   SectionSetting,
 } from "@/lib/recapBuilder";
-import { RECAP_SECTIONS } from "@/lib/recapBuilder";
+import { RECAP_SECTIONS, projectEditions, reorderRecapPreview, setEmailOrderMode } from "@/lib/recapBuilder";
 import RecapEdition from "@/components/RecapEdition";
 import styles from "./recap-builder.module.css";
 
@@ -54,14 +54,7 @@ export function RecapContentEditor({
     const all = (catalog[key] || []).map((item) => item.id);
     const included = config.item_ids || all;
     const prop = email ? "email_item_ids" : "item_ids";
-    const defaults = email
-      ? included.slice(
-          0,
-          ({ events: 3, races: 2, achievements: 3 } as Record<string, number>)[
-            key
-          ] || 150,
-        )
-      : all;
+    const defaults = email ? included : all;
     const current = config[prop] || defaults;
     section(key, {
       [prop]: checked
@@ -79,14 +72,7 @@ export function RecapContentEditor({
         const config = builder.sections[key];
         const items = catalog[key] || [];
         const selected = config.item_ids || items.map((item) => item.id);
-        const emailIds =
-          config.email_item_ids ||
-          selected.slice(
-            0,
-            (
-              { events: 3, races: 2, achievements: 3 } as Record<string, number>
-            )[key] || 150,
-          );
+        const emailIds = config.email_item_ids || selected;
         const sorted = [...items].sort((a, b) => {
           const ai = selected.indexOf(a.id),
             bi = selected.indexOf(b.id);
@@ -275,144 +261,37 @@ function RecapEmailOrder({
   onChange: (value: BuilderConfig) => void;
   disabled: boolean;
 }) {
-  const order = builder.email_order || builder.order;
-  function selected(key: SectionKey) {
-    const section = builder.sections[key];
-    const available = (catalog[key] || []).filter(
-      (i) => i.title || i.text || i.lines?.length || i.image_url,
-    );
-    const included = section.item_ids || available.map((i) => i.id);
-    const ids =
-      section.email_item_ids ||
-      included.slice(
-        0,
-        (
-          { events: 3, spotlight: 2, races: 2, achievements: 3 } as Record<
-            string,
-            number
-          >
-        )[key] || 150,
-      );
-    return ids.flatMap((id) =>
-      included.includes(id) ? available.filter((i) => i.id === id) : [],
-    );
-  }
-  const visible = order.filter(
-    (key) =>
-      builder.sections[key].enabled &&
-      builder.sections[key].email_enabled &&
-      selected(key).length,
-  );
+  const blocks = projectEditions(catalog, builder).email_edition;
   return (
     <details className={styles.section} data-testid="recap-email-order">
-      <summary>
-        <strong>Arrange your email</strong>
-      </summary>
-      <p>
-        Choose email items above, then arrange them here. Website ordering stays
-        separate once you customize this order.
-      </p>
-      {!visible.length ? <p>No email content selected yet.</p> : null}
-      {visible.map((key, index) => (
-        <section key={key} className={styles.section}>
+      <summary><strong>Arrange your email</strong></summary>
+      <p>The email follows the website order and edited text. Moving an item here starts a custom email order; your Email checkboxes still choose what is included.</p>
+      {!blocks.length ? <p>No email content selected yet.</p> : null}
+      {blocks.map((block, index) => (
+        <section key={block.key} className={styles.section}>
           <div className={styles.row}>
-            <strong>{builder.sections[key].title}</strong>
+            <strong>{block.title}</strong>
             <div className={styles.actions}>
-              {[-1, 1].map((delta) => (
-                <button
-                  key={delta}
-                  type="button"
-                  disabled={
-                    disabled ||
-                    (delta < 0 ? index === 0 : index === visible.length - 1)
-                  }
-                  aria-label={`Move ${RECAP_SECTIONS[key]} ${delta < 0 ? "up" : "down"} in email`}
-                  onClick={() =>
-                    onChange({
-                      ...builder,
-                      email_order: [
-                        ...move(visible, index, delta),
-                        ...order.filter((k) => !visible.includes(k)),
-                      ],
-                    })
-                  }
-                >
-                  {delta < 0 ? "↑" : "↓"}
-                </button>
-              ))}
+              {([-1, 1] as const).map(delta => <button key={delta} type="button"
+                disabled={disabled || (delta < 0 ? index === 0 : index === blocks.length - 1)}
+                aria-label={`Move ${RECAP_SECTIONS[block.key]} ${delta < 0 ? "up" : "down"} in email`}
+                onClick={() => onChange(reorderRecapPreview(builder, catalog, "email_edition", { type: "section", section: block.key, delta }))}
+              >{delta < 0 ? "↑" : "↓"}</button>)}
             </div>
           </div>
-          {selected(key).map((item, position, items) => (
-            <div key={item.id} className={styles.item}>
-              <span>{item.title || item.text}</span>
-              <div className={styles.actions}>
-                {[-1, 1].map((delta) => (
-                  <button
-                    key={delta}
-                    type="button"
-                    disabled={
-                      disabled ||
-                      (delta < 0
-                        ? position === 0
-                        : position === items.length - 1)
-                    }
-                    aria-label={`Move ${item.title || item.text} ${delta < 0 ? "earlier" : "later"} in email`}
-                    onClick={() =>
-                      onChange({
-                        ...builder,
-                        sections: {
-                          ...builder.sections,
-                          [key]: {
-                            ...builder.sections[key],
-                            email_item_ids: move(
-                              items.map((i) => i.id),
-                              position,
-                              delta,
-                            ),
-                          },
-                        },
-                      })
-                    }
-                  >
-                    {delta < 0 ? "↑" : "↓"}
-                  </button>
-                ))}
-              </div>
+          {block.key !== "upcoming" ? block.items.map((item, position, items) => <div key={item.id} className={styles.item}>
+            <span>{item.title || item.text}</span>
+            <div className={styles.actions}>
+              {([-1, 1] as const).map(delta => <button key={delta} type="button"
+                disabled={disabled || (delta < 0 ? position === 0 : position === items.length - 1)}
+                aria-label={`Move ${item.title || item.text} ${delta < 0 ? "earlier" : "later"} in email`}
+                onClick={() => onChange(reorderRecapPreview(builder, catalog, "email_edition", { type: "item", section: block.key, itemId: item.id, delta }))}
+              >{delta < 0 ? "↑" : "↓"}</button>)}
             </div>
-          ))}
+          </div>) : null}
         </section>
       ))}
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() =>
-          onChange({
-            ...builder,
-            email_order: undefined,
-            sections: Object.fromEntries(
-              builder.order.map((key) => {
-                const config = builder.sections[key];
-                return [
-                  key,
-                  {
-                    ...config,
-                    ...(config.email_item_ids
-                      ? {
-                          email_item_ids: (
-                            config.item_ids ||
-                            (catalog[key] || []).map((i) => i.id)
-                          ).filter((id) => config.email_item_ids!.includes(id)),
-                        }
-                      : {}),
-                  },
-                ];
-              }),
-            ) as BuilderConfig["sections"],
-          })
-        }
-      >
-        Use website order for email
-      </button>
+      <button type="button" disabled={disabled} onClick={() => onChange(setEmailOrderMode(builder, catalog, "website"))}>Use website order for email</button>
     </details>
   );
 }
