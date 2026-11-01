@@ -25,8 +25,9 @@ def test_player_update_worker_lifecycle_and_delivery_heartbeat(monkeypatch):
     from services.api import main
     monkeypatch.setattr(main, "_log_runtime_guardrails", lambda: None)
     monkeypatch.setattr(main, "scheduler_enabled", lambda: True)
-    async def wait_for_stop():
-        await asyncio.Event().wait()
+    async def wait_for_stop(*, stop_event):
+        while not stop_event.is_set():
+            await asyncio.sleep(0)
     monkeypatch.setattr(main, "run_scheduler", wait_for_stop)
     monkeypatch.setattr(main, "delivery_status", lambda: {"last_completed_at": "2026-11-01T18:00:00+00:00"})
     monkeypatch.setenv("JUPR_ENV", "production")
@@ -37,7 +38,8 @@ def test_player_update_worker_lifecycle_and_delivery_heartbeat(monkeypatch):
         assert status["player_update_worker_running"] is True
         assert status["player_update_delivery"]["last_completed_at"]
         await main.stop_player_email_worker()
-        assert app.state.player_email_task.cancelled()
+        assert app.state.player_email_task.done()
+        assert not app.state.player_email_task.cancelled()
     asyncio.run(exercise())
 
 
