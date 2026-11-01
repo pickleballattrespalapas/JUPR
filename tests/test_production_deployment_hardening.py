@@ -1691,7 +1691,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "/database/query\"" not in workflow
     assert workflow.count(
         "${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}"
-    ) == 8
+    ) == 9
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow
@@ -1802,7 +1802,8 @@ def test_production_workflow_verifies_database_runtime_cors_and_final_write_poli
     assert 'sha256sum "$PREDEPLOY_CONFIG"' not in workflow
     assert '&& [ "$DEPLOY_OUTCOME" != "skipped" ]; then' in workflow
     assert workflow.index("--no-pending-only") < workflow.index("flyctl secrets set")
-    assert workflow.count("flyctl ssh console") == 6
+    assert workflow.count('flyctl ssh console --machine "$FLY_SSH_MACHINE_ID"') == 6
+    assert workflow.index("select_fly_verification_machine.py") < workflow.index("production_email_probe.py")
     assert 'expected_production_feature_flags(profile="release")' in workflow
     assert 'PRODUCTION_FEATURE_PROFILE="$live_feature_profile"' in workflow
     assert 'final_feature_profile="$rollback_feature_profile"' in workflow
