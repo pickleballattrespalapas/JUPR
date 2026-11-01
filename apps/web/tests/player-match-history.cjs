@@ -15,6 +15,7 @@ function compile(file, imports) {
 }
 
 let requested, history, matches;
+let awards = { trophies: [], badge_award_count: 0 };
 const page = compile("app/clubs/[clubSlug]/players/[playerId]/page.tsx", {
   "@/components/ClubDisplay": { Display: ({ children }) => children },
   "@/components/PublicClubLink": { __esModule: true, default: props => React.createElement("a", props) },
@@ -26,7 +27,7 @@ const page = compile("app/clubs/[clubSlug]/players/[playerId]/page.tsx", {
       player: { id: 159, name: "Returning Player", wins: 24, losses: 17 },
       identity: { display_name: "Returning Player" },
       verified_updates: { status: "available", can_request: true },
-      league_ratings: [], awards: { trophies: [], badge_award_count: 0 }, social: {},
+      league_ratings: [], awards, social: {},
       recent_matches: matches.slice(0, 12), match_history: matches, history
     }};
   }}
@@ -88,6 +89,36 @@ function link(html, testId) {
   assert.match(html, /No matches match this view/);
   assert.doesNotMatch(html, /player-history-pagination/);
 
+  const trophy = (badge_id, placement, context_type, title, extra = {}) => ({ badge_id, placement, context_type, title, ...extra });
+  const qualifying = [
+    trophy("tournament_champion", 1, "tournament", "Tournament gold"),
+    trophy("tournament_runner_up", 2, "tournament_award", "Tournament silver"),
+    trophy("tournament_third_place", 3, "tournament_podium", "Tournament bronze"),
+    trophy("league_champion", 1, "league_end", "League champion"),
+    trophy("top_performer_most_wins", 2, "league", "League award silver"),
+    trophy("award-uuid", 1, "interclub", "Interclub champion", { award_key: "division_champion" }),
+  ];
+  const excluded = [
+    trophy("mountain_climber", 27, "league", "Excluded climb 27"),
+    trophy("mountain_climber", 1, "league", "Excluded climb 1"),
+    trophy("top_performer_most_wins", 66, "league", "Excluded wins 66"),
+    trophy("award-uuid", 1, "interclub", "Excluded participant", { award_key: "participation" }),
+    trophy("unknown", 1, "league", "Excluded unknown badge"),
+    trophy("tournament_champion", 1, "weekly", "Excluded weekly award"),
+    ...[0, -1, 4, null, undefined, "2", true, 2.5, NaN, Infinity].map((rank, index) => trophy("podium", rank, "league", `Excluded malformed ${index}`)),
+  ];
+  awards = { trophies: [...qualifying, ...excluded], trophy_count: 99, badge_award_count: 0 };
+  html = await render({ section: "trophies" });
+  assert.equal((html.match(/data-testid="player-trophy"/g) || []).length, qualifying.length);
+  assert.match(html, /Major honors<\/strong><div[^>]*>6<\/div>/, "Summary counts only visible qualifying honors, even with an old API count");
+  for (const award of qualifying) assert.ok(html.includes(award.title));
+  assert.doesNotMatch(html, /Excluded|Place #66|Place #27/);
+  assert.equal(awards.trophies.length, qualifying.length + excluded.length, "Presentation filtering never changes stored/API awards");
+  awards = { ...awards, trophies: excluded };
+  html = await render({ section: "trophies" });
+  assert.match(html, /No top-three tournament or end-of-league awards yet/);
+  assert.match(html, /Major honors<\/strong><div[^>]*>0<\/div>/);
+
   const api = compile("lib/api.ts", {});
   process.env.JUPR_API_BASE_URL = "https://test.invalid";
   let apiUrl;
@@ -95,5 +126,5 @@ function link(html, testId) {
   await api.getClubPlayerProfile("tres-palapas", "159", { recent: 12, history: 50, offset: 100, league: "Fall 2025 & Friends" });
   assert.equal(apiUrl.searchParams.get("history_offset"), "100");
   assert.equal(apiUrl.searchParams.get("history_league"), "Fall 2025 & Friends");
-  console.log("PASS returning-player history, older/newer navigation, league filters, recent view, empty states, and API query encoding.");
+  console.log("PASS player history, navigation, API queries, and top-three trophy rendering with legacy award payloads.");
 })().catch(error => { console.error(error); process.exitCode = 1; });
