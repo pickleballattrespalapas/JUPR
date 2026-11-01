@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+from threading import Event
 import logging
 import os
 import re
@@ -817,8 +818,10 @@ def _latest_score_entry_match_id(supabase, *, club_id: str, matches: list[dict[s
 @app.on_event("startup")
 async def startup_checks() -> None:
     _log_runtime_guardrails()
+    app.state.player_email_stop = Event()
     app.state.player_email_task = (
-        asyncio.create_task(run_scheduler()) if scheduler_enabled() else None
+        asyncio.create_task(run_scheduler(stop_event=app.state.player_email_stop))
+        if scheduler_enabled() else None
     )
 
 
@@ -826,11 +829,16 @@ async def startup_checks() -> None:
 async def stop_player_email_worker() -> None:
     task = getattr(app.state, "player_email_task", None)
     if task is not None:
-        task.cancel()
+        app.state.player_email_stop.set()
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            await asyncio.wait_for(asyncio.shield(task), timeout=240)
+        except asyncio.TimeoutError:
+            LOGGER.error("Player email shutdown drain timed out; reconcile any sending rows.")
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 from services.api.program_badge_worker import install_program_badge_worker

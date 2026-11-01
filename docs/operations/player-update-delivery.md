@@ -18,6 +18,12 @@ pass. No badge processing is added to page loads. Failed and uncertain SMTP
 attempts are not automatically repeated. An uncertain delivery remains
 `sending` for reconciliation because the provider may already have accepted it.
 
+On controlled shutdown, the API stops claiming further messages and allows its
+current email and run log to finish, with a 240-second application drain and a
+300-second Fly shutdown allowance. Abrupt host failures can still leave a
+`sending` row; reconcile its `delivery_attempt_id` with the provider's Message-ID
+before retrying. Never infer non-delivery from a missing `sent_at` alone.
+
 ## Verify operation
 
 - `/health` exposes `write_prerequisites.player_update_worker_running` and an
