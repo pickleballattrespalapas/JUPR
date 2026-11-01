@@ -302,6 +302,21 @@ async function confirm(page, label, text) {
     await page.getByRole("button", { name: "4. Preview", exact: true }).click();
     const preview = page.getByTestId("recap-edition").filter({ visible: true });
     await preview.waitFor();
+    await page.getByRole("button", { name: "Arrange content", exact: true }).click();
+    const previewEvents = preview.locator('section[data-section="events"]');
+    const eventIds = () => previewEvents.locator("article").evaluateAll(nodes => nodes.map(node => node.dataset.recapItem));
+    const originalEventIds = await eventIds();
+    await previewEvents.locator("article").first().getByRole("button", { name: /down in website$/ }).click();
+    assert.equal((await eventIds())[1], originalEventIds[0], "Preview moves the selected result without changing its content");
+    await previewEvents.locator("article").nth(1).getByRole("button", { name: /up in website$/ }).click();
+    assert.deepEqual(await eventIds(), originalEventIds);
+    await preview.getByRole("button", { name: "Group events by type", exact: true }).click();
+    await page.screenshot({ path: path.join(output, "preview-arrange-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert(await preview.evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    await page.screenshot({ path: path.join(output, "preview-arrange-mobile.png"), fullPage: true });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByRole("button", { name: "Done arranging", exact: true }).click();
     assert(!(await preview.innerText()).includes("Tuesday Moneyball"));
     assert(!(await preview.innerText()).includes("The week in numbers"));
     assert(

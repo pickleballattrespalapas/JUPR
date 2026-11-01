@@ -350,10 +350,16 @@ def _add_tournament_draws(db, club_id, matches, report, names):
             if not medals:
                 continue
             division = " · ".join(dict.fromkeys(filter(None, [draw.get("event_family_label"), draw.get("division_name")]))) or draw.get("name") or "Division"
+            legacy_title = f"{tournament['name']} · {division}"
+            draw_key = draw.get("public_draw_key") or draw.get("team_draw_id")
+            draw_name = clean(draw.get("name")) or division
             href = f"tournament-results?tournament_id={quote(str(tournament['id']))}"
             if draw.get("team_draw_id"):
                 href = f"tournament-team-results/{quote(str(tournament['id']))}/{quote(str(draw['team_draw_id']))}"
-            report["event_results"].append({"title": f"{tournament['name']} · {division}", "kind": "Tournament", "date": "", "summary": "Division podium", "details": [f"{p['placement']}. {p.get('team_name') or p.get('display_name') or 'Team'}" for p in sorted(medals, key=lambda p: p.get("placement") or 99)], "href": href})
+            report["event_results"].append({
+                **({"id": f"tournament:{tournament['id']}:draw:{draw_key}", "legacy_title": legacy_title} if draw_key else {}),
+                "title": f"{tournament['name']} · {draw_name}", "kind": "Tournament", "date": "", "summary": "Division podium",
+                "details": [f"{p['placement']}. {p.get('team_name') or p.get('display_name') or 'Team'}" for p in sorted(medals, key=lambda p: p.get("placement") or 99)], "href": href})
 
 
 def _add_interclub(db, club_id, start, end, report):

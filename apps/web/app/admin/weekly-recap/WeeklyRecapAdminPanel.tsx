@@ -20,6 +20,10 @@ import {
   layoutTemplate,
   normalizeBuilder,
   previewRecap,
+  resolveBuilderSelections,
+  sourceOnlyRecapChange,
+  reorderRecapPreview,
+  type RecapOrderAction,
   type BuilderConfig,
   type Editorial,
   type RecapCatalog,
@@ -109,7 +113,8 @@ function rowEdits(
     looking_ahead: Array.isArray(raw.looking_ahead)
       ? (raw.looking_ahead as string[])
       : ((row.generated_json?.looking_ahead || []) as string[]),
-    builder: normalizeBuilder(raw.builder as BuilderConfig),
+    builder: resolveBuilderSelections(normalizeBuilder(raw.builder as BuilderConfig),
+      (row.generated_json?.builder_catalog || {}) as RecapCatalog),
     scope: (raw.scope || { league_names: [] }) as RecapEdits["scope"],
   };
 }
@@ -137,6 +142,7 @@ export default function WeeklyRecapAdminPanel({
     [step, setStep] = useState(0),
     [previewMode, setPreviewMode] = useState("website");
   const [editingText, setEditingText] = useState(false);
+  const [arranging, setArranging] = useState(false);
   const [revisionOpen, setRevisionOpen] = useState(true),
     [busy, setBusy] = useState(false),
     [saving, setSaving] = useState(false);
@@ -212,15 +218,16 @@ export default function WeeklyRecapAdminPanel({
     );
     const payload = await response.json();
     if (!response.ok)
-      throw new Error(
+      throw Object.assign(new Error(
         typeof payload.detail === "string"
           ? payload.detail
           : "Could not complete this action. Reload and try again.",
-      );
+      ), { status: response.status });
     return payload;
   }
   function apply(payload: AdminWeeklyRecapDetailResponse) {
     setEditingText(false);
+    setArranging(false);
     const nextCandidates = payload.candidates || {},
       next = rowEdits(payload.recap, nextCandidates);
     setRow(payload.recap);
@@ -253,6 +260,7 @@ export default function WeeklyRecapAdminPanel({
   }
   function clearProtectedRecapState() {
     setEditingText(false);
+    setArranging(false);
     detailRequest.invalidate();
     setRow(null);
     setRows([]);
@@ -326,18 +334,34 @@ export default function WeeklyRecapAdminPanel({
     setSaving(true);
     setError("");
     try {
-      const payload = await request<AdminWeeklyRecapDetailResponse>(
+      const send = (base: AdminWeeklyRecapRow) => request<AdminWeeklyRecapDetailResponse>(
         `/recaps/${target.week_start}`,
         "PATCH",
         {
           edits_json: snapshot,
           confirmation_text: "SAVE RECAP",
-          expected_recap_id: target.id,
-          expected_row_version: target.row_version,
+          expected_recap_id: base.id,
+          expected_row_version: base.row_version,
         },
       );
-      if (!writeRequest.isCurrent(generation)) return;
+      let payload: AdminWeeklyRecapDetailResponse;
+      try {
+        payload = await send(target);
+      } catch (e) {
+        if (!(e instanceof Error) || !("status" in e) || e.status !== 409) throw e;
+        if (!writeRequest.isCurrent(generation) || latest.current.row?.id !== target.id) return;
+        const fresh = await request<AdminWeeklyRecapDetailResponse>(
+          `/recaps/${target.week_start}?include_candidates=true`,
+        );
+        if (!writeRequest.isCurrent(generation) || latest.current.row?.id !== target.id) return;
+        // A source rename must not require discarding locally authored edits.
+        // A concurrent editorial edit still requires an explicit resolution.
+        if (!sourceOnlyRecapChange(target, fresh.recap)) throw e;
+        payload = await send(fresh.recap);
+      }
+      if (!writeRequest.isCurrent(generation) || latest.current.row?.id !== target.id) return;
       setRow(payload.recap);
+      if (payload.candidates) setCandidates(payload.candidates);
       setLastSaved(JSON.stringify(snapshot));
       setSaveFailed(false);
       setMessage("Draft saved.");
@@ -504,6 +528,11 @@ export default function WeeklyRecapAdminPanel({
   }
   function changeBuilder(builder: BuilderConfig) {
     setEdits((current) => ({ ...current, builder }));
+  }
+  function reorder(action: RecapOrderAction) {
+    setEdits((current) => ({ ...current, builder: reorderRecapPreview(
+      current.builder, generatedCatalog, previewMode === "email" ? "email_edition" : "edition", action,
+    ) }));
   }
   function go(next: number) {
     setStep(next);
@@ -1085,11 +1114,18 @@ export default function WeeklyRecapAdminPanel({
                 type="button"
                 disabled={disabled && !editingText}
                 aria-pressed={editingText}
-                onClick={() => setEditingText(!editingText)}
+                onClick={() => { setEditingText(!editingText); setArranging(false); }}
               >
                 {editingText ? "Done editing text" : "Edit text"}
               </button>
+              {previewMode !== "print" && !printMode ? <button
+                type="button"
+                disabled={disabled && !arranging}
+                aria-pressed={arranging}
+                onClick={() => { setArranging(!arranging); setEditingText(false); }}
+              >{arranging ? "Done arranging" : "Arrange content"}</button> : null}
             </div>
+            {arranging && !editingText && previewMode !== "print" ? <p>Move sections or individual results up and down. Group events by type to keep similar results together. Changes save automatically to the {previewMode === "email" ? "member email" : "website"} order.</p> : null}
             {editingText ? (
               <RecapTextEditor
                 catalog={generatedCatalog}
@@ -1105,7 +1141,7 @@ export default function WeeklyRecapAdminPanel({
                 }
                 onChange={setEdits}
               />
-            ) : previewMode === "email" ? (
+            ) : previewMode === "email" && !arranging ? (
               <iframe
                 title="Live member email preview"
                 sandbox="allow-same-origin"
@@ -1119,7 +1155,10 @@ export default function WeeklyRecapAdminPanel({
                   status: publicReady ? "published" : "draft",
                   final_json: preview as Record<string, unknown>,
                 }}
-                printMode={printMode}
+                printMode={printMode || previewMode === "print"}
+                channel={previewMode === "email" ? "email_edition" : "edition"}
+                onReorder={arranging && previewMode !== "print" ? reorder : undefined}
+                reorderDisabled={disabled}
               />
             )}
             {previewMode === "print" && !editingText ? (

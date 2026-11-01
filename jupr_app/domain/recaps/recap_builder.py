@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections import Counter, defaultdict
 from hashlib import sha256
 import json
 import re
@@ -107,10 +108,27 @@ def catalog(recap):
     add("opening", "opening", text=report.get("opening", ""))
     for card in recap.get("numbers_cards") or []:
         add("numbers", card.get("key") or card.get("label"), title=card.get("label"), text=str(card.get("value", 0)))
-    for e in report.get("event_results") or []:
-        add("events", (e.get("kind"), e.get("id") or (e.get("title"), e.get("date"))),
+    events = report.get("event_results") or []
+    identities = [(e.get("kind"), e.get("id") or (e.get("title"), e.get("date"))) for e in events]
+    counts = Counter(identities)
+    for e, identity in zip(events, identities):
+        legacy_identity = (e.get("kind"), (e.get("legacy_title", e.get("title")), e.get("date")))
+        # Old snapshots omitted draw IDs. Distinguish their recorded evidence,
+        # never list positions, so reordering cannot swap the selected podium.
+        evidence_identity = (legacy_identity, e.get("href"), e.get("summary"), tuple(e.get("details") or []))
+        aliases = []
+        if counts[identity] > 1:
+            aliases.append(stable_id("events", identity))
+            identity = evidence_identity
+        elif e.get("legacy_title") is not None:
+            aliases.extend([stable_id("events", legacy_identity), stable_id("events", evidence_identity)])
+        add("events", identity,
             title=e.get("title"), text=e.get("summary"), lines=e.get("details"), href=e.get("href"),
             kind=e.get("kind"), date=e.get("date"), links=e.get("weekly_reports"), court_players=e.get("court_players"))
+        if aliases:
+            groups["events"][-1]["selection_aliases"] = aliases
+    # Repeated copies of the very same evidence need only one checkbox.
+    groups["events"] = list({item["id"]: item for item in groups["events"]}.values())
     for s in recap.get("spotlight") or []:
         if s.get("include", True) and s.get("players"):
             add("spotlight", s.get("key") or s.get("label"), title=s.get("label"), text=s.get("description"), lines=s.get("players"), kind=s.get("key"))
@@ -127,6 +145,28 @@ def catalog(recap):
         if str(line).strip():
             add("upcoming", line, text=line)
     return groups
+
+
+def resolve_builder_selections(config, groups):
+    """Expand legacy shared selections without transferring ambiguous wording."""
+    config = deepcopy(config)
+    for section, items in groups.items():
+        aliases = defaultdict(list)
+        current = {item["id"] for item in items}
+        for item in items:
+            for alias in item.get("selection_aliases", []):
+                aliases[alias].append(item["id"])
+        settings = config["sections"][section]
+        for field in ("item_ids", "email_item_ids"):
+            if field in settings:
+                settings[field] = list(dict.fromkeys(
+                    target for value in settings[field]
+                    for target in ([value] if value in current else aliases.get(value, [value]))))
+        overrides = config.get("text_overrides", {})
+        for alias, targets in aliases.items():
+            if len(targets) == 1 and alias not in current and alias in overrides:
+                overrides.setdefault(targets[0], deepcopy(overrides[alias]))
+    return config
 
 
 def normalize_config(raw, *, template=False):
@@ -189,6 +229,7 @@ def compact_ladder_courts(items):
 def build_editions(recap, raw):
     config = normalize_config(raw)
     groups = catalog(recap)
+    config = resolve_builder_selections(config, groups)
     groups["custom"] = config["custom_blocks"]
     editions = {}
     for channel in ("edition", "email_edition"):

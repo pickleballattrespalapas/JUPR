@@ -23,6 +23,7 @@ let recaps;
 let deleteError = null;
 let accessToken = "local-token";
 let preferenceWrite = null;
+let patchResponse = null;
 const draft = { id: "recap-1", club_id: "alpha", week_start: "2026-07-06", week_end: "2026-07-12", status: "draft", row_version: 7, generated_json: {}, final_json: {}, edits_json: {} };
 const other = { ...draft, id: "recap-2", week_start: "2026-06-29", week_end: "2026-07-05" };
 const Panel = load("app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx", {
@@ -51,6 +52,7 @@ global.fetch = async (url, options = {}) => {
   }
   if (options.method === "PATCH" || options.method === "POST") {
     const body = JSON.parse(options.body);
+    if (options.method === "PATCH" && patchResponse) return patchResponse(body);
     const current = recaps.find(row => row.id === body.expected_recap_id);
     assert.ok(current, "Mutation identifies the exact loaded recap");
     return { ok: true, json: async () => ({ ok: true, recap: current, candidates: {} }) };
@@ -71,7 +73,7 @@ async function mount(overrides = {}) {
   await act(async () => { tree = create(React.createElement(Panel, { ...props, ...overrides })); });
   return tree;
 }
-function reset() { canDelete = true; accessToken = "local-token"; requests = []; recaps = [{ ...draft }, { ...other }]; deleteError = null; preferenceWrite = null; }
+function reset() { canDelete = true; accessToken = "local-token"; requests = []; recaps = [{ ...draft }, { ...other }]; deleteError = null; preferenceWrite = null; patchResponse = null; }
 
 (async () => {
   reset();
@@ -166,4 +168,28 @@ function reset() { canDelete = true; accessToken = "local-token"; requests = [];
     await act(async () => tree.unmount());
   }
   console.log("weekly recap layouts: sign-out and club-change request isolation passed");
+  for (const changedEditorial of [false, true]) {
+    reset();
+    tree = await mount();
+    const headline = () => tree.root.findAllByType("input").find(node => node.props.maxLength === 160);
+    await act(async () => headline().props.onChange({ target: { value: "My unsaved headline" } }));
+    recaps[0] = { ...recaps[0], row_version: 8, generated_json: { report: { headline: "Renamed event" } },
+      ...(changedEditorial ? { edits_json: { editorial: { headline: "Another editor's headline" } } } : {}) };
+    let patchCount = 0;
+    patchResponse = body => {
+      patchCount++;
+      if (patchCount === 1) return { ok: false, status: 409, json: async () => ({ detail: "Weekly recap changed. Reload before saving." }) };
+      assert.equal(body.expected_row_version, 8, "A safe retry uses the freshly loaded version");
+      assert.equal(body.edits_json.editorial.headline, "My unsaved headline", "Retry keeps local editorial work");
+      recaps[0] = { ...recaps[0], row_version: 9, edits_json: body.edits_json };
+      return { ok: true, json: async () => ({ recap: recaps[0], candidates: {} }) };
+    };
+    await act(async () => tree.root.findAllByType("button").find(node => text(node) === "Save draft").props.onClick());
+    assert.equal(headline().props.value, "My unsaved headline", "Conflict handling never discards local edits");
+    assert.equal(patchCount, changedEditorial ? 1 : 2);
+    assert.match(text(tree.toJSON()), changedEditorial ? /Retry save/ : /Draft saved/);
+    if (changedEditorial) assert.equal(recaps[0].edits_json.editorial.headline, "Another editor's headline", "Concurrent editorial changes are never overwritten");
+    await act(async () => tree.unmount());
+  }
+  console.log("weekly recap save recovery: rename retry preserves local work; editorial conflicts remain protected");
 })().catch(error => { console.error(error); process.exitCode = 1; });
