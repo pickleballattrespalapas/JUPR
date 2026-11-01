@@ -2,7 +2,7 @@
 import PublicControls from "@/components/PublicControls";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
-import { getClubLeagueResults, getClubPlayerProfile, type LeagueAwardProgressRow, type LeagueResultsResponse, type PublicMatch, type PublicRatingHistoryPoint, type PublicRelationship } from "@/lib/api";
+import { getClubLeagueResults, getClubPlayerProfile, type LeagueAwardProgressRow, type LeagueResultsResponse, type PublicMatch, type PublicRatingHistoryPoint, type PublicRelationship, type PublicTrophy } from "@/lib/api";
 import { publicBadgeRarityLabel } from "@/lib/badgeApi";
 import { publicSocialEventTypeLabel } from "@/lib/publicMatchLabels";
 
@@ -26,6 +26,24 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 const thStyle = { textAlign: "left" as const, borderBottom: "1px solid #cbd5e1", padding: "0.6rem", whiteSpace: "nowrap" as const, color: "#475569", fontSize: "0.82rem" };
 const tdStyle = { borderBottom: "1px solid #e2e8f0", padding: "0.6rem", whiteSpace: "nowrap" as const };
 const pillStyle = { border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", color: "#0f172a", textDecoration: "none" };
+
+const tournamentTrophyContexts = new Set(["tournament", "tournament_award", "tournament_podium", "podium"]);
+const leagueTrophyContexts = new Set(["league", "league_award", "league_end", "league_end_award", "season_award"]);
+const tournamentTrophyBadges = new Set(["podium", "tournament_champion", "tournament_runner_up", "tournament_third_place"]);
+const leagueTrophyBadges = new Set([
+  "podium", "league_champion", "league_runner_up", "league_third_place",
+  "top_performer_highest_rating", "top_performer_most_improved", "top_performer_best_win_pct", "top_performer_most_wins",
+]);
+
+// Cached or older API responses must obey the same Trophy Case display rule.
+function isTrophyCaseAward(trophy: PublicTrophy): boolean {
+  if (typeof trophy.placement !== "number" || !Number.isInteger(trophy.placement) || trophy.placement < 1 || trophy.placement > 3) return false;
+  const context = (trophy.context_type || "").trim().toLowerCase();
+  const badge = trophy.badge_id.trim().toLowerCase();
+  if (context === "interclub") return trophy.award_key === "division_champion" || trophy.award_key === "club_cup_champion";
+  return (tournamentTrophyContexts.has(context) && tournamentTrophyBadges.has(badge))
+    || (leagueTrophyContexts.has(context) && leagueTrophyBadges.has(badge));
+}
 
 function firstParam(searchParams: Awaited<PlayerProfilePageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
@@ -184,6 +202,7 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
   const historyOffset = data.history.history_offset ?? 0;
   const currentHistoryPage = Math.floor(historyOffset / data.history.history_limit) + 1;
   const awards = data.awards;
+  const trophies = awards.trophies.filter(isTrophyCaseAward);
   const social = data.social;
   const verifiedLabel = data.verified_updates.status === "enabled" ? "Player updates are on" : data.verified_updates.status === "pending" ? "Player update request is pending" : "Player updates are available";
   const verifiedAction = data.verified_updates.can_request
@@ -210,7 +229,7 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
         <Display field="singles"><article style={cardStyle}><strong>Singles</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating_jupr)}</div></article></Display>
         <Display field="records"><article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.wins ?? 0}-{player.losses ?? 0}</div><small>{pctLabel(player.wins, player.losses)}</small></article></Display>
         <Display field="singles"><article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.singles_wins ?? 0}-{player.singles_losses ?? 0}</div><small>{pctLabel(player.singles_wins, player.singles_losses)}</small></article></Display>
-        <Display field="profile_trophies"><article style={cardStyle}><strong>Major honors</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.trophy_count ?? awards.trophies.length}</div><small>Trophy case</small></article></Display>
+        <Display field="profile_trophies"><article style={cardStyle}><strong>Major honors</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{trophies.length}</div><small>Trophy case</small></article></Display>
         <Display field="badges"><article style={cardStyle}><strong>Badges earned</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.badge_award_count}</div><small>{awards.prestige_total} prestige</small></article></Display>
         <Display field="last_played"><article style={cardStyle}><strong>Last played</strong><div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{formatDate(player.last_game_at)}</div><small>{player.is_active === false ? "Inactive" : "Active"}</small></article></Display>
       </div>
@@ -342,7 +361,7 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Trophy case</h2>
             <p style={{ color: "#475569" }}>Top-three tournament podiums and end-of-league awards. Other achievements live in the Badge Cabinet.</p>
-            {awards.trophies.length === 0 ? <p style={{ color: "#475569" }}>No top-three tournament or end-of-league awards yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>{awards.trophies.map((trophy, index) => <div key={`${trophy.badge_id}-${trophy.earned_at ?? index}`} data-testid="player-trophy" style={{ border: "1px solid #f59e0b", borderRadius: "12px", padding: "0.85rem", background: "#fffbeb" }}><strong>🏆 {trophy.title}</strong><p style={{ margin: "0.35rem 0" }}>{`Place #${trophy.placement}`}{trophy.context_label ? ` · ${trophy.context_label}` : ""}</p><small>{formatDate(trophy.earned_at)}</small>{trophy.results_href ? <p style={{ marginBottom: 0 }}><Link href={trophy.results_href}>{trophy.results_href.includes("final-results") ? "View final season results" : "View league results"}</Link></p> : null}</div>)}</div>}
+            {trophies.length === 0 ? <p style={{ color: "#475569" }}>No top-three tournament or end-of-league awards yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>{trophies.map((trophy, index) => <div key={`${trophy.badge_id}-${trophy.earned_at ?? index}`} data-testid="player-trophy" style={{ border: "1px solid #f59e0b", borderRadius: "12px", padding: "0.85rem", background: "#fffbeb" }}><strong>🏆 {trophy.title}</strong><p style={{ margin: "0.35rem 0" }}>{`Place #${trophy.placement}`}{trophy.context_label ? ` · ${trophy.context_label}` : ""}</p><small>{formatDate(trophy.earned_at)}</small>{trophy.results_href ? <p style={{ marginBottom: 0 }}><Link href={trophy.results_href}>{trophy.results_href.includes("final-results") ? "View final season results" : "View league results"}</Link></p> : null}</div>)}</div>}
           </article>
         </section>
       ) : null}</Display>
