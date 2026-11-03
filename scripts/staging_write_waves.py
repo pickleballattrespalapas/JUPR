@@ -138,6 +138,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/public/interclub-player-response/review"),
         ("POST", "/public/interclub-player-response/respond"),
         ("POST", "/clubs/{club_slug}/support/intake"),
+        ("POST", "/clubs/{club_slug}/weekly-recaps/{week}/engagement"),
         ("POST", "/clubs/{club_slug}/verified-updates/request"),
         ("POST", "/clubs/{club_slug}/tournament-registration"),
         ("POST", "/clubs/{club_slug}/tournament-registration/edit"),
@@ -182,6 +183,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}"),
         ("DELETE", "/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}"),
         ("POST", "/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}/publish"),
+        ("POST", "/admin/clubs/{club_id}/weekly-recap/recaps/{week}/engagement/nominations/{nomination}"),
     ),
     "match-player": (
         ("PATCH", "/admin/clubs/{club_id}/match-log/social/{social_match_id}"),
