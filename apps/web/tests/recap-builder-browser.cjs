@@ -299,7 +299,7 @@ async function confirm(page, label, text) {
     await emailOrder
       .getByLabel("Move Club stories up in email", { exact: true })
       .click();
-    await page.getByRole("button", { name: "4. Preview", exact: true }).click();
+    await page.getByRole("button", { name: /^\d+\. Preview$/ }).click();
     const preview = page.getByTestId("recap-edition").filter({ visible: true });
     await preview.waitFor();
     await page.getByRole("button", { name: "Arrange content", exact: true }).click();
@@ -390,6 +390,10 @@ async function confirm(page, label, text) {
     const emailFrame = page.frameLocator(
       'iframe[title="Live member email preview"]',
     );
+    await emailFrame.getByText("A great week at the club.", { exact: true }).waitFor();
+    assert.equal(await emailFrame.locator("[data-recap-item]").count(), 0, "The short preview has no detailed cards");
+    assert.equal(await emailFrame.getByRole("link").count(), 0, "The draft email cannot link to an unpublished edition");
+    await page.getByLabel("Email preview format").selectOption("detailed");
     await emailFrame
       .getByText("Club tournament champions", { exact: true })
       .waitFor();
@@ -429,7 +433,7 @@ async function confirm(page, label, text) {
       fullPage: true,
     });
     await page
-      .getByRole("button", { name: "5. Publish & share", exact: true })
+      .getByRole("button", { name: /^\d+\. Publish & share$/ })
       .click();
     await page.getByLabel("Layout name").fill("Member update");
     await page
@@ -588,7 +592,7 @@ async function confirm(page, label, text) {
       path: path.join(output, "mobile-content.png"),
       fullPage: true,
     });
-    await page.getByRole("button", { name: "4. Preview", exact: true }).click();
+    await page.getByRole("button", { name: /^\d+\. Preview$/ }).click();
     await page.getByRole("button", { name: "Edit text", exact: true }).click();
     assert.equal(
       await tournamentText.getByLabel("Title", { exact: true }).inputValue(),

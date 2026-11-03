@@ -146,6 +146,7 @@ export default function WeeklyRecapAdminPanel({
   const [templateName, setTemplateName] = useState(""),
     [step, setStep] = useState(0),
     [previewMode, setPreviewMode] = useState("website");
+  const [detailedEmailPreview, setDetailedEmailPreview] = useState(false);
   const [editingText, setEditingText] = useState(false);
   const [arranging, setArranging] = useState(false);
   const [revisionOpen, setRevisionOpen] = useState(true),
@@ -188,7 +189,7 @@ export default function WeeklyRecapAdminPanel({
   const publicReady = Boolean(
     isLive && !hasChanges && row?.edits_json?.builder,
   );
-  const teaser = Boolean(edits.engagement);
+  const teaser = Boolean(edits.engagement) && !detailedEmailPreview;
   const shortPreview = previewMode === "email" && teaser;
   const pathSteps = step !== 5 && edits.engagement?.mode !== "review" ? stepOrder.filter(i => i !== 5) : stepOrder;
   const position = pathSteps.indexOf(step);
@@ -236,6 +237,7 @@ export default function WeeklyRecapAdminPanel({
     return payload;
   }
   function apply(payload: AdminWeeklyRecapDetailResponse) {
+    setDetailedEmailPreview(false);
     setEditingText(false);
     setArranging(false);
     const nextCandidates = payload.candidates || {},
@@ -1148,6 +1150,17 @@ export default function WeeklyRecapAdminPanel({
                 onClick={() => { setArranging(!arranging); setEditingText(false); }}
               >{arranging ? "Done arranging" : "Arrange content"}</button> : null}
             </div>
+            {previewMode === "email" && edits.engagement && <label>
+              Email preview format{" "}
+              <select value={detailedEmailPreview ? "detailed" : "teaser"} onChange={event => {
+                setDetailedEmailPreview(event.target.value === "detailed");
+                setEditingText(false);
+                setArranging(false);
+              }}>
+                <option value="teaser">Short story and recap link</option>
+                <option value="detailed">Detailed member email selections</option>
+              </select>
+            </label>}
             {previewMode === "email" && !teaser ? <div>
               <label htmlFor="recap-member-email-order">Member email order</label>{" "}
               <select id="recap-member-email-order" disabled={disabled} value={edits.builder.email_order_mode || "website"}
