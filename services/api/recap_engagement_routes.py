@@ -73,9 +73,11 @@ def install_recap_engagement_routes(app, *, get_club, get_supabase_client, reque
         response.headers["Cache-Control"] = "no-store"
         if payload.action == "shoutout" and not (payload.name.strip() and payload.story.strip()):
             raise HTTPException(422, "Enter a member’s name and one sentence.")
+        db = get_supabase_client()
+        club_id = club_key(club_slug)
         try:
-            return get_supabase_client().rpc("record_recap_engagement", {
-                "p_club": club_key(club_slug), "p_week": str(week), "p_visitor": str(payload.visitor),
+            receipt = db.rpc("record_recap_engagement", {
+                "p_club": club_id, "p_week": str(week), "p_visitor": str(payload.visitor),
                 "p_source": payload.source, "p_hash": requester_hash(request), "p_action": payload.action,
                 "p_question": payload.question, "p_answer": payload.answer, "p_name": payload.name, "p_story": payload.story,
             }).execute().data
@@ -87,6 +89,13 @@ def install_recap_engagement_routes(app, *, get_club, get_supabase_client, reque
             if exc.message in {"Voting is closed", "Nominations are closed", "Poll changed"}:
                 raise HTTPException(409, f"{exc.message}. Refresh the recap.") from exc
             raise
+
+        if receipt["choice"] is not None:
+            row = edition(db, club_id, week, public=True)
+            if row:
+                totals = db.rpc("recap_engagement_counts", {"p_id": row["recap_id"]}).execute().data
+                receipt["counts"] = [totals["first"], totals["second"]]
+        return receipt
 
     @app.get("/admin/clubs/{club_id}/weekly-recap/recaps/{week}/engagement")
     def activity_stats(club_id: str, week: date, authorization: str | None = auth_header()):
