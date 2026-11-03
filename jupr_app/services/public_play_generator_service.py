@@ -820,15 +820,19 @@ def _run_mutation(
         elif (action == "details" and row.get("status") == "active"
               and event.get("ratingMode") != "rated" and next_event.get("ratingMode") == "rated"):
             require_generator_starting_ratings(supabase, club_id=club_id, event=next_event)
-    except (ValueError, PublicPlayGeneratorError) as exc:
+    except Exception as exc:
+        # Planning and rating checks precede the session write. This attempt can be safely retried.
+        validation_error = isinstance(exc, ValueError)
         update_public_live_operation(
             supabase,
             club_id=str(club_id),
             operation_key_value=operation_key,
             status="rejected",
-            error_text=str(exc),
+            error_text=str(exc) if validation_error else "The generator could not prepare the change.",
         )
-        raise PublicPlayGeneratorError(str(exc)) from exc
+        if validation_error:
+            raise PublicPlayGeneratorError(str(exc)) from exc
+        raise
     patch = {"state": _put_event(state, next_event), **dict(extra_patch or {})}
     if str(row.get("status")) == "completed" and str(next_event.get("status")) == "active":
         patch["expires_at"] = _ttl_iso()

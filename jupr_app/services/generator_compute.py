@@ -77,25 +77,26 @@ class ScheduleWorker:
                 self._pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
             return self._pool
 
-    def run(self, group: str, name: str, *args, **kwargs):
+    def run(self, group: str, operation: str, /, *args, **kwargs):
+        """Forward every keyword to the planner, including a roster player's name."""
         start = time.monotonic()
         if not self._slots.acquire(blocking=False):
-            logger.info("generator.compute.busy", extra={"operation": name})
+            logger.info("generator.compute.busy", extra={"operation": operation})
             raise GeneratorComputeUnavailable("Another schedule is being prepared. Please try again shortly.")
         future = None
         pool = None
         try:
             pool = self._executor()
-            future = pool.submit(_execute, group, name, args, kwargs, start)
+            future = pool.submit(_execute, group, operation, args, kwargs, start)
             future.add_done_callback(lambda _: self._slots.release())
             result, timing = future.result(timeout=self.timeout_seconds)
-            logger.info("generator.compute.complete", extra={"operation": name, **timing,
+            logger.info("generator.compute.complete", extra={"operation": operation, **timing,
                 "elapsed_ms": round((time.monotonic() - start) * 1000, 2)})
             return result
         except TimeoutError as exc:
             # Queued jobs may be cancelled; running pure jobs have no DB access.
             future.cancel()
-            logger.warning("generator.compute.timeout", extra={"operation": name,
+            logger.warning("generator.compute.timeout", extra={"operation": operation,
                 "elapsed_ms": round((time.monotonic() - start) * 1000, 2)})
             raise GeneratorComputeUnavailable("Schedule planning took too long. No changes were saved. Please try again.") from exc
         except BrokenProcessPool as exc:
@@ -106,7 +107,7 @@ class ScheduleWorker:
                     self._pool = None
             if pool is not None:
                 pool.shutdown(wait=False, cancel_futures=True)
-            logger.error("generator.compute.failed", extra={"operation": name, "exception_type": type(exc).__name__})
+            logger.error("generator.compute.failed", extra={"operation": operation, "exception_type": type(exc).__name__})
             raise GeneratorComputeUnavailable("Schedule planning restarted. No changes were saved. Please try again.") from exc
         finally:
             if future is None:

@@ -135,7 +135,11 @@ def test_old_broken_waiter_does_not_remove_replacement_pool(monkeypatch):
     assert worker._pool is replacement
 
 
-def test_failed_public_planning_never_commits_session(monkeypatch):
+@pytest.mark.parametrize("failure", [
+    GeneratorComputeUnavailable("Schedule planning took too long. No changes were saved. Please try again."),
+    TypeError("unexpected planner error"),
+])
+def test_failed_public_planning_never_commits_session(monkeypatch, failure):
     from copy import deepcopy
     from tests.test_public_play_generator_service import FakeSupabase, key, requester, token_secret
     from jupr_app.services import public_play_generator_service as service
@@ -144,18 +148,28 @@ def test_failed_public_planning_never_commits_session(monkeypatch):
         **preview_args(), participant_player_ids={}, preview_fingerprint=None, idempotency_key=key("worker-start"),
         requester_hash=requester(), token_secret=token_secret())
     before = deepcopy(db.db["live_sessions"])
+    request = dict(club_id="club", session_key=created["session"]["session_key"], action="add",
+        participant_id=None, name="Late arrival", player_id=None, substitute_scope="rest", roster_order=None,
+        edit_token=created["edit_token"], expected_version=created["session"]["version"],
+        idempotency_key=key("worker-add"), requester_hash=requester())
     def unavailable(*args, **kwargs):
-        raise GeneratorComputeUnavailable("Schedule planning took too long. No changes were saved. Please try again.")
-    monkeypatch.setattr(service, "mutate_generator_roster", unavailable)
-    with pytest.raises(service.PublicPlayGeneratorError) as error:
-        service.mutate_public_play_generator_roster(db, club_id="club",
-            session_key=created["session"]["session_key"], action="remove", participant_id="p-1",
-            name=None, player_id=None, substitute_scope="rest", roster_order=None,
-            edit_token=created["edit_token"], expected_version=created["session"]["version"],
-            idempotency_key=key("worker-remove"), requester_hash=requester())
-    assert compute_unavailable_cause(error.value)
+        raise failure
+    expected_error = service.PublicPlayGeneratorError if isinstance(failure, GeneratorComputeUnavailable) else TypeError
+    with monkeypatch.context() as failed_plan:
+        failed_plan.setattr(service, "mutate_generator_roster", unavailable)
+        with pytest.raises(expected_error) as error:
+            service.mutate_public_play_generator_roster(db, **request)
+    if isinstance(failure, GeneratorComputeUnavailable):
+        assert compute_unavailable_cause(error.value) is failure
     assert db.db["live_sessions"] == before
     assert db.db["public_live_operations"][-1]["status"] == "rejected"
+    assert not db.db.get("play_generator_mutation_receipts")
+
+    result = service.mutate_public_play_generator_roster(db, **request)
+    assert result["confirmed_commit"]
+    assert db.db["public_live_operations"][-1]["status"] == "completed"
+    assert service.mutate_public_play_generator_roster(db, **request)["idempotent_replay"]
+    assert len(db.db["play_generator_mutation_receipts"]) == 1
 
 
 def test_public_and_admin_handlers_return_retryable_503():
