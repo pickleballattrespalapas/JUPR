@@ -1,3 +1,4 @@
+import RecapParticipation from "@/components/RecapParticipation";
 import RecapEdition from "@/components/RecapEdition";
 import WeeklyRecapPdfDownload from "@/components/WeeklyRecapPdfDownload";
 
@@ -172,8 +173,8 @@ function Podium({ tournament }: { tournament: WeeklyRecapTournament }) {
   );
 }
 
-function RecapBody({ recap, activeSection, clubSlug }: { recap: WeeklyRecapJson; activeSection: RecapSection; clubSlug: string }) {
-  if (recap.report?.edition) return <><h2>{recap.report.headline}</h2>{recap.report.display_text?.date ? <p>{recap.report.display_text.date}</p> : null}<RecapEdition scopeText={recap.report.display_text?.scope} scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={clubSlug} /></>;
+function RecapBody({ recap, activeSection, clubSlug, participation }: { participation?: React.ReactNode; recap: WeeklyRecapJson; activeSection: RecapSection; clubSlug: string }) {
+  if (recap.report?.edition) return <><h2>{recap.report.headline}</h2>{recap.report.display_text?.date ? <p>{recap.report.display_text.date}</p> : null}{participation}<RecapEdition scopeText={recap.report.display_text?.scope} scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={clubSlug} /></>;
   const spotlight = (recap.spotlight || []).filter((item) => item.include !== false).sort((a, b) => Number(a.order ?? 999) - Number(b.order ?? 999));
   const aroundCards: Array<{ title: string; rows: string[]; tone: "league" | "round_robin" | "community" }> = [];
   for (const item of recap.around_club?.leagues || []) aroundCards.push({ title: item.league_name, rows: (item.highlights || []).map((row) => row.display).filter(Boolean), tone: "league" });
@@ -245,11 +246,13 @@ export default async function WeeklyRecapPage(props: WeeklyRecapPageProps) {
   const params = await props.params;
   const { clubSlug } = params;
   const selectedWeek = decodeParam(firstParam(searchParams, "week"));
+  const referral = firstParam(searchParams, "from");
+  const source = referral === "email" || referral === "whatsapp" ? referral : "website";
   const activeSection = normalizeSection(firstParam(searchParams, "section"));
   const printMode = ["1", "true", "yes"].includes(String(firstParam(searchParams, "print") ?? "").toLowerCase());
   const requestedPage = Number(firstParam(searchParams, "page") || "1");
   const activePage = Number.isFinite(requestedPage) ? Math.max(1, Math.round(requestedPage)) : 1;
-  const { data, error } = await getClubWeeklyRecaps(clubSlug, selectedWeek, activePage);
+  const { data, error } = await getClubWeeklyRecaps(clubSlug, selectedWeek, activePage, Boolean(selectedWeek) && source !== "website");
   const selected = data?.selected_recap ?? null;
   const pagination = data?.pagination;
   const pdfUrl = selected?.week_start ? getWeeklyRecapPdfUrl(clubSlug, selected.week_start) : null;
@@ -355,7 +358,10 @@ export default async function WeeklyRecapPage(props: WeeklyRecapPageProps) {
               <div className="no-print"><PrintButton /></div>
             </header>
           )}
-          <RecapBody recap={selected.recap} activeSection={activeSection} clubSlug={clubSlug} />
+          <RecapBody recap={selected.recap} activeSection={activeSection} clubSlug={clubSlug}
+            participation={!printMode && selected.recap.report?.has_engagement && (!selectedWeek || selected.week_start === selectedWeek)
+              ? <RecapParticipation key={clubSlug + selected.week_start} club={clubSlug} week={selected.week_start}
+                  source={source} /> : null} />
         </div>
       ) : null}
     </section>

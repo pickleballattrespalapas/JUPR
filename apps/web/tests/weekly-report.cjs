@@ -54,3 +54,21 @@ for (const parameter of ['tournament_id', 'tournament']) {
     assert.equal(reportPath('tres', href + suffix), '');
   }
 }
+
+const briefTools = load('lib/weeklyReportEmail.ts');
+const teaserSource = {start_date:"2026-10-26",report:{headline:"This week on the courts",edition:[
+  {key:"events",items:[{title:"Mixed 3.5",kind:"Halloween Tournament",lines:["1. Team A"],text:"Podium"}]}],
+  engagement:{mode:"automatic",featured:"poll",poll:{question:"Which drill?",options:["Drops","Resets"]},
+    subject:"",body:""}}};
+const short = buildWeeklyReportEmail(teaserSource,{...options,teaser:true});
+assert.match(short,/Team A/);assert.match(short,/Which drill/);
+assert.equal((short.match(/<a href=/g)||[]).length,1);
+assert.match(short,/weekly-recap\?week=2026-10-26&amp;from=email/);
+assert.doesNotMatch(short,/Cast my vote|<form|View results/);
+assert.doesNotMatch(buildWeeklyReportEmail(teaserSource,{...options,teaser:true,published:false}),/<a href=/);
+teaserSource.report.engagement.subject="Our own story";teaserSource.report.engagement.body="A <story>.\n\nJoin us.";
+assert.match(buildWeeklyReportEmail(teaserSource,{...options,teaser:true}),/A &lt;story&gt;/);
+assert.deepEqual(briefTools.shortRecapEmail(teaserSource).paragraphs,["A <story>.","Join us."]);
+teaserSource.report.engagement.mode="review";teaserSource.report.engagement.body="";
+assert.doesNotMatch(buildWeeklyReportEmail(teaserSource,{...options,teaser:true}),/Which drill/);
+console.log("Short email preserves edits, respects approval and links once to the dated recap.");

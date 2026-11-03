@@ -79,6 +79,7 @@ from services.api.public_tournament_team_routes import (
 from services.api.public_tournament_results_routes import (
     install_public_tournament_results_routes,
 )
+from services.api.recap_engagement_routes import install_recap_engagement_routes
 from services.api.public_weekly_recap_routes import install_public_weekly_recap_routes
 
 DEFAULT_CORS_ALLOWED_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000", "https://juprleagues.com", "https://www.juprleagues.com")
@@ -1100,6 +1101,7 @@ install_public_match_explorer_routes(app, get_club=get_club, get_supabase_client
 install_public_league_results_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_badge_codex_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_challenge_ladder_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
+install_recap_engagement_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, requester_hash=_public_live_requester_hash)
 install_public_weekly_recap_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_team_league_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_tournament_team_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)

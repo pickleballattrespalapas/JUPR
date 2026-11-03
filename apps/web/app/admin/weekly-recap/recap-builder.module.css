@@ -331,3 +331,7 @@
 .builder [hidden] {
   display: none !important;
 }
+
+.activityPreview { padding: 1rem; border-radius: 12px; background: #f0f7f2; border: 1px solid #c4d8cb; }
+.activityPreview h3 { margin: .3rem 0; }
+.activityPreview small { color: #155c50; font-weight: 700; }

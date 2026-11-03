@@ -479,6 +479,7 @@ def test_every_communications_route_has_an_independent_service_guard() -> None:
         "admin_player_updates_routes.py",
         "admin_verified_updates_routes.py",
         "admin_weekly_recap_routes.py",
+        "recap_engagement_routes.py",
         "admin_tournament_routes.py",
         "interclub_player_email_routes.py",
     ):
@@ -545,3 +546,12 @@ def test_interclub_player_pool_routes_require_their_exact_reviewed_wave(wave, me
     assert not wave_allows_request("support-requests", method, path)
     assert not wave_allows_request(wave, method, path + "/extra")
     assert all(not wave_allows_request(wave, other.upper(), path) for other in UNSAFE_METHODS if other.upper() != method)
+
+
+@pytest.mark.parametrize(("wave", "path"), [
+    ("public-intake-auth", "/clubs/alpha/weekly-recaps/2026-10-26/engagement"),
+    ("communications", "/admin/clubs/alpha/weekly-recap/recaps/2026-10-26/engagement/nominations/abc"),
+])
+def test_recap_engagement_writes_use_their_reviewed_wave(wave, path):
+    assert wave_allows_request("open", "POST", path)
+    assert {item for item in STAGING_WRITE_WAVES if wave_allows_request(item, "POST", path)} == {wave}

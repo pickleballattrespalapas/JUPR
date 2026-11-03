@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+from jupr_app.domain.recaps.engagement import clean_engagement, new_engagement
 from jupr_app.domain.recaps.recap_builder import apply_builder, catalog
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_DELETE_MATCHES, has_permission
@@ -192,6 +193,9 @@ def apply_weekly_recap_edits(generated_json: dict[str, Any] | None, edits_json: 
     recap["spotlight"] = updated
     if isinstance(edits.get("builder"), dict):
         apply_builder(recap, edits["builder"])
+    engagement = clean_engagement(edits.get("engagement"))
+    if engagement is not None:
+        recap.setdefault("report", {})["engagement"] = engagement
     return recap
 
 
@@ -633,6 +637,8 @@ def generate_admin_weekly_recap(
     candidates = get_spotlight_candidates(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
     recap["spotlight_candidates_snapshot"] = deepcopy(candidates)
     preserved = deepcopy(edits_json if edits_json is not None else (before or {}).get("edits_json") or {}) if preserve_edits else {}
+    if before and "engagement" in (before.get("edits_json") or {}) and "engagement" not in preserved:
+        preserved["engagement"] = before["edits_json"]["engagement"]
     # Preserve editorial work; stale selections are omitted rather than replaced with a different winner.
     for key, override in (preserved.get("spotlight_overrides") or {}).items():
         if not isinstance(override, dict):
@@ -640,6 +646,9 @@ def generate_admin_weekly_recap(
         available = {c["candidate_id"] for c in candidates.get(key, [])}
         override["players"] = [pid for pid in override.get("players", []) if pid in available]
     final = apply_weekly_recap_edits(recap, preserved, candidates) if preserved else recap
+    if isinstance(preserved.get("builder"), dict) and "engagement" not in preserved and not before:
+        preserved["engagement"] = new_engagement(supabase, str(club_id), start_date.isoformat(), final)
+        final.setdefault("report", {})["engagement"] = preserved["engagement"]
     payload = {
         "club_id": str(club_id),
         "week_start": start_date.isoformat(),
@@ -728,6 +737,8 @@ def save_admin_weekly_recap(
     if expected_row_version is None:
         raise StaleWeeklyRecapStateError("Weekly recap version is required. Reload before saving.")
     edits = dict(edits_json or {})
+    if "engagement" not in edits and "engagement" in (before.get("edits_json") or {}):
+        edits["engagement"] = before["edits_json"]["engagement"]
     candidates = _saved_candidates(supabase, before, tz_name)
     final_json = apply_weekly_recap_edits(before.get("generated_json") or {}, edits, candidates)
     payload = {
@@ -826,6 +837,8 @@ def publish_admin_weekly_recap(
     if is_publish:
         candidates = _saved_candidates(supabase, before, tz_name)
         edits = dict(edits_json if edits_json is not None else (before.get("edits_json") or {}))
+        if "engagement" not in edits and "engagement" in (before.get("edits_json") or {}):
+            edits["engagement"] = before["edits_json"]["engagement"]
         final_json = apply_weekly_recap_edits(before.get("generated_json") or {}, edits, candidates)
         payload = {
             "club_id": str(club_id),

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { WeeklyRecapJson } from "@/lib/weeklyRecapApi";
-import { buildWeeklyReportEmail } from "@/lib/weeklyReportEmail";
+import { buildWeeklyReportEmail, shortRecapEmail, shortRecapLink } from "@/lib/weeklyReportEmail";
 
 function download(content: Blob, filename: string) {
   const url = URL.createObjectURL(content);
@@ -20,13 +20,20 @@ export default function WeeklyReportExport({
   clubSlug: string;
   published: boolean;
 }) {
-  const [compact, setCompact] = useState(true);
+  const [format, setFormat] = useState(recap.report?.engagement ? "teaser" : "compact");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const frame = useRef<HTMLIFrameElement>(null);
   const [origin, setOrigin] = useState("");
   useEffect(() => setOrigin(window.location.origin), []);
-  const options = { origin, clubSlug, published, compact };
+  const options = { origin, clubSlug, published, compact: format !== "full", teaser: format === "teaser" };
+  const brief = shortRecapEmail(recap);
+  const recapUrl = shortRecapLink(recap, options);
+  const plain = [...brief.paragraphs, recapUrl].filter(Boolean).join("\n\n");
+  async function copy(value: string, success: string) {
+    try { await navigator.clipboard.writeText(value); setMessage(success); }
+    catch { setMessage("Clipboard unavailable. Select the text below or download the email."); }
+  }
   const fragment = buildWeeklyReportEmail(recap, options);
   const html = buildWeeklyReportEmail(recap, { ...options, document: true });
   const week = recap.start_date || recap.week_start || "report";
@@ -83,17 +90,24 @@ export default function WeeklyReportExport({
       <label>
         Export content{" "}
         <select
-          value={compact ? "compact" : "full"}
-          onChange={(e) => setCompact(e.target.value === "compact")}
+          value={format}
+          onChange={(e) => setFormat(e.target.value)}
         >
-          <option value="compact">Member email selections</option>
+          <option value="teaser">Short story and recap link</option>
+          <option value="compact">Detailed member email selections</option>
           <option value="full">Website edition</option>
         </select>
       </label>
       <p style={{ fontSize: 14 }}>
-        The member email keeps your edited text and card styles. Published reports
-        include a link to the complete report.
+        {format === "teaser" ? "The short email includes one story and one link to this dated recap." : "Detailed exports keep the selected wording and card styles."}
       </p>
+      {format === "teaser" && <div>
+        <p><strong>Subject</strong> {brief.subject}</p>
+        <button onClick={() => void copy(brief.subject, "Subject copied.")}>Copy subject</button>{" "}
+        <button disabled={!recapUrl} onClick={() => void copy(plain, "Short email and recap link copied.")}>Copy plain-text email</button>{" "}
+        <button disabled={!recapUrl} onClick={() => void copy(brief.paragraphs[0] + "\n\n" + shortRecapLink(recap, options, "whatsapp"), "WhatsApp teaser copied.")}>Copy WhatsApp teaser</button>
+        <details><summary>Plain-text email</summary><textarea readOnly value={plain} /></details>
+      </div>}
       <div style={{ display: "flex", flexWrap: "wrap", gap: ".6rem" }}>
         <button type="button" onClick={copyHtml}>
           Copy email HTML

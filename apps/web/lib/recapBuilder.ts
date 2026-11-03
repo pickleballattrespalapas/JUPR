@@ -1,5 +1,5 @@
 import type { AdminWeeklyRecapCandidate, AdminWeeklyRecapRow } from "./adminWeeklyRecapApi";
-import type { WeeklyRecapJson } from "./weeklyRecapApi";
+import type { Engagement, EngagementMode, RecapPoll, WeeklyRecapJson } from "./weeklyRecapApi";
 
 export const RECAP_SECTIONS = {
   opening: "From the courts",
@@ -188,7 +188,8 @@ export type RecapTemplate = {
 };
 export type RecapPreferences = {
   revision: number;
-  settings: { templates: RecapTemplate[]; default_template_id: string };
+  settings: { templates: RecapTemplate[]; default_template_id: string; engagement_mode?: EngagementMode; engagement_shoutouts?: boolean };
+  polls?: RecapPoll[];
   leagues: string[];
 };
 export type Editorial = {
@@ -204,6 +205,7 @@ export type SpotlightEdit = {
   players: string[];
 };
 export type RecapEdits = {
+  engagement?: Engagement;
   editorial: Editorial;
   spotlight_overrides: Record<
     string,
@@ -252,7 +254,7 @@ export function normalizeBuilder(
     custom_blocks: value?.custom_blocks || [],
     ...(value?.text_overrides ? { text_overrides: value.text_overrides } : {}),
     ...(value?.display_text ? { display_text: value.display_text } : {}),
-    step: Math.min(4, Math.max(0, value?.step || 0)),
+    step: Math.min(5, Math.max(0, value?.step || 0)),
   };
 }
 export function layoutTemplate(config: BuilderConfig): BuilderConfig {
@@ -530,6 +532,7 @@ export function previewRecap(
     report: {
       ...generated.report,
       ...edits.editorial,
+      ...(edits.engagement ? { engagement: edits.engagement } : {}),
       ...(edits.builder.display_text
         ? {
             display_text: Object.fromEntries(

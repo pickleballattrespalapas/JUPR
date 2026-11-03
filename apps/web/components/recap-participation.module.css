@@ -1,0 +1,13 @@
+.activities { display: grid; gap: .85rem; }
+.activities:not(:empty) { margin: .75rem 0 1.25rem; }
+.card { background: #f0f7f2; color: #183d34; border: 1px solid #c4d8cb; border-radius: 14px; padding: clamp(1rem, 3vw, 1.5rem); }
+.card h3 { margin: .25rem 0 .75rem; font-size: 1.3rem; }
+.kicker { font-size: .75rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; margin: 0; color: #156457; }
+.card form, .card fieldset { display: grid; gap: .6rem; max-width: 32rem; }
+.card fieldset { border: 0; padding: 0; margin: 0; }
+.card legend { margin-bottom: .4rem; }
+.card label { display: block; padding: .6rem; border: 1px solid #bacdc1; background: white; border-radius: .5rem; }
+.card input:not([type=radio]), .card textarea { display: block; width: 100%; margin-top: .25rem; font: inherit; box-sizing: border-box; }
+.card button { justify-self: start; border: 0; border-radius: .45rem; color: white; background: #14574b; padding: .65rem 1rem; font: inherit; font-weight: 650; }
+.card button:disabled { opacity: .55; }
+.card :focus-visible { outline: 3px solid #287ab6; outline-offset: 2px; }
