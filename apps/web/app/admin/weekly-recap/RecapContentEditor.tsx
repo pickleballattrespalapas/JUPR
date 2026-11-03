@@ -547,6 +547,9 @@ export function RecapStoryEditor({
                 onChange={(e) => update(item.id, { url: e.target.value })}
               />
             </label>
+            {item.kind === "Featured event" && <label>Event date for poll follow-ups (optional)
+              <input type="date" value={item.date || ""} onChange={e => update(item.id, { date: e.target.value })} />
+            </label>}
             <label>
               Link label
               <input

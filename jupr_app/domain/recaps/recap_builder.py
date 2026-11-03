@@ -186,7 +186,7 @@ def normalize_config(raw, *, template=False):
     blocks = [] if template else [clean_item(item) for item in custom[:12] if isinstance(item, dict)]
     result = {"version": 1, "order": order, "sections": sections, "custom_blocks": blocks,
               "email_order_mode": "custom" if raw.get("email_order_mode") == "custom" else "website",
-              "step": 0 if template else max(0, min(4, int(raw.get("step", 0) or 0)))}
+              "step": 0 if template else max(0, min(5, int(raw.get("step", 0) or 0)))}
     if isinstance(raw.get("email_order"), list):
         result["email_order"] = list(dict.fromkeys([key for key in raw["email_order"] if isinstance(key, str) and key in SECTIONS] + order))
     if not template:
@@ -270,6 +270,8 @@ def apply_builder(recap, config):
 def public_edition_report(raw):
     result = {key: text(raw.get(key), 160) for key in ("headline", "club_name", "club_slug", "scope_label")}
     result["version"] = 1
+    if isinstance(raw.get("engagement"), dict):
+        result["has_engagement"] = True
     if isinstance(raw.get("display_text"), dict):
         result["display_text"] = clean_display_text(raw["display_text"])
     for channel in ("edition", "email_edition"):

@@ -45,6 +45,10 @@ class FakeQuery:
         self.filters.append(("eq", key, value))
         return self
 
+    def lt(self, key, value):
+        self.filters.append(("lt", key, value))
+        return self
+
     def in_(self, key, values):
         self.filters.append(("in", key, {str(value) for value in values or []}))
         return self
@@ -83,6 +87,8 @@ class FakeQuery:
         for op, key, expected in self.filters:
             if op == "eq":
                 result = [row for row in result if str(row.get(key)) == str(expected)]
+            elif op == "lt":
+                result = [row for row in result if row.get(key) is not None and row[key] < expected]
             elif op == "in":
                 result = [row for row in result if str(row.get(key)) in expected]
             elif op == "is":

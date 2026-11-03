@@ -1,4 +1,4 @@
-import type { WeeklyRecapJson } from "./weeklyRecapApi";
+import type { Engagement, WeeklyRecapJson } from "./weeklyRecapApi";
 import type { RecapItem, SectionKey } from "./recapBuilder";
 
 const font = "font-family:Arial,Helvetica,sans-serif;";
@@ -67,6 +67,7 @@ function button(label: string, url: string) {
 
 export type WeeklyEmailOptions = {
   compact?: boolean;
+  teaser?: boolean;
   document?: boolean;
   origin: string;
   clubSlug: string;
@@ -97,12 +98,62 @@ function story(item: RecapItem, options: WeeklyEmailOptions, sectionKey?: Sectio
   const url = emailUrl(item.url);
   return `<div data-recap-item="${esc(item.id)}" data-card-style="${esc(item.layout || "plain")}" style="${decoration}margin:0 0 16px;overflow-wrap:anywhere;">${["events", "custom"].includes(sectionKey || "") && item.kind ? `<p style="${font}font-size:12px;line-height:18px;color:#17665c;margin:0 0 6px;">${esc(item.kind)}</p>` : ""}${item.title ? `<h3 style="${h}">${esc(item.title)}</h3>` : ""}${photo}${item.text ? (sectionKey === "numbers" ? `<p style="${body}font-size:26px;line-height:32px;margin:0 0 12px;">${esc(item.text).replace(/\n/g, "<br>")}</p>` : p(item.text)) : ""}${item.lines?.length ? list(item.lines) : ""}${reportPath(options.clubSlug, item.href) ? pLink(item.results_label ?? "View results", reportLink(options.origin, options.clubSlug, item.href!)) : ""}${(item.links || []).map((link) => pLink(link.label, reportLink(options.origin, options.clubSlug, link.href))).join("")}${url ? (item.layout === "promotion" ? button(item.link_label ?? "Learn more", url) : pLink(item.link_label ?? "Learn more", url)) : ""}</div>`;
 }
+export function featuredActivity(config?: Engagement) {
+  if (!config || config.mode === "off" || (config.mode === "review" && !config.approved)) return "none";
+  return config.featured;
+}
+
+function brief(value?: string, limit = 360) {
+  const words = (value || "").replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
+  if (words.length <= limit) return words;
+  return words.slice(0, limit - 1).replace(/\s+\S*$/, "").trimEnd() + "…";
+}
+
+export function shortRecapEmail(recap: Partial<WeeklyRecapJson>) {
+  const report = recap.report || {};
+  const config = report.engagement;
+  const blocks = report.edition || [];
+  const opening = blocks.find(block => block.key === "opening")?.items[0]?.text;
+  const event = blocks.find(block => block.key === "events")?.items[0];
+  const story = blocks.find(block => block.key === "custom")?.items.find(item => item.text && item.layout !== "promotion");
+  const spotlight = blocks.find(block => block.key === "spotlight")?.items.find(item => item.lines?.length);
+  const gold = event?.lines?.[0]?.match(/^\s*(?:1[.)]|Gold:)\s*(.+)$/i)?.[1];
+  const eventLead = gold ? gold + " took first place in " + event!.title + (event!.kind ? " at " + event!.kind : "") + "."
+    : event ? [event.title, event.text, event.lines?.[0]].filter(Boolean).join(" · ") : "";
+  const facts = [eventLead, spotlight ? spotlight.title + " · " + spotlight.lines![0] : ""].filter(Boolean).join(" ");
+  const numbers = blocks.find(block => block.key === "numbers")?.items.slice(0, 2).map(i => i.text + " " + i.title.toLowerCase()).join(" and ");
+  const lead = brief(opening || story?.text || facts || (numbers && "This week at the club we recorded " + numbers + ".")
+    || "This week’s club recap is ready. Catch up with the people and events on our courts.");
+  const feature = featuredActivity(config);
+  const invite = feature === "poll" ? config!.poll.question + " Cast your vote in this week’s recap."
+    : feature === "shoutout" ? "Who made you feel welcome on court this week? Open the recap to give them a shout-out."
+    : event ? "Open the recap for the full results and the rest of this week’s stories."
+    : "Open the recap to catch up on the rest of the week at the club.";
+  const headline = report.headline && report.headline !== "This week on the courts" ? report.headline : "";
+  const subject = config?.subject || brief(headline || (gold ? "Gold in " + event!.title + " for " + gold : "") || story?.title || event?.title || "This week on the courts", 95);
+  const paragraphs = config?.body?.trim() ? config.body.trim().split(/\n\s*\n/).reduce<string[]>((parts, part) => parts.length < 2 ? [...parts, part] : [parts[0], parts[1] + " " + part], []) : [lead, invite];
+  return { subject, paragraphs };
+}
+
+export function shortRecapLink(recap: Partial<WeeklyRecapJson>, options: WeeklyEmailOptions, source = "email") {
+  const week = recap.week_start || recap.start_date || "";
+  const url = options.published && reportLink(options.origin, options.clubSlug, "weekly-recap?week=" + week);
+  return url ? url + "&from=" + (source === "whatsapp" ? "whatsapp" : "email") : "";
+}
+
 /** Self-contained table fragment fits inside the Tres 620px newsletter. No footer/signoff duplication. */
 export function buildWeeklyReportEmail(
   recap: Partial<WeeklyRecapJson>,
   options: WeeklyEmailOptions,
 ): string {
   const report = recap.report || {};
+  if (options.teaser) {
+    const { subject, paragraphs } = shortRecapEmail(recap);
+    const link = shortRecapLink(recap, options);
+    const content = (!options.published ? p("DRAFT PREVIEW · Publish to enable the recap link") : "")
+      + paragraphs.map(p).join("") + button("Read this week’s recap", link);
+    return wrapEmail(section(subject, content), subject, options.document);
+  }
   const compact = options.compact ?? true;
   const published = Boolean(options.published);
   const week = recap.week_start || recap.start_date || "";

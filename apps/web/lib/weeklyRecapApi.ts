@@ -80,7 +80,7 @@ function apiErrorMessage(response: Response): string {
   return PUBLIC_RECAP_LOAD_ERROR;
 }
 
-async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
+async function fetchJson<T>(path: string, fresh: boolean): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
   if (!apiBase) {
     console.error("[weeklyRecapApi] JUPR API base URL is not configured.");
@@ -88,7 +88,7 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   }
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
-    const response = await fetch(url, { next: { revalidate: 60 } });
+    const response = await fetch(url, fresh ? { cache: "no-store" } : { next: { revalidate: 60 } });
     if (!response.ok) return { data: null, error: apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };
   } catch (error) {
@@ -97,10 +97,10 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   }
 }
 
-export async function getClubWeeklyRecaps(clubSlug: string, weekStart?: string | null, page = 1): Promise<ApiResult<WeeklyRecapsResponse>> {
+export async function getClubWeeklyRecaps(clubSlug: string, weekStart?: string | null, page = 1, fresh = false): Promise<ApiResult<WeeklyRecapsResponse>> {
   const query = new URLSearchParams({ page: String(Math.max(1, Math.round(page))), page_size: "8" });
   if (weekStart) query.set("week_start", weekStart);
-  return fetchJson<WeeklyRecapsResponse>(`/clubs/${clubSlug}/weekly-recaps?${query.toString()}`);
+  return fetchJson<WeeklyRecapsResponse>(`/clubs/${clubSlug}/weekly-recaps?${query.toString()}`, fresh);
 }
 
 export function getWeeklyRecapPdfUrl(clubSlug: string, weekStart: string): string | null {
@@ -108,7 +108,21 @@ export function getWeeklyRecapPdfUrl(clubSlug: string, weekStart: string): strin
   return `/api/clubs/${encodeURIComponent(clubSlug)}/weekly-recaps/${encodeURIComponent(weekStart)}/pdf`;
 }
 
+export type EngagementMode = "automatic" | "review" | "off";
+export type RecapPoll = { id: string; question: string; options: [string, string]; tips: [string, string] };
+export type Engagement = {
+  mode: EngagementMode;
+  featured: "poll" | "shoutout" | "none";
+  approved: boolean;
+  shoutouts: boolean;
+  poll: RecapPoll;
+  subject: string;
+  body: string;
+};
+export type PollFollowup = { week: string; question: string; options: string[]; counts: number[]; winner: number | null; tip: string | null; clinic?: { url: string; title: string } };
 export type WeeklyReport = {
+  engagement?: Engagement;
+  has_engagement?: boolean;
   display_text?: RecapDisplayText;
   edition?: RecapBlock[];
   email_edition?: RecapBlock[];

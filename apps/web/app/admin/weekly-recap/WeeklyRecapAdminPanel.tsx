@@ -15,7 +15,7 @@ import type {
   AdminWeeklyRecapRow,
   AdminWeeklyRecapStatusResponse,
 } from "@/lib/adminWeeklyRecapApi";
-import type { WeeklyRecapJson } from "@/lib/weeklyRecapApi";
+import type { Engagement, WeeklyRecapJson } from "@/lib/weeklyRecapApi";
 import {
   layoutTemplate,
   normalizeBuilder,
@@ -31,9 +31,10 @@ import {
   type RecapEdits,
   type RecapPreferences,
 } from "@/lib/recapBuilder";
-import { buildWeeklyReportEmail, emailUrl } from "@/lib/weeklyReportEmail";
+import { buildWeeklyReportEmail, emailUrl, featuredActivity } from "@/lib/weeklyReportEmail";
 import { RecapContentEditor, RecapStoryEditor } from "./RecapContentEditor";
 import AdminWeeklyRecapPreview from "./AdminWeeklyRecapPreview";
+import RecapEngagementEditor from "./RecapEngagementEditor";
 import WeeklyReportExport from "./WeeklyReportExport";
 import RecapLayoutManager from "./RecapLayoutManager";
 import RecapEvidencePicker from "./RecapEvidencePicker";
@@ -48,7 +49,9 @@ type Props = {
   initialWeekStart?: string;
   printMode?: boolean;
 };
-const steps = ["Setup", "Content", "Personalize", "Preview", "Publish & share"];
+const steps = ["Setup", "Content", "Personalize", "Preview", "Publish & share", "Engagement"];
+// Saved step IDs 0-4 are used by earlier drafts.
+const stepOrder = [0, 1, 2, 5, 3, 4];
 const emptyEditorial: Editorial = {
   headline: "This week on the courts",
   opening: "",
@@ -104,6 +107,7 @@ function rowEdits(
     }),
   );
   return {
+    ...(raw.engagement ? { engagement: raw.engagement as Engagement } : {}),
     editorial: {
       headline: report.headline ?? emptyEditorial.headline,
       opening: report.opening || "",
@@ -184,11 +188,16 @@ export default function WeeklyRecapAdminPanel({
   const publicReady = Boolean(
     isLive && !hasChanges && row?.edits_json?.builder,
   );
+  const teaser = Boolean(edits.engagement);
+  const shortPreview = previewMode === "email" && teaser;
+  const pathSteps = step !== 5 && edits.engagement?.mode !== "review" ? stepOrder.filter(i => i !== 5) : stepOrder;
+  const position = pathSteps.indexOf(step);
   const emailHtml = buildWeeklyReportEmail(preview, {
     origin,
     clubSlug,
     published: publicReady,
     compact: true,
+    teaser,
     document: true,
   });
   const invalidLinks = [
@@ -578,6 +587,7 @@ export default function WeeklyRecapAdminPanel({
         builder: layoutTemplate(edits.builder),
       };
       const settings = {
+        ...preferences.settings,
         templates: [
           ...preferences.settings.templates.filter((t) => t.id !== template.id),
           template,
@@ -709,14 +719,14 @@ export default function WeeklyRecapAdminPanel({
         <p role="status">{message}</p>
       ) : null}
       <nav className={styles.nav} aria-label="Recap steps">
-        {steps.map((label, index) => (
+        {stepOrder.map((index, order) => (
           <button
-            key={label}
+            key={index}
             aria-current={step === index ? "step" : undefined}
             disabled={busy || (index > 0 && !row)}
             onClick={() => go(index)}
           >
-            {index + 1}. {label}
+            {order + 1}. {steps[index]}
           </button>
         ))}
       </nav>
@@ -1065,6 +1075,12 @@ export default function WeeklyRecapAdminPanel({
               </label>
             ))}
           </section>
+          {step === 5 && <RecapEngagementEditor key={scope + row.id} week={row.week_start} recap={preview}
+            config={edits.engagement} polls={preferences.polls || []}
+            defaultMode={preferences.settings.engagement_mode || "automatic"} defaultShoutouts={Boolean(preferences.settings.engagement_shoutouts)} disabled={disabled}
+            canManage={Boolean(accessToken && status.mutations_enabled && preferencesReady && !busy && !saving)}
+            request={request} onChange={engagement => setEdits(current => ({ ...current, engagement }))}
+            onDefault={(mode, shoutouts) => updateLayouts({ ...preferences.settings, engagement_mode: mode, engagement_shoutouts: shoutouts }, preferences.revision, "Engagement default saved.")} />}
           <section hidden={step !== 3}>
             <h2>Preview your edition</h2>
             {invalidLinks.length ? (
@@ -1097,12 +1113,18 @@ export default function WeeklyRecapAdminPanel({
                 ))}
               </details>
             ) : null}
+            {previewMode === "website" && edits.engagement && featuredActivity(edits.engagement) !== "none" && <section className={styles.activityPreview}>
+              <small>Member activity preview</small>
+              <h3>{featuredActivity(edits.engagement) === "poll" ? edits.engagement.poll.question : "Who made you feel welcome on court?"}</h3>
+              {featuredActivity(edits.engagement) === "poll" && <p>{edits.engagement.poll.options.join(" or ")}</p>}
+              {(edits.engagement.shoutouts || featuredActivity(edits.engagement) === "shoutout") && <p>Members can submit a shout-out for review.</p>}
+            </section>}
             <div className={styles.previewTabs}>
               {["website", "email", "print"].map((view) => (
                 <button
                   key={view}
                   aria-pressed={previewMode === view}
-                  onClick={() => setPreviewMode(view)}
+                  onClick={() => { setPreviewMode(view); setEditingText(false); setArranging(false); }}
                 >
                   {view === "website"
                     ? "Website"
@@ -1115,18 +1137,18 @@ export default function WeeklyRecapAdminPanel({
                 type="button"
                 disabled={disabled && !editingText}
                 aria-pressed={editingText}
-                onClick={() => { setEditingText(!editingText); setArranging(false); }}
+                onClick={() => { if (shortPreview) { go(5); return; } setEditingText(!editingText); setArranging(false); }}
               >
                 {editingText ? "Done editing text" : "Edit text"}
               </button>
-              {previewMode !== "print" && !printMode ? <button
+              {!shortPreview && previewMode !== "print" && !printMode ? <button
                 type="button"
                 disabled={disabled && !arranging}
                 aria-pressed={arranging}
                 onClick={() => { setArranging(!arranging); setEditingText(false); }}
               >{arranging ? "Done arranging" : "Arrange content"}</button> : null}
             </div>
-            {previewMode === "email" ? <div>
+            {previewMode === "email" && !teaser ? <div>
               <label htmlFor="recap-member-email-order">Member email order</label>{" "}
               <select id="recap-member-email-order" disabled={disabled} value={edits.builder.email_order_mode || "website"}
                 onChange={event => changeBuilder(setEmailOrderMode(edits.builder, generatedCatalog, event.target.value === "custom" ? "custom" : "website"))}>
@@ -1257,12 +1279,12 @@ export default function WeeklyRecapAdminPanel({
             </div>
           </section>
           <div className={styles.actions} style={{ marginTop: "1rem" }}>
-            <button disabled={step === 0 || busy} onClick={() => go(step - 1)}>
+            <button disabled={position <= 0 || busy} onClick={() => go(pathSteps[position - 1])}>
               Back
             </button>
-            {step < 4 ? (
-              <button disabled={busy} onClick={() => go(step + 1)}>
-                Next: {steps[step + 1]}
+            {position < pathSteps.length - 1 ? (
+              <button disabled={busy} onClick={() => go(pathSteps[position + 1])}>
+                Next: {steps[pathSteps[position + 1]]}
               </button>
             ) : null}
           </div>

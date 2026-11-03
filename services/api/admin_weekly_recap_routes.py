@@ -4,6 +4,7 @@ import os
 from typing import Any, Literal
 
 from fastapi import HTTPException, Query
+from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import PERMISSION_DELETE_MATCHES, PERMISSION_MANAGE_MATCHES, has_permission, resolve_admin_role
@@ -102,6 +103,11 @@ def _resolve_weekly_recap_role_or_403(*, supabase: Any, club_id: str, authorizat
 
 
 def _handle_common(exc: Exception) -> None:
+    if isinstance(exc, APIError) and exc.code == "P0001" and exc.message in {
+        "This poll already has votes. Restore the published question and answers.",
+        "A published engagement edition cannot change league scope.",
+    }:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
     if isinstance(exc, StaleWeeklyRecapStateError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, PermissionError):

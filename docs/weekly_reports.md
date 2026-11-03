@@ -6,7 +6,7 @@ The expanded report includes named generator sessions, Moneyball settlement usin
 
 Player highlights use explicit minimum-game rules. Top Performer consistently means wins minus losses, with opponent strength as its first tiebreaker and a four-game minimum. Above Expectations uses pre-game rating snapshots for at least four rated games; unrated games and games lacking those snapshots cannot manufacture an expected result. Season races use configured league award definitions, show eligibility progress, and snapshot standings through the report end date. New achievements require a triggering game in the report period, rather than the date a badge was inserted.
 
-The five-step builder follows **Setup → Content → Personalize → Preview → Publish & share**. Choose the whole club or one league before generating. League scope filters games, totals, candidates, and season races; excluding an event card in Content only changes the stories shown, not the scope of the totals.
+The builder follows **Setup → Content → Personalize → Engagement → Preview → Publish & share**. Choose the whole club or one league before generating. League scope filters games, totals, candidates, and season races; excluding an event card in Content only changes the stories shown, not the scope of the totals.
 
 Turn each section on or off, rename it, move it earlier or later, and choose brief or full detail. Select individual statistics, event results, season races, achievements, and new members, with separate selections for the compact member email. Empty sections disappear. Personalize the headline, opening message, club notes, spotlight choices, upcoming events, and links. Add optional announcements, coaching tips, recognition, sponsor messages, and photos using public HTTPS image URLs with alternative text.
 
@@ -48,3 +48,11 @@ Generator cards link directly to shared standings only when viewing has been ena
 Social round robins show the event winner and record using the canonical wins, point difference, and points scored rules. Numerical ties stay labeled as tied pending the club's decision; a recorded decision is honored only while its result fingerprint remains valid. Saved legacy social events use their recorded event snapshot, with saved match seats as a fallback.
 
 League cards in the report include **Weekly report · Week N** links for every league week played in the report period. These links also appear in published email exports, including compact exports. The public league directory has a **Weekly report** shortcut on each card. An unqualified weekly link opens the latest week with results, while explicit week selections remain available.
+
+## Engagement and the short member email
+
+New builder editions prepare a short story email with a single link to the dated recap. In **Engagement**, choose a club default of **Automatic**, **Review first**, or **Off**. Automatic skips directly from Personalize to Preview. An issue can feature a two-choice poll, invite a member shout-out, or omit the activity. Edit the subject, body, question, answers, or follow-up drills if needed. Staff can enable engagement on an older draft individually.
+
+After publishing, use **Publish & share** to copy the subject, plain text, or HTML into your newsletter. A separate WhatsApp copy uses the same edition. Detailed email and website exports remain available through the format selector.
+
+Members participate on the published webpage. The tab reports browsers arriving from the email and how many submitted a response there. A browser can vote and nominate once per edition. Nominations become public only after a club administrator confirms permission and features them. At the next publication for the same scope, a poll with five or more votes contributes a result and the winning practice tip. Ties show both counts. A matching featured clinic with a future event date can supply a registration link. Voting also closes after seven days.

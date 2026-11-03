@@ -1,4 +1,5 @@
 """Club layouts are versioned independently from individual recap editions."""
+from jupr_app.domain.recaps.engagement import MODES, POLLS
 from datetime import datetime, timezone
 from jupr_app.domain.recaps.recap_builder import normalize_config
 from jupr_app.domain.recaps.weekly_report_public import text
@@ -9,7 +10,7 @@ def get_preferences(db, club_id):
     rows = db.table("club_recap_preferences").select("revision,settings").eq("club_id", club_id).limit(1).execute().data or []
     row = rows[0] if rows else {"revision": 0, "settings": {"templates": [], "default_template_id": ""}}
     leagues = db.table("leagues_metadata").select("league_name").eq("club_id", club_id).execute().data or []
-    return {**row, "leagues": sorted({r["league_name"] for r in leagues if r.get("league_name")})}
+    return {**row, "polls": [{k: v for k, v in p.items() if k != "keywords"} for p in POLLS], "leagues": sorted({r["league_name"] for r in leagues if r.get("league_name")})}
 
 
 def save_preferences(db, club_id, revision, settings):
@@ -30,6 +31,16 @@ def save_preferences(db, club_id, revision, settings):
     if default_id and default_id not in {t["id"] for t in templates}:
         raise ValueError("Choose a saved default template.")
     payload = {"club_id": club_id, "revision": revision + 1, "settings": {"templates": templates, "default_template_id": default_id}, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if "engagement_mode" in settings and str(settings["engagement_mode"]) not in MODES:
+        raise ValueError("Choose an available engagement mode.")
+    # Older layout-management clients send only template settings.
+    previous = {}
+    if revision and not {"engagement_mode", "engagement_shoutouts"}.issubset(settings):
+        current = db.table("club_recap_preferences").select("settings").eq("club_id", club_id).limit(1).execute().data or []
+        previous = (current[0].get("settings") or {}) if current else {}
+    for key in ("engagement_mode", "engagement_shoutouts"):
+        if key in settings or key in previous:
+            payload["settings"][key] = settings.get(key, previous.get(key))
     if revision:
         rows = db.table("club_recap_preferences").update(payload).eq("club_id", club_id).eq("revision", revision).execute().data or []
         if not rows:
