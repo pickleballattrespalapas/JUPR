@@ -14,7 +14,7 @@ from jupr_app.services.public_live_operation_service import PublicLiveConflictEr
 
 
 class GeneratorSession:
-    def __init__(self, audience, *, rounds=3, scoring_mode="scored", player_count=5):
+    def __init__(self, audience, *, rounds=3, scoring_mode="scored", player_count=5, court_count=1):
         self.audience = audience
         self.db = FakeSupabase()
         self.sequence = 0
@@ -22,7 +22,7 @@ class GeneratorSession:
         setup = dict(
             club_id="club", generator_kind="round_robin", play_format="doubles",
             title="Evening round robin", participant_names=[f"Player {i}" for i in range(1, player_count + 1)],
-            total_rounds=rounds, court_count=1, scoring_mode=scoring_mode,
+            total_rounds=rounds, court_count=court_count, scoring_mode=scoring_mode,
             rating_mode="unrated", preview_fingerprint=None,
         )
         if audience == "public":
@@ -80,6 +80,38 @@ class GeneratorSession:
         event = self.stored["state"]["page_state"]["event"]
         event.update(status="completed", completedAt="2026-10-08T19:25:00Z")
         self.reload()
+
+
+def test_public_worker_adds_two_players_during_round_two(monkeypatch):
+    monkeypatch.setenv("JUPR_GENERATOR_PROCESS_WORKER", "1")
+    game = GeneratorSession("public", rounds=8, player_count=6, court_count=0)
+    game.score(1)
+    game.call("advance")
+    started_rounds = deepcopy(game.session["event"]["rounds"][:2])
+
+    for index, name in enumerate(("First arrival", "Second arrival"), start=1):
+        public.mutate_public_play_generator_roster(
+            game.db, club_id="club", session_key=game.session["session_key"],
+            edit_token=game.edit_token, requester_hash="a" * 64,
+            expected_version=game.session["version"], idempotency_key=f"round-two-arrival-{index}",
+            action="add", name=name, player_id=None, participant_id=None,
+            roster_order=None, substitute_scope="rest",
+        )
+        event = game.reload()["event"]
+        assert event["rounds"][:2] == started_rounds
+        assert len(event["participants"]) == 6 + index
+        assert event["participants"][-1]["name"] == name
+        assert game.db.db["public_live_operations"][-1]["status"] == "completed"
+
+    game.score(2)
+    game.call("advance")
+    event = game.reload()["event"]
+    assert event["currentRoundNumber"] == 3
+    third = event["rounds"][2]
+    assert len(third["matches"]) == 2
+    assert third["byeParticipantIds"] == []
+    scheduled = [pid for match in third["matches"] for pid in match["sideA"] + match["sideB"]]
+    assert sorted(scheduled) == sorted(player["id"] for player in event["participants"])
 
 
 @pytest.mark.parametrize("audience", ["admin", "public"])
