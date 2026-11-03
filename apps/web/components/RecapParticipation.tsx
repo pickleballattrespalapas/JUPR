@@ -9,7 +9,7 @@ type Activity = {
   poll: { question: string; options: string[] } | null;
   stories: { nominee: string; story: string }[]; followup: PollFollowup | null;
 };
-type Receipt = { choice: number | null; nominated: boolean };
+type Receipt = { choice: number | null; nominated: boolean; counts?: [number, number] };
 
 export function Followup({ result }: { result: PollFollowup }) {
   const total = result.counts.reduce((sum, v) => sum + v, 0);
@@ -48,7 +48,7 @@ export default function RecapParticipation({ club, week, source }: { club: strin
         body: JSON.stringify({ visitor: browser.current, source, action: "visit" }) });
       if (visit.ok) {
         const state: Receipt = await visit.json();
-        if (active) setReceipt(previous => ({ choice: previous.choice ?? state.choice, nominated: previous.nominated || state.nominated }));
+        if (active) setReceipt(previous => ({ choice: previous.choice ?? state.choice, nominated: previous.nominated || state.nominated, counts: previous.counts ?? state.counts }));
       }
     }
     load().catch(() => { if (active) setError("Could not load this week’s activity."); });
@@ -66,10 +66,15 @@ export default function RecapParticipation({ club, week, source }: { club: strin
     } catch (e) { setError(e instanceof Error ? e.message : "Could not save your response."); }
     finally { setBusy(false); }
   }
+  const total = receipt.counts?.reduce((sum, count) => sum + count, 0) ?? 0;
   return <div className={styles.activities} id="recap-activities">
     {data?.poll && <section className={styles.card}><p className={styles.kicker}>Weekly vote</p>
       <h3>{data.poll.question}</h3>
-      {receipt.choice !== null ? <p role="status">Your vote for <strong>{data.poll.options[receipt.choice]}</strong> is recorded.</p>
+      {receipt.choice !== null ? <div role="status"><p>Your vote for <strong>{data.poll.options[receipt.choice]}</strong> is recorded.</p>
+          {receipt.counts && <><strong>Current results · {total} {total === 1 ? "vote" : "votes"}</strong>
+            <ul>{receipt.counts.map((count, i) => <li key={i}>{data.poll!.options[i]} — {count} {count === 1 ? "vote" : "votes"} ({total ? Math.round(100 * count / total) : 0}%)</li>)}</ul>
+          </>}
+        </div>
         : data.open ? <form onSubmit={e => { e.preventDefault(); void submit("vote"); }}>
           <fieldset><legend>Choose one answer</legend>{data.poll.options.map(option => <label key={option}>
             <input type="radio" name="recap-poll" value={option} checked={answer === option} onChange={() => setAnswer(option)} /> {option}
