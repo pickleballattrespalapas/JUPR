@@ -78,7 +78,7 @@ def test_moneyball_cannot_submit_blank_games_as_not_played(frozen):
     assert event == before
 
 
-@pytest.mark.parametrize("fixture_name,games", [("frozen", 7), ("six_frozen", 4)])
+@pytest.mark.parametrize("fixture_name,games", [("frozen", 7), ("six_frozen", 4), ("six_nine_frozen", 6)])
 def test_preview_expectations_cover_full_schedule_and_match_final_standings(fixture_name, games, request):
     frozen = request.getfixturevalue(fixture_name)
     before = deepcopy(frozen)
@@ -262,7 +262,7 @@ def test_ties_split_pool_without_rounding_influencing_rank(frozen):
     assert len(payout["winners"]) == 8 and all(w["payoutMxn"] == 100 for w in payout["winners"])
 
 
-@pytest.mark.parametrize("fixture_name", ["frozen", "six_frozen"])
+@pytest.mark.parametrize("fixture_name", ["frozen", "six_frozen", "six_nine_frozen"])
 def test_public_preview_start_export_hide_ratings_and_freeze_database_values(fixture_name, request, monkeypatch):
     frozen = request.getfixturevalue(fixture_name)
     count = len(frozen["participants"])
@@ -390,10 +390,20 @@ def six_frozen():
     return freeze_moneyball(event, {p["id"]: 3+i*.15 for i, p in enumerate(event["participants"])})
 
 
-def test_six_player_rotation_geometry_and_bye_spacing(six_frozen):
-    event = six_frozen
-    assert len(event["rounds"]) == 6 and not event["perfectRotation"]
-    assert event["fixedScheduleRoundCount"] == 6
+@pytest.fixture(scope="module")
+def six_nine_frozen():
+    event = preview(participant_names=[f"Player {i}" for i in range(6)],
+                    player_ids=list(range(1, 7)), total_rounds=9)
+    return freeze_moneyball(event, {p["id"]: 3+i*.15 for i, p in enumerate(event["participants"])})
+
+
+@pytest.mark.parametrize("fixture_name,rounds,games_each,partners_each,opponent_counts", [
+    ("six_frozen", 6, 4, 4, {1, 2}), ("six_nine_frozen", 9, 6, 5, {2, 3}),
+])
+def test_six_player_rotation_geometry_and_bye_spacing(fixture_name, rounds, games_each, partners_each, opponent_counts, request):
+    event = request.getfixturevalue(fixture_name)
+    assert len(event["rounds"]) == rounds and not event["perfectRotation"]
+    assert event["fixedScheduleRoundCount"] == rounds
     ids = [p["id"] for p in event["participants"]]
     partners, opponents, games, byes = Counter(), Counter(), Counter(), {pid: [] for pid in ids}
     for row in event["rounds"]:
@@ -405,21 +415,23 @@ def test_six_player_rotation_geometry_and_bye_spacing(six_frozen):
         games.update(a+b)
         partners.update(tuple(sorted(team)) for team in (a,b))
         opponents.update(tuple(sorted((x,y))) for x in a for y in b)
-    assert set(games.values()) == {4}
-    assert len(partners) == 12 and set(partners.values()) == {1}
-    assert len(opponents) == 15 and set(opponents.values()) == {1,2}
+    assert set(games.values()) == {games_each}
+    assert len(partners) == 6 * partners_each // 2
+    assert len(opponents) == 15 and set(opponents.values()) == opponent_counts
     for pid in ids:
-        assert sum(pid in pair for pair in partners) == 4
-        assert len(byes[pid]) == 2 and byes[pid][0] <= 3 < byes[pid][1]
-        assert byes[pid][1]-byes[pid][0] > 1
-    assert "not a perfect round robin" in event["moneyball"]["rotationSummary"]
-    assert len(event["moneyballPrivate"]["player_total_margin_pmf"][0]) == 89
+        assert sum(pid in pair for pair in partners) == partners_each
+        assert sum(count == 2 for pair, count in partners.items() if pid in pair) == games_each - partners_each
+        assert [(number - 1) // 3 for number in byes[pid]] == list(range(rounds // 3))
+        assert all(right - left > 1 for left, right in zip(byes[pid], byes[pid][1:]))
+    assert f"{rounds} rounds" in event["moneyball"]["rotationSummary"]
+    assert len(event["moneyballPrivate"]["player_total_margin_pmf"][0]) == 2 * 11 * games_each + 1
     assert event["moneyballPrivate"]["fairness"]["simulation_fairness_check_passed"]
 
 
 @pytest.mark.parametrize("change", ["missing", "duplicate_round", "repeated_partner", "byes"])
-def test_six_player_probability_validation_rejects_unbalanced_rotations(six_frozen, change):
-    config = deepcopy(six_frozen["moneyballPrivate"]["config"])
+@pytest.mark.parametrize("fixture_name", ["six_frozen", "six_nine_frozen"])
+def test_six_player_probability_validation_rejects_unbalanced_rotations(fixture_name, change, request):
+    config = deepcopy(request.getfixturevalue(fixture_name)["moneyballPrivate"]["config"])
     if change == "missing":
         config["matches"].pop()
     elif change == "duplicate_round":
@@ -439,18 +451,24 @@ def test_six_player_setup_requires_the_full_one_court_rotation(changes):
                           player_ids=list(range(1,7)), total_rounds=6), **changes})
 
 
-def test_six_player_scoring_completion_correction_and_substitution(six_frozen):
+@pytest.mark.parametrize("fixture_name,games_each", [("six_frozen", 4), ("six_nine_frozen", 6)])
+def test_six_player_scoring_completion_correction_and_substitution(fixture_name, games_each, request):
+    six_frozen = json.loads(json.dumps(request.getfixturevalue(fixture_name)))
+    rounds = six_frozen["totalRounds"]
     event = start_generator_event(six_frozen)
     with pytest.raises(ValueError, match="all scheduled"):
         complete_generator_event(event)
     with pytest.raises(ValueError, match="fixed rotation"):
         skip_generator_round(event, round_number=1)
-    # Play in the scheduled order, scoring every player exactly four times.
-    for number in range(1,7):
+    for number in range(1, rounds + 1):
         event = save(event, number, 11, 7 if number % 2 else 4)
+        if number == 6 and rounds == 9:
+            with pytest.raises(ValueError, match="all scheduled"):
+                complete_generator_event(event)
+            assert not settlement(event, generator_event_standings(event))["winners"]
     event = complete_generator_event(event)
     rows = generator_event_standings(event)
-    assert all(r["matches"] == 4 and r["moneyballFinal"] for r in rows)
+    assert all(r["matches"] == games_each and r["moneyballFinal"] for r in rows)
     lock = six_frozen["moneyballPrivate"]
     played = deepcopy(lock["config"])
     for match, row in zip(played["matches"], event["rounds"]):
@@ -466,13 +484,19 @@ def test_six_player_scoring_completion_correction_and_substitution(six_frozen):
     # A replacement inherits only the remaining games; both players are DQ.
     changed = mutate_generator_roster(start_generator_event(six_frozen), action="substitute",
         participant_id="p-1", name="Substitute", player_id=99)
-    for number in range(1,7):
+    for number in range(1, rounds + 1):
         changed = save(changed,number)
     changed = complete_generator_event(changed)
     rows = generator_event_standings(changed)
     assert changed["moneyballPrivate"] == lock
     assert {r["participantId"] for r in rows if not r["moneyballEligible"]} == {"p-1","p-sub-1"}
     result = settlement(changed,rows)
-    assert result["prizePoolMxn"] == 600 and result["totalGames"] == 6
+    assert result["prizePoolMxn"] == 600 and result["totalGames"] == rounds
     assert not {w["participantId"] for w in result["winners"]} & {"p-1","p-sub-1"}
     assert sum(w["payoutMxn"] for w in result["winners"]) == 600
+
+
+def test_six_player_rotation_choice_changes_the_frozen_preview(six_frozen, six_nine_frozen):
+    assert six_nine_frozen["rounds"][:6] == six_frozen["rounds"]
+    assert six_nine_frozen["previewFingerprint"] != six_frozen["previewFingerprint"]
+    assert six_nine_frozen["moneyballPrivate"]["lock_sha256"] != six_frozen["moneyballPrivate"]["lock_sha256"]
