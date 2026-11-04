@@ -83,11 +83,18 @@ def freeze_moneyball(event: dict[str, Any], ratings: dict[str, float], *, target
             "It has not been validated against historical 15-point results."
         )
     if len(config["players"]) == 6:
-        event["moneyball"]["rotationSummary"] = (
-            "Balanced six-player rotation: 1 court, 6 rounds. Everyone plays 4 games with 4 different partners "
-            "and has 2 byes, one in each three-round block, with no consecutive byes. "
-            "Each opponent is faced once or twice. This is not a perfect round robin."
-        )
+        if len(event["rounds"]) == 9:
+            event["moneyball"]["rotationSummary"] = (
+                "1 court, 9 rounds. Everyone plays 6 games, partners with all 5 other players "
+                "and repeats 1 partner. Each player has 3 byes, one in each three-round block, "
+                "with no consecutive byes. Each opponent is faced twice or three times."
+            )
+        else:
+            event["moneyball"]["rotationSummary"] = (
+                "Balanced six-player rotation: 1 court, 6 rounds. Everyone plays 4 games with 4 different partners "
+                "and has 2 byes, one in each three-round block, with no consecutive byes. "
+                "Each opponent is faced once or twice. This is not a perfect round robin."
+            )
     event["previewFingerprint"] = probability.digest({
         "schedule": event["previewFingerprint"], "setup": lock["lock_sha256"],
     })

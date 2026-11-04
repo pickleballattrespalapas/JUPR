@@ -265,6 +265,7 @@ export default function GeneratorWorkspace({
   const [ratingReviewReady, setRatingReviewReady] = useState(false);
   const [ratingMode, setRatingMode] = useState<"rated" | "unrated">("unrated");
   const [targetCount, setTargetCount] = useState(8);
+  const [sixPlayerMoneyballRounds, setSixPlayerMoneyballRounds] = useState<6 | 9>(6);
   const initialMixedSetup = recommendedMixedCourtSetup(8);
   const [doublesCourtCount, setDoublesCourtCount] = useState(initialMixedSetup.doublesCourtCount);
   const [singlesCourtCount, setSinglesCourtCount] = useState(initialMixedSetup.singlesCourtCount);
@@ -295,8 +296,8 @@ export default function GeneratorWorkspace({
     [participantText]
   );
   const automaticSetup = useMemo(
-    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball),
-    [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball]
+    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball, sixPlayerMoneyballRounds),
+    [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball, sixPlayerMoneyballRounds]
   );
   const rosterReady = participantNames.length === targetCount && (!moneyball || participantNames.every(name => Number(linkedPlayerIds[normalizeRosterName(name)] || 0) > 0));
   const mixedSetupValid = playFormat !== "doubles_singles" || (
@@ -351,6 +352,7 @@ export default function GeneratorWorkspace({
       setScoringMode(generatorKind === "round_robin" ? stored.scoringMode || "scored" : "scored");
       setRatingMode(stored.ratingMode === "rated" ? "rated" : "unrated");
       setTargetCount(stored.targetCount);
+      setSixPlayerMoneyballRounds(stored.sixPlayerMoneyballRounds === 9 ? 9 : 6);
       const mixedSetup = recommendedMixedCourtSetup(stored.targetCount);
       setDoublesCourtCount(stored.doublesCourtCount || mixedSetup.doublesCourtCount);
       setSinglesCourtCount(stored.singlesCourtCount || mixedSetup.singlesCourtCount);
@@ -364,6 +366,7 @@ export default function GeneratorWorkspace({
       const mixedSetup = recommendedMixedCourtSetup(8);
       setTitle(`${generatorTitle(generatorKind)} ${new Date().toISOString().slice(0, 10)}`);
       setEventFormat("standard"); setPlayFormat("doubles"); setStandingsSort("wins"); setScoringMode("scored"); setRatingMode("unrated");
+      setSixPlayerMoneyballRounds(6);
       setTargetCount(8); setDoublesCourtCount(mixedSetup.doublesCourtCount); setSinglesCourtCount(mixedSetup.singlesCourtCount);
       setParticipantText(""); setLinkedPlayerIds({}); setPreview(null);
     }
@@ -380,6 +383,7 @@ export default function GeneratorWorkspace({
       scoringMode,
       ratingMode,
       targetCount,
+      sixPlayerMoneyballRounds,
       doublesCourtCount,
       singlesCourtCount,
       participantText,
@@ -397,6 +401,7 @@ export default function GeneratorWorkspace({
     scoringMode,
     ratingMode,
     targetCount,
+    sixPlayerMoneyballRounds,
     doublesCourtCount,
     singlesCourtCount,
     participantText,
@@ -840,6 +845,8 @@ export default function GeneratorWorkspace({
           generatorKind={generatorKind}
           playFormat={playFormat}
           moneyballOnly={moneyball}
+          sixPlayerMoneyballRounds={sixPlayerMoneyballRounds}
+          onSixPlayerMoneyballRoundsChange={setSixPlayerMoneyballRounds}
           targetCount={targetCount}
           participantText={participantText}
           linkedPlayerIds={linkedPlayerIds}

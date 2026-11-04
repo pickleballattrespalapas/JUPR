@@ -34,8 +34,8 @@ def validate_config(config):
     count = len(players)
     six_player = count == 6
     if six_player:
-        if len(matches) != 6 or sorted(m['round'] for m in matches) != list(range(1, 7)):
-            raise ValueError('Six-player Moneyball requires six rounds with one game per round.')
+        if len(matches) not in {6, 9} or sorted(m['round'] for m in matches) != list(range(1, len(matches) + 1)):
+            raise ValueError('Six-player Moneyball requires six or nine rounds with one game per round.')
     elif not 4 <= count <= 40 or count % 4 not in {0, 1} or len(matches) != count*(count-1)//4:
         raise ValueError('Use six players or a supported complete perfect doubles round robin.')
     ids = [p['id'] for p in players]
@@ -64,12 +64,18 @@ def validate_config(config):
                 pair = tuple(sorted((a,b)))
                 opponents[pair] = opponents.get(pair,0)+1
     if six_player:
-        if (set(game_count.values()) != {4} or len(partners) != 12 or set(partners.values()) != {1}
-                or len(opponents) != 15 or set(opponents.values()) != {1, 2}):
-            raise ValueError('Six-player Moneyball requires four games and four distinct partners each, facing every opponent once or twice.')
+        if len(matches) == 6:
+            if (set(game_count.values()) != {4} or len(partners) != 12 or set(partners.values()) != {1}
+                    or len(opponents) != 15 or set(opponents.values()) != {1, 2}):
+                raise ValueError('Six-player Moneyball over six rounds requires four games and four distinct partners each, facing every opponent once or twice.')
+        else:
+            if (set(game_count.values()) != {6} or len(partners) != 15 or set(partners.values()) != {1, 2}
+                    or len(opponents) != 15 or set(opponents.values()) != {2, 3}):
+                raise ValueError('Six-player Moneyball over nine rounds requires six games with all five partners and one repeated partner each, facing every opponent twice or three times.')
         for pid in ids:
             byes = sorted(m['round'] for m in matches if pid not in m['team1'] + m['team2'])
-            if not (len(byes) == 2 and byes[0] <= 3 < byes[1] and byes[1] - byes[0] > 1):
+            if ([(number - 1) // 3 for number in byes] != list(range(len(matches) // 3))
+                    or any(right - left == 1 for left, right in zip(byes, byes[1:]))):
                 raise ValueError('Six-player Moneyball requires one bye in each three-round block and no consecutive byes.')
     elif set(game_count.values()) != {count-1} or len(partners) != count*(count-1)//2 or set(partners.values()) != {1} or len(opponents) != count*(count-1)//2 or set(opponents.values()) != {2}:
         raise ValueError('Use a complete perfect RR: everyone plays every partner once, partners once and opposes twice.')
