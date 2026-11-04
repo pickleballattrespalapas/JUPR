@@ -14,6 +14,7 @@ from jupr_app.domain.league_live_publish import (
     stable_payload_fingerprint,
 )
 from jupr_app.domain.player_ops import safe_add_player
+from jupr_app.domain.notifications.league_event_updates import queue_league_event_player_updates
 from jupr_app.services.admin_league_live_service import (
     LeagueLiveConflictError,
     LeagueLivePersistenceError,
@@ -298,6 +299,15 @@ def _completed_response(
         None,
     )
     rating_review = _as_dict(_as_dict(operation.get("result_json")).get("rating_review"))
+    warnings = list(rating_review.get("warnings") or [])
+    try:
+        player_update_queue = queue_league_event_player_updates(
+            supabase, club_id=str(club_id), session_id=str(session_id))
+        if player_update_queue.get("failed"):
+            warnings.append("Scores are published, but event player updates need a retry. Resume this round's publish to retry safely.")
+    except Exception:
+        player_update_queue = {"mode": "error"}
+        warnings.append("Scores are published, but event player updates need a retry. Resume this round's publish to retry safely.")
     return {
         "ok": True,
         "mode": "league_live_round_publish",
@@ -310,12 +320,13 @@ def _completed_response(
         "courts": detail.get("courts", []),
         "rating_review": rating_review,
         "published_match_ids": _as_list(operation.get("published_match_ids")),
+        "player_update_queue": player_update_queue,
         "recovery": {
             "session_detail": f"/admin/clubs/{{club_id}}/league-manager/live-sessions/{session_id}",
             "match_log": "/admin/match-log",
             "replay_history": "/admin/replay-history",
         },
-        "warnings": list(rating_review.get("warnings") or []),
+        "warnings": warnings,
     }
 
 
@@ -827,7 +838,7 @@ def submit_admin_league_live_round_publish(
         },
     )
     try:
-        submit_admin_match_uploader_batch(
+        publish_result = submit_admin_match_uploader_batch(
             supabase,
             club_id=str(club_id),
             matches=request["matches"],
@@ -837,6 +848,11 @@ def submit_admin_league_live_round_publish(
             match_format=match_format,
             source="next_league_live_all_match_publish",
             allow_league_live_context=True,
+        )
+        operation = _update_publish_operation(
+            supabase, club_id=str(club_id), operation_id=str(operation["id"]),
+            patch={"result_json": {**_as_dict(operation.get("result_json")),
+                "notification_evidence": _as_dict(publish_result.get("notification_evidence"))}},
         )
     except Exception as exc:
         published = _published_matches(

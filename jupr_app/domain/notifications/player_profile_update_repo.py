@@ -860,6 +860,7 @@ def queue_player_updates_for_affected_subscribers(
     match_ids: list[int | str] | None = None,
     session_evidence: dict[str, Any] | None = None,
     badge_refs: list[str] | None = None,
+    league_live_session_id: str | None = None,
 ) -> dict[str, int]:
     club_id = _require_nonempty(club_id, "club_id")
     unique_player_ids: list[int] = sorted({_safe_int(pid) for pid in (affected_player_ids or [])})
@@ -886,6 +887,10 @@ def queue_player_updates_for_affected_subscribers(
         raise ValueError("Session updates require the dates of the committed games.")
     digest_windows = {(min(match_days), max(match_days))}
     operation_key = session_player_update_operation_key(club_id, scoped_match_ids)
+    if league_live_session_id is not None:
+        league_live_session_id = _require_nonempty(league_live_session_id, "league_live_session_id")
+        operation_key = str(uuid5(NAMESPACE_URL,
+            f"jupr:league-event-player-update:{club_id}:{league_live_session_id}"))
     summary["week_windows"] = 1
 
     active_subs = list_active_subscriptions(supabase, club_id, limit=max(500, len(unique_player_ids) * 5))
@@ -929,6 +934,7 @@ def queue_player_updates_for_affected_subscribers(
                     email=email,
                     operation_key=operation_key,
                     digest_snapshot={"update_scope": "session", "match_ids": scoped_match_ids,
+                        **({"league_live_session_id": league_live_session_id} if league_live_session_id else {}),
                         "session_evidence": dict(session_evidence or {}),
                         "badge_refs": sorted({str(ref) for ref in badge_refs or []})},
                 )

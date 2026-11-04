@@ -106,6 +106,8 @@ def test_submit_gate_cannot_enable_in_production(monkeypatch) -> None:
 
 def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> None:
     tables = _tables()
+    tables["player_profile_update_subscriptions"] = [{"id": "sub-1", "club_id": "club",
+        "player_id": 1, "email": "player@example.test", "request_status": "active"}]
     supabase = FakeSupabase(tables)
     _install_submit_env(monkeypatch, supabase)
     calls: list[int] = []
@@ -135,6 +137,8 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     assert payload["publish_operation"]["status"] == "completed"
     assert payload["rating_review"]["status"] == "verified_readback"
     assert len(payload["published_match_ids"]) == 1
+    assert payload["player_update_queue"]["queued"] == 1
+    assert tables["player_profile_update_outbox"][0]["digest_snapshot_json"]["league_live_session_id"] == session["id"]
     assert len(tables["matches"]) == 1
     assert calls == [1]
     assert batch_calls == [{
@@ -164,6 +168,8 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     )
     assert replay.status_code == 200, replay.text
     assert replay.json()["idempotent_replay"] is True
+    assert replay.json()["player_update_queue"]["already_queued"] == 1
+    assert len(tables["player_profile_update_outbox"]) == 1
     assert len(tables["matches"]) == 1
     assert calls == [1]
 
