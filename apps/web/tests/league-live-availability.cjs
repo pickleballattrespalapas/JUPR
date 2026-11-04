@@ -68,9 +68,10 @@ const matches = pairings.map(([a, b, c, d], index) => ({ row_id: `court-1-${inde
 const preview = { ok: true, courts: [{ court: 1, format_type: "4-Player", matches }], match_count: 3, missing_players: [] };
 const liveStatus = { enabled: true, submit_enabled: true, player_create_enabled: true, movement_authority: "python_fastapi", round_robin_format_options: ["4-Player", "5-Player"], warnings: [] };
 const props = { apiBase: "https://api.example.invalid", clubId: "club-a", selectedLeagueName: leagueName, leagueStatus: { enabled: true, warnings: [] }, liveDomainStatus: liveStatus, players };
-const session = { id: "session-a", league_name: leagueName, week_tag: "Week 1", status: "active", total_rounds: 5, current_round: 1, roster_json: roster, updated_at: "2026-10-16T19:00:00Z" };
+const session = { id: "session-a", club_id: "club-a", league_name: leagueName, week_tag: "Week 1", status: "active", total_rounds: 5, current_round: 1, roster_json: roster, updated_at: "2026-10-16T19:00:00Z" };
 const newPlayer = { id: 5, name: "Taylor", rating: 1300 };
-let tree, requests = [], published = false;
+let tree, requests = [], published = false, losePublishResponse = false;
+let publishEvidence = value => value;
 const rendered = () => JSON.stringify(tree.toJSON());
 const text = node => node.children.map(child => typeof child === "string" ? child : text(child)).join("");
 const button = label => tree.root.findAllByType("button").find(node => text(node) === label);
@@ -108,9 +109,20 @@ global.fetch = async (url, options = {}) => {
   if (pathname === `${base}/live-sessions/session-a/snapshot`) return response({ ok: true, session, courts });
   if (pathname === `${base}/live-sessions/session-a/rounds/1/submit`) {
     published = true;
+    if (losePublishResponse) throw new TypeError("Load failed");
     return response({ ok: true, session, published_match_ids: [101, 102, 103] });
   }
-  if (pathname === `${base}/live-sessions/session-a`) return response({ ok: true, session, courts, rounds: published ? [{ round_number: 1, status: "submitted", match_date: "2026-10-16", matches_json: requests.find(request => request.path.endsWith("/submit")).body.matches }] : [] });
+  if (pathname === `${base}/live-sessions/session-a`) {
+    const games = requests.find(request => request.path.endsWith("/submit"))?.body.matches || [];
+    const ids = games.map((game, index) => 101 + index);
+    const round = { round_number: 1, status: "submitted", match_date: "2026-10-16",
+      submitted_match_count: ids.length, submitted_match_ids: ids, score_readback_status: "current",
+      matches_json: games.map((game, index) => ({ ...game, official_match_id: ids[index] })) };
+    const operation = { id: "operation-a", idempotency_key: "league-live-score:session-a:1", round_number: 1,
+      status: "completed", attempt_count: 1, published_match_ids: ids };
+    return response(publishEvidence({ ok: true, session, courts, rounds: published ? [round] : [],
+      publish_operations: published ? [operation] : [] }));
+  }
   if (pathname === `${base}/live-sessions/session-a/rounds/1/plan`) return response({ ok: true, operation_key: "movement-v1", next_courts: courts, bench: [], movement: { rows: [], next_round: 2, applied: false }, next_roster: roster });
   throw new Error(`Unexpected request ${options.method || "GET"} ${url}`);
 };
@@ -194,7 +206,12 @@ global.fetch = async (url, options = {}) => {
   await click("Review scores");
   confirm = tree.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Publish reviewed scores");
   assert.equal(confirm.props.disabled, false);
-  await act(async () => { await confirm.props.onConfirm("SUBMIT LEAGUE ROUND"); });
+  losePublishResponse = true;
+  let completion;
+  await act(async () => { completion = await confirm.props.onConfirm("SUBMIT LEAGUE ROUND"); });
+  assert.equal(completion.status, "success");
+  assert.match(completion.description, /3 official games/);
+  assert.equal(requests.filter(request => request.path.endsWith("/submit")).length, 1);
   assert.match(rendered(), /The round scores are official/);
   const submit = requests.find(request => request.path.endsWith("/rounds/1/submit"));
   assert.equal(submit.body.expected_match_count, 3);
@@ -246,7 +263,35 @@ global.fetch = async (url, options = {}) => {
   assert.match(rendered(), /Taylor/);
   assert.match(rendered(), /Stopped because of heat/);
   confirm = tree.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Publish reviewed scores");
-  await act(async () => { await confirm.props.onConfirm("SUBMIT LEAGUE ROUND"); });
+  publishEvidence = value => ({ ...value, rounds: [], publish_operations: [{ ...value.publish_operations[0], status: "publishing" }] });
+  await act(async () => { completion = await confirm.props.onConfirm("SUBMIT LEAGUE ROUND"); });
+  assert.equal(completion.status, "uncertain");
+  assert.equal(completion.recoveryLabel, "Check publish status");
+  assert.equal(completion.returnLabel, "Return to League Live");
+  assert.match(completion.description, /still processing/);
+  const draftKey = "jupr-league-live-round-draft:club-a:session-a:1";
+  for (const evidence of [
+    () => { throw new TypeError("Read also disconnected"); },
+    value => ({ ...value, session: { ...session, club_id: "another-club" } }),
+    value => ({ ...value, publish_operations: [] }),
+    value => ({ ...value, publish_operations: [{ ...value.publish_operations[0], idempotency_key: "other-operation" }] }),
+    value => ({ ...value, rounds: [{ ...value.rounds[0], score_readback_status: "unavailable" }] }),
+    value => ({ ...value, publish_operations: [{ ...value.publish_operations[0], published_match_ids: [101, 101] }] }),
+    value => ({ ...value, rounds: [{ ...value.rounds[0], submitted_match_ids: [101, 103] }] }),
+  ]) {
+    publishEvidence = evidence;
+    await act(async () => { completion = await completion.onRecover(); });
+    assert.equal(completion.status, "uncertain");
+    assert.equal(requests.filter(request => request.path.endsWith("/submit")).length, 1);
+    assert.ok(storage.has(draftKey), "Keep the entered scores until the complete receipt is verified");
+  }
+  publishEvidence = value => value;
+  await act(async () => { completion = await completion.onRecover(); });
+  assert.equal(completion.status, "success");
+  assert.match(completion.description, /2 official games/);
+  assert.equal(requests.filter(request => request.path.endsWith("/submit")).length, 1);
+  assert.equal(storage.has(draftKey), false);
+  losePublishResponse = false;
   const flexSubmit = requests.find(request => request.path.endsWith("/rounds/1/submit")).body;
   assert.equal(flexSubmit.expected_match_count, 3);
   assert.equal(flexSubmit.matches.length, 2);

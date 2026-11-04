@@ -297,6 +297,7 @@ def _post_commit_side_effects(
     side_effect_context: dict[str, Any],
     match_ids: list[Any],
     queue_player_notifications: bool = True,
+    defer_badge_evaluation: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     warnings: list[str] = []
     db_matches = list(write_plan.get("match_rows") or [])
@@ -307,19 +308,26 @@ def _post_commit_side_effects(
         )
     }
     try:
-        badge_summary = run_badge_side_effects(
-            supabase=supabase,
-            club_id=str(club_id),
-            has_badge_eligible_match=bool(
-                side_effect_context.get("has_badge_eligible_match")
-            ),
-            affected_players=affected_players,
-            db_matches=db_matches,
-            match_payloads=list(
-                side_effect_context.get("match_payloads") or []
-            ),
-            dedupe_match_id=str(match_ids[0]) if match_ids else None,
-        )
+        if defer_badge_evaluation and side_effect_context.get("has_badge_eligible_match"):
+            reference = ensure_notification_badge_job(
+                supabase=supabase, club_id=str(club_id), match_ids=match_ids,
+                player_ids=sorted(affected_players), retry_failed=False,
+            )
+            badge_summary = {"mode": "queued", "notification_badge_refs": [reference]}
+        else:
+            badge_summary = run_badge_side_effects(
+                supabase=supabase,
+                club_id=str(club_id),
+                has_badge_eligible_match=bool(
+                    side_effect_context.get("has_badge_eligible_match")
+                ),
+                affected_players=affected_players,
+                db_matches=db_matches,
+                match_payloads=list(
+                    side_effect_context.get("match_payloads") or []
+                ),
+                dedupe_match_id=str(match_ids[0]) if match_ids else None,
+            )
     except Exception as exc:  # noqa: BLE001 - core is already committed
         logger.warning("Direct match badge handoff failed after commit: %s", exc)
         badge_summary = {"mode": "error", "error": type(exc).__name__}
@@ -379,6 +387,7 @@ def submit_atomic_direct_matches(
     min_win_delta_elo: float = 1.0,
     cap_loser_gain_elo: float | None = 16.0,
     queue_player_notifications: bool = True,
+    defer_badge_evaluation: bool = False,
 ) -> dict[str, Any]:
     clean_format = str(match_format or "").strip().lower()
     clean_idempotency_key = str(idempotency_key or "").strip()
@@ -491,6 +500,7 @@ def submit_atomic_direct_matches(
             ),
             match_ids=match_ids,
             queue_player_notifications=queue_player_notifications,
+            defer_badge_evaluation=defer_badge_evaluation,
         )
         warnings.extend(post_commit_warnings)
 
