@@ -20,7 +20,7 @@ def ensure_notification_badge_job(*, supabase, club_id: str, match_ids: list[int
     if not rows:
         queued = enqueue_badge_eval(supabase, club_id=club_id, event_type="match_recorded",
             player_ids=player_ids, match_id=reference,
-            payload={"match_count": len(match_ids), "match_ids": list(match_ids)})
+            payload={"match_count": len(match_ids), "match_ids": list(match_ids)}, preserve_existing=True)
         if not queued.get("queued"):
             raise RuntimeError("The games are saved, but their award evaluation could not be queued. Resume approval to retry.")
     elif retry_failed and rows[0].get("status") == "error":

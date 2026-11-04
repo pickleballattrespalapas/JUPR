@@ -73,6 +73,7 @@ type SeriesScoreState = {
 };
 type LeagueLiveSession = {
   id: string;
+  club_id?: string;
   league_name: string;
   week_tag: string;
   status: string;
@@ -87,8 +88,8 @@ type LeagueLiveCourt = { round_number: number; court_number: number; format_type
 type LeagueLiveRosterRow = { player_id: number; player_name: string; rating?: number | null; status: "active" | "bench"; court_number?: number | null; slot?: number | null; bench_reason?: string | null };
 type LeagueMovementRow = { player_id: number; player_name: string; from_court: number | null; suggested_court: number | null; suggested_slot?: number | null; to_court: number | null; to_slot?: number | null; wins: number; differential: number; points: number; direction: "up" | "down" | "stay" | "bench"; overridden: boolean };
 type LeagueMovementPayload = { strategy: string; authority: "python_fastapi"; applied: boolean; override_applied: boolean; override_reason?: string | null; next_round: number; rows: LeagueMovementRow[]; next_courts: LeagueLiveCourt[]; operation_key: string };
-type LeagueLiveRound = { round_number: number; round_label?: string | null; status: string; submitted_match_count?: number | null; match_date?: string | null; updated_at?: string | null; preview_json?: AdminMatchUploaderRoundRobinPreview | Record<string, unknown> | null; matches_json?: Array<Record<string, unknown>> | null; movement_json?: LeagueMovementPayload | Record<string, unknown> | null; operation_key?: string | null; score_readback_status?: string; score_readback_message?: string | null };
-type LeagueLivePublishOperation = { id: string; round_number: number; status: string; attempt_count: number; published_match_ids?: unknown[]; error_text?: string | null; request_fingerprint?: string; completed_at?: string | null };
+type LeagueLiveRound = { round_number: number; round_label?: string | null; status: string; submitted_match_count?: number | null; submitted_match_ids?: unknown[]; match_date?: string | null; updated_at?: string | null; preview_json?: AdminMatchUploaderRoundRobinPreview | Record<string, unknown> | null; matches_json?: Array<Record<string, unknown>> | null; movement_json?: LeagueMovementPayload | Record<string, unknown> | null; operation_key?: string | null; score_readback_status?: string; score_readback_message?: string | null };
+type LeagueLivePublishOperation = { id: string; idempotency_key?: string; round_number: number; status: string; attempt_count: number; published_match_ids?: unknown[]; error_text?: string | null; request_fingerprint?: string; completed_at?: string | null };
 type LeagueLiveRatingRow = { player_id: number; player_name: string; rating_before?: number | null; rating_after?: number | null; rating_delta?: number | null; matches_played_before?: number | null; matches_played_after?: number | null };
 type LeagueLiveRatingReview = { status: string; requires_replay_review: boolean; published_match_count: number; rows: LeagueLiveRatingRow[]; warnings: string[] };
 type LeagueLiveListResponse = { ok: boolean; sessions: LeagueLiveSession[]; count: number };
@@ -690,6 +691,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const sessionListRequest = useLatestRequestGuard(accessToken);
   const sessionDetailRequest = useLatestRequestGuard(accessToken);
   const actionRequest = useLatestRequestGuard(accessToken);
+  useEffect(() => () => actionRequest.invalidate(), [actionRequest, apiBase, clubId]);
   const createRecoveryStorageKey = `jupr-league-live-create-recovery:${clubId}`;
   const playerCreateRecoveryStorageKey = `jupr-league-live-player-create-recovery:${clubId}`;
 
@@ -928,7 +930,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     && sessionLeagueName === loadedLeagueName
   );
   const blockingCurrentRoundPublishOperation = publishOperations.find(
-    (operation) => Number(operation.round_number) === currentRound && operation.status !== "completed"
+    (operation) => Number(operation.round_number) === currentRound
   ) || null;
   const hasEnteredRoundScores = Object.values(scores).some(scoreHasValue) || Object.keys(gameEdits).length > 0;
   const courtEditingLocked = busy || hasEnteredRoundScores || scoresPublished || roundPublished || (sessionIsCurrentLeague && sessionStatus !== "active");
@@ -1772,6 +1774,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   function selectLeague(selectedLeague: string) {
+    actionRequest.invalidate();
     setWorkflowStep(1);
     setLeagueName(selectedLeague);
     sessionListRequest.invalidate();
@@ -2040,7 +2043,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     }
   }
 
-  async function loadSessionDetail(selectedSessionId = sessionId, prepareAdvancedRound = true) {
+  async function loadSessionDetail(selectedSessionId = sessionId, prepareAdvancedRound = true, verifiedDetail?: LeagueLiveDetailResponse) {
     restoringRoundDraftRef.current = true;
     const generation = sessionDetailRequest.begin();
     leagueDetailRequest.invalidate();
@@ -2053,9 +2056,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(selectedSessionId)}`);
+      const payload = verifiedDetail ?? await requestJson<LeagueLiveDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(selectedSessionId)}`);
       if (!sessionDetailRequest.isCurrent(generation)) return;
-      const leagueDetail = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(payload.session.league_name)}`);
+      const leagueDetail = verifiedDetail && detail?.league.league_name === payload.session.league_name ? detail
+        : await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(payload.session.league_name)}`);
       if (!sessionDetailRequest.isCurrent(generation)) return;
       const loadedMatchStructure = matchStructureFromDetail(leagueDetail);
       const { movementAppliedRoundNumber, scorePublishedRoundNumber } = applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || [], leagueDetail);
@@ -2183,6 +2187,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   function selectSession(selectedSessionId: string) {
+    actionRequest.invalidate();
     if (selectedSessionId) void loadSessionDetail(selectedSessionId);
     else {
       sessionDetailRequest.invalidate();
@@ -2762,13 +2767,81 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     }
   }
 
+  async function checkRoundPublish(
+    generation: number, targetSessionId: string, roundNumber: number, operationKey: string,
+    reference: string, reviewedMatches?: Array<Record<string, unknown>>
+  ): Promise<ActionCompletion> {
+    function checkAgain(message: string): ActionCompletion {
+      if (actionRequest.isCurrent(generation)) setMessage(message);
+      return {
+        ...actionUncertain(`Check Round ${roundNumber} publish`, message, reference, "Check publish status",
+          () => checkRoundPublish(generation, targetSessionId, roundNumber, operationKey, reference, reviewedMatches)),
+        returnLabel: "Return to League Live",
+      };
+    }
+    const changedWorkspace = "Reopen the original league session to check its saved scores.";
+    if (!actionRequest.isCurrent(generation)) return checkAgain(changedWorkspace);
+    const path = `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(targetSessionId)}`;
+    let saved: LeagueLiveDetailResponse;
+    try {
+      saved = await requestJson<LeagueLiveDetailResponse>(path, { cache: "no-store" });
+    } catch {
+      return checkAgain("PCS could not read the saved round. Check again when the connection returns.");
+    }
+    if (!actionRequest.isCurrent(generation)) return checkAgain(changedWorkspace);
+    if (!saved?.ok || saved.session?.id !== targetSessionId || saved.session.club_id !== clubId
+        || !Array.isArray(saved.publish_operations) || !Array.isArray(saved.rounds)) {
+      return checkAgain("PCS could not verify the publish history for this session.");
+    }
+    setPublishOperations(saved.publish_operations);
+    const operation = saved.publish_operations.find(row => row.round_number === roundNumber);
+    const round = saved.rounds.find(row => row.round_number === roundNumber);
+    if (!operation && round?.status !== "submitted") {
+      if (saved.session.current_round !== roundNumber || saved.session.status !== "active"
+          || saved.session.updated_at !== sessionUpdatedAt) return checkAgain("The saved session has changed. Reopen it before reviewing the round.");
+      return checkAgain("PCS has no publish record for this round yet. Check again or return to the score review to retry the same scores.");
+    }
+    if (!operation || (operation.id !== operationKey && operation.idempotency_key !== operationKey)) {
+      return checkAgain("The saved round has a different publish record. Reopen the session and review its round history.");
+    }
+    if (operation.status !== "completed") {
+      if (["intent", "publishing", "reconciling"].includes(operation.status)) {
+        return checkAgain(`PCS is still processing Round ${roundNumber}. Check again in a moment.`);
+      }
+      return checkAgain(`Round ${roundNumber} needs attention. Return to League Live and use Publish recovery and exports to review the saved operation.`);
+    }
+    const games = round?.matches_json || [];
+    const receiptIds = new Set((operation.published_match_ids || []).map(String));
+    const savedIds = (round?.submitted_match_ids || []).map(String);
+    const officialIds = games.map(game => String(game.official_match_id ?? ""));
+    if (round?.status !== "submitted" || round.score_readback_status !== "current" || !games.length
+        || round.submitted_match_count !== games.length || receiptIds.size !== games.length
+        || operation.published_match_ids?.length !== games.length || savedIds.length !== games.length
+        || new Set(savedIds).size !== games.length || new Set(officialIds).size !== games.length
+        || !savedIds.every(id => receiptIds.has(id)) || !officialIds.every(id => id && receiptIds.has(id))) {
+      return checkAgain(`PCS recorded the publish but could not verify every official game for Round ${roundNumber}. Check again or review the saved scores in Match Log.`);
+    }
+    const scoreFields = ["series_key", "game_number", "court", "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"];
+    const sameScores = !reviewedMatches || (games.length === reviewedMatches.length && reviewedMatches.every(
+      (match, index) => scoreFields.every(field => match[field] === games[index][field])
+    ));
+    clearStoredRoundDraft(targetSessionId, roundNumber);
+    await loadSessionDetail(targetSessionId, true, saved);
+    if (!actionRequest.isCurrent(generation)) return checkAgain(changedWorkspace);
+    const result = `Round ${roundNumber} is published with ${games.length} official game${games.length === 1 ? "" : "s"}.`;
+    return actionSuccess(`Round ${roundNumber} is published`, sameScores ? result
+      : `${result} The official scores or players differ from your review. Open “View or correct previous-round scores” to compare.`);
+  }
+
   async function submitRound(confirmationText: string): Promise<ActionCompletion> {
     const setupError = setupContextError();
     if (setupError) throw new Error(setupError);
     if (!requireCurrentSession("submitting official scores")) throw new Error("Resume the current persisted session before submitting official scores.");
     if (blockingCurrentRoundPublishOperation) {
       const error = new Error(
-        `Round ${currentRound} already has a durable ${blockingCurrentRoundPublishOperation.status.replace(/_/g, " ")} publish. Use its Retry or Reconcile action below instead of starting a new publish.`
+        blockingCurrentRoundPublishOperation.status === "completed"
+          ? `Round ${currentRound} is already published. Reopen the saved session to review the official scores.`
+          : `Round ${currentRound} already has a durable ${blockingCurrentRoundPublishOperation.status.replace(/_/g, " ")} publish. Use its Retry or Reconcile action below instead of starting a new publish.`
       );
       setMessage(error.message);
       throw error;
@@ -2814,6 +2887,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           source: "next_league_live_round_submit"
         })
       });
+      if (!payload?.ok) throw new Error("PCS could not read the publish confirmation.");
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the submitted round response was applied.");
       if (requestedSessionId) {
         await loadSessionDetail(requestedSessionId, false);
@@ -2822,12 +2896,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setRatingReview(payload.rating_review || null);
       const successMessage = `${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} official league match(es). The next-round court board opens automatically.`;
       clearStoredRoundDraft(requestedSessionId, publishedRoundNumber);
-      setScoresPublished(true);
-      setScoresReviewed(true);
-      setScoreReviewMode(false);
-      setRoundPublished(false);
-      setWorkflowStep(5);
-      setMessage(successMessage);
       return actionSuccess(payload.idempotent_replay ? "Round scores reconciled" : "Round scores published", successMessage);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to submit league round.");
@@ -2835,16 +2903,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         const operationReference = error instanceof LeagueLiveRequestError && error.operationKey
           ? error.operationKey
           : idempotencyKey;
-        const failureDetail = error instanceof Error
-          ? error.message
-          : "The first request did not finish cleanly.";
-        return actionUncertain(
-          "League round publish needs verification",
-          `${failureDetail} Retry these exact scores; League Live verifies any existing matches before it writes anything, so this cannot duplicate the round.`,
-          operationReference,
-          "Retry exact league-round publish",
-          () => submitRound(confirmationText)
-        );
+        return await checkRoundPublish(generation, requestedSessionId, publishedRoundNumber, idempotencyKey, operationReference, matches);
       }
       throw error;
     } finally {
@@ -2987,7 +3046,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     if (!requireCurrentSession("retrying a retained round publish")) throw new Error("Resume the current persisted session before retrying the retained publish.");
     const generation = actionRequest.begin();
     const requestedSessionId = loadedSessionId;
-    const operationReference = publishOperations.find((operation) => operation.round_number === round)?.id || requestedSessionId;
+    const operationReference = publishOperations.find((operation) => operation.round_number === round)?.id || `league-live-score:${requestedSessionId}:${round}`;
     setBusy(true);
     setMessage(null);
     try {
@@ -2995,6 +3054,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         method: "POST",
         body: JSON.stringify({ confirmation_text: confirmationText, source: "next_league_live_round_retry" })
       });
+      if (!payload?.ok) throw new Error("PCS could not read the publish confirmation.");
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the retained round retry response was applied.");
       await loadSessionDetail(requestedSessionId, false);
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the recovered round could be refreshed.");
@@ -3006,15 +3066,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       return actionSuccess("League round publish recovered", successMessage);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to retry the retained League Live round.");
-      if (leagueLiveWriteIsUncertain(error)) {
-        const failureDetail = error instanceof Error ? error.message : "The retained publish retry did not finish cleanly.";
-        return actionUncertain(
-          "League round retry needs verification",
-          `${failureDetail} Retry the retained operation again; the server reuses its original request and verifies existing matches first.`,
-          operationReference,
-          "Retry retained league-round publish",
-          () => retryRetainedRound(round, confirmationText)
-        );
+      if (leagueLiveWriteIsUncertain(error) || (error instanceof LeagueLiveRequestError && error.status === 409)) {
+        return await checkRoundPublish(generation, requestedSessionId, round, operationReference, operationReference);
       }
       throw error;
     } finally {
@@ -3499,7 +3552,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               {unusualScoreRows.length ? <section role="alert" style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #f59e0b", borderRadius: "10px", background: "#fff7ed", color: "#9a3412" }}><strong>Unusual score{unusualScoreRows.length === 1 ? " requires" : "s require"} review.</strong><ul>{unusualScoreRows.map((row) => <li key={`unusual-${row.key}`}>Court {row.court}: {row.score}. {row.unusualReason}</li>)}</ul><label><input type="checkbox" checked={unusualScoresAcknowledged} onChange={(event) => setUnusualScoresAcknowledged(event.target.checked)} disabled={busy} /> I verified {unusualScoreRows.length === 1 ? "this score is" : "these scores are"} correct.</label></section> : null}
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between", marginTop: "0.75rem" }}>
                 <button type="button" onClick={editReviewedScores} disabled={busy} style={ghostButtonStyle}>Edit scores</button>
-                <ConfirmAction triggerLabel="Publish reviewed scores" title={`Publish Round ${currentRound} scores?`} description="This makes every reviewed result official, then opens the generated next-round court board." confirmLabel="Yes, publish scores" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || !allSeriesComplete || !scoreReviewMode || (unusualScoreRows.length > 0 && !unusualScoresAcknowledged) || !liveDomainStatus.submit_enabled || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={publishScoresAndContinue} />
+                <ConfirmAction triggerLabel="Publish reviewed scores" workingLabel="Publishing and checking official scores…" title={`Publish Round ${currentRound} scores?`} description="This makes every reviewed result official, then opens the generated next-round court board." confirmLabel="Yes, publish scores" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || Boolean(blockingCurrentRoundPublishOperation) || !allSeriesComplete || !scoreReviewMode || (unusualScoreRows.length > 0 && !unusualScoresAcknowledged) || !liveDomainStatus.submit_enabled || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={publishScoresAndContinue} />
               </div>
             </section>
           )}

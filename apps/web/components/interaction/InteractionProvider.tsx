@@ -146,13 +146,20 @@ export function InteractionProvider({ children }: { children: ReactNode }) {
               {completion.closeLabel ?? "OK"}
             </button>
           ) : lifecycle.phase === "uncertain" && completion?.status === "uncertain" ? (
-            <button
-              type="button"
-              className={`${styles.button} ${styles.primaryButton}`}
-              onClick={() => void lifecycle.recover(completion.onRecover)}
-            >
-              {completion.recoveryLabel}
-            </button>
+            <>
+              {completion.returnLabel ? (
+                <button type="button" className={styles.button} onClick={() => clearActive()}>
+                  {completion.returnLabel}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={`${styles.button} ${styles.primaryButton}`}
+                onClick={() => void lifecycle.recover(completion.onRecover)}
+              >
+                {completion.recoveryLabel}
+              </button>
+            </>
           ) : (
             <>
               <button

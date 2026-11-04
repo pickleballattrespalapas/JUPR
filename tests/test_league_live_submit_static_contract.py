@@ -17,10 +17,9 @@ def test_next_uses_one_fastapi_complete_round_publish_path() -> None:
     assert "expected_match_count: matches.length" in panel
     assert "!allSeriesComplete" in panel
     assert "series_key: match.row_id" in panel
-    assert "Retry exact league-round publish" in panel
-    assert "() => submitRound(confirmationText)" in panel
-    assert "const operationReference = error instanceof LeagueLiveRequestError" in panel
-    assert "${failureDetail} Retry these exact scores" in panel
+    assert "Check publish status" in panel
+    assert "() => submitRound(confirmationText)" not in panel
+    assert "() => retryRetainedRound(round, confirmationText)" not in panel
     assert "every played game still counts as an official league game" in Path(
         "apps/web/app/admin/league-manager/GuidedLeagueSettingsEditor.tsx"
     ).read_text(encoding="utf-8")
@@ -34,7 +33,7 @@ def test_zero_write_recovery_retries_retained_request_instead_of_reconciling() -
     panel = PANEL.read_text(encoding="utf-8")
     service = SERVICE.read_text(encoding="utf-8")
     assert 'RETRYABLE_PUBLISH_STATUSES = new Set(["intent", "publishing", "retryable"])' in panel
-    assert "Retry retained league-round publish" in panel
+    assert "retryRetainedRound(operation.round_number, confirmationText)" in panel
     assert 'confirmationText="RETRY LEAGUE ROUND"' in panel
     assert "/rounds/${encodeURIComponent(String(round))}/retry" in panel
     assert "RECONCILABLE_PUBLISH_STATUSES.has(operation.status)" in panel

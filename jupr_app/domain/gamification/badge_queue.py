@@ -24,6 +24,7 @@ def enqueue_badge_eval(
     context_id: str | None = None,
     match_id: str | None = None,
     payload: dict[str, Any] | None = None,
+    preserve_existing: bool = False,
 ) -> dict[str, Any]:
     if supabase is None or not club_id or not event_type:
         return {"queued": False, "reason": "invalid_input"}
@@ -40,7 +41,7 @@ def enqueue_badge_eval(
     try:
         table = supabase.table(BADGE_QUEUE_TABLE)
         if match_id:
-            table.upsert(row, on_conflict="club_id,event_type,match_id").execute()
+            table.upsert(row, on_conflict="club_id,event_type,match_id", ignore_duplicates=preserve_existing).execute()
         else:
             table.insert(row).execute()
     except APIError as exc:
