@@ -90,6 +90,7 @@ def test_stale_claim_prevents_selected_email_delivery(monkeypatch) -> None:
         "stale": 1,
         "uncertain": 0,
         "waiting_for_awards": 0,
+        "waiting_for_event": 0,
         "email_mode": "dry_run",
     }
 

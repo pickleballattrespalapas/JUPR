@@ -40,6 +40,7 @@ from jupr_app.config import (
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.notifications.league_event_updates import resolve_league_event_update
 
 
 class SessionAwardsRecoveryRequiredError(RuntimeError):
@@ -542,6 +543,8 @@ def send_pending_player_update_emails(
     stale = len(set(expected_versions) - current_ids)
     uncertain = 0
     waiting_for_awards = 0
+    waiting_for_event = 0
+    event_scopes: dict[str, dict | None] = {}
 
     if (
         enforce_next_live_gate
@@ -563,6 +566,18 @@ def send_pending_player_update_emails(
         external_delivery_attempted = False
         try:
             snapshot = dict(outbox.get("digest_snapshot_json") or {})
+            if "league_live_session_id" in snapshot:
+                session_id = str(snapshot.get("league_live_session_id") or "").strip()
+                if not session_id:
+                    raise ValueError("This player update is missing its league event identity.")
+                if session_id not in event_scopes:
+                    event_scopes[session_id] = resolve_league_event_update(
+                        supabase, club_id=club_id, session_id=session_id)
+                event_scope = event_scopes[session_id]
+                if event_scope is None:
+                    waiting_for_event += 1
+                    continue
+                snapshot = event_scope
             award_failure = None
             if snapshot.get("update_scope") == "session":
                 try:
@@ -604,11 +619,11 @@ def send_pending_player_update_emails(
                 skipped += 1
                 continue
 
-            week_start = date.fromisoformat(str(outbox.get("week_start")))
-            week_end = date.fromisoformat(str(outbox.get("week_end")))
+            week_start = date.fromisoformat(str(snapshot.get("start_date") or outbox.get("week_start")))
+            week_end = date.fromisoformat(str(snapshot.get("end_date") or outbox.get("week_end")))
             player_id = int(outbox.get("player_id"))
 
-            digest = dict(outbox.get("digest_snapshot_json") or {})
+            digest = dict(snapshot)
             if digest.get("update_scope") == "session":
                 match_ids = normalize_session_match_ids(digest.get("match_ids"))
                 # The date-window cache may contain other sessions or historical
@@ -735,6 +750,7 @@ def send_pending_player_update_emails(
         "stale": stale,
         "uncertain": uncertain,
         "waiting_for_awards": waiting_for_awards,
+        "waiting_for_event": waiting_for_event,
         "email_mode": email_mode,
     }
 

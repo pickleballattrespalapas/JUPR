@@ -424,8 +424,11 @@ def test_create_players_uses_browser_lower_membership_for_strasse(monkeypatch) -
     assert storage["admin_guarded_operations"][0]["status"] == "completed"
 
 
-def test_submit_match_uploader_batch(monkeypatch) -> None:
+@pytest.mark.parametrize("league_live", [False, True])
+def test_submit_match_uploader_batch(monkeypatch, league_live) -> None:
+    from uuid import NAMESPACE_URL, uuid5
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    monkeypatch.setattr("jupr_app.services.admin_match_uploader_service._require_league_live_capability", lambda **_kwargs: None)
     calls = []
 
     def fake_submit_atomic_direct_matches(supabase, **kwargs):
@@ -458,9 +461,11 @@ def test_submit_match_uploader_batch(monkeypatch) -> None:
         actor_email="admin@example.com",
         actor_role="scorekeeper",
         idempotency_key="test:batch-1",
+        allow_league_live_context=league_live,
         match_format="singles",
         matches=[
             {
+                **({"context_type": "league_live_session", "context_id": str(uuid5(NAMESPACE_URL, "league-live-test"))} if league_live else {}),
                 "date": "2026-03-01",
                 "league": "Open",
                 "week_tag": "Week 1",
@@ -482,6 +487,7 @@ def test_submit_match_uploader_batch(monkeypatch) -> None:
     assert calls[0]["matches"][0]["league"] == "Open"
     assert calls[0]["idempotency_key"] == "test:batch-1"
     assert calls[0]["match_format"] == "singles"
+    assert calls[0]["queue_player_notifications"] is (not league_live)
 
 
 def test_submit_match_uploader_popup_context_name_creates_event(monkeypatch) -> None:

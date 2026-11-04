@@ -11,7 +11,7 @@ from jupr_app.domain.notifications.player_profile_update_repo import queue_playe
 logger = logging.getLogger(__name__)
 
 
-def ensure_notification_badge_job(*, supabase, club_id: str, match_ids: list[int | str], player_ids: list[int]) -> str:
+def ensure_notification_badge_job(*, supabase, club_id: str, match_ids: list[int | str], player_ids: list[int], retry_failed: bool = True) -> str:
     """Recover a missing exact badge job without resetting an existing job."""
     reference = str(match_ids[0])
     rows = (supabase.table("badge_eval_queue").select("id,status")
@@ -23,7 +23,7 @@ def ensure_notification_badge_job(*, supabase, club_id: str, match_ids: list[int
             payload={"match_count": len(match_ids), "match_ids": list(match_ids)})
         if not queued.get("queued"):
             raise RuntimeError("The games are saved, but their award evaluation could not be queued. Resume approval to retry.")
-    elif rows[0].get("status") == "error":
+    elif retry_failed and rows[0].get("status") == "error":
         # A resume may retry this exact failed job, while another worker's
         # processing/done state remains protected by the status predicate.
         (supabase.table("badge_eval_queue").update({"status": "pending", "last_error": None,
