@@ -48,6 +48,8 @@ type Props = {
   targetCount: number;
   fixedPlayerCount?: number;
   moneyballOnly?: boolean;
+  sixPlayerMoneyballRounds?: 6 | 9;
+  onSixPlayerMoneyballRoundsChange?: (rounds: 6 | 9) => void;
   participantText: string;
   linkedPlayerIds: LinkedPlayerIds;
   doublesCourtCount: number;
@@ -190,7 +192,8 @@ export function recommendedGeneratorSetup(
   playerCount: number,
   doublesCourtCount?: number,
   singlesCourtCount?: number,
-  moneyball = false
+  moneyball = false,
+  sixPlayerMoneyballRounds: 6 | 9 = 6
 ): GeneratorSetup {
   const count = Math.max(0, Math.min(40, Math.floor(Number(playerCount) || 0)));
   const minimum = playFormat === "singles" ? 2 : playFormat === "doubles_singles" ? 6 : 4;
@@ -248,7 +251,7 @@ export function recommendedGeneratorSetup(
   const partnerPairsPerRound = courtCount * 2;
   return {
     courtCount,
-    totalRounds: moneyball && count === 6 ? 6 : Math.min(50, Math.max(1, Math.ceil(uniquePartnerPairs / partnerPairsPerRound))),
+    totalRounds: moneyball && count === 6 ? sixPlayerMoneyballRounds : Math.min(50, Math.max(1, Math.ceil(uniquePartnerPairs / partnerPairsPerRound))),
     doublesCourtCount: courtCount,
     singlesCourtCount: 0,
     scheduledPlayers: courtCount * 4,
@@ -291,6 +294,8 @@ export default function GeneratorRosterSetup({
   targetCount,
   fixedPlayerCount,
   moneyballOnly,
+  sixPlayerMoneyballRounds = 6,
+  onSixPlayerMoneyballRoundsChange,
   participantText,
   linkedPlayerIds,
   doublesCourtCount,
@@ -325,8 +330,8 @@ export default function GeneratorRosterSetup({
     [minimumPlayers, moneyballOnly]
   );
   const setup = useMemo(
-    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyballOnly),
-    [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyballOnly]
+    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyballOnly, sixPlayerMoneyballRounds),
+    [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyballOnly, sixPlayerMoneyballRounds]
   );
   const linkedCount = participantNames.filter(
     (name) => Number(linkedPlayerIds[normalizeRosterName(name)] || 0) > 0
@@ -495,6 +500,24 @@ export default function GeneratorRosterSetup({
             ))}
           </select>
         </label>
+        {moneyballOnly && targetCount === 6 ? (
+          <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
+            Moneyball rounds
+            <select
+              aria-label="Moneyball rounds"
+              disabled={rosterLocked}
+              value={sixPlayerMoneyballRounds}
+              onChange={(event) => {
+                onSixPlayerMoneyballRoundsChange?.(event.target.value === "9" ? 9 : 6);
+                onInvalidate();
+              }}
+              style={inputStyle}
+            >
+              <option value={6}>6 rounds · 4 games and 2 byes each</option>
+              <option value={9}>9 rounds · 6 games and 3 byes each</option>
+            </select>
+          </label>
+        ) : null}
         {playFormat === "doubles_singles" ? (
           <>
             <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
@@ -564,7 +587,9 @@ export default function GeneratorRosterSetup({
             {moneyballOnly || fixedPlayerCount ? (
               <>
                 {targetCount === 6
-                  ? " Balanced six-player rotation: 4 games with 4 different partners and 2 byes each, one in each three-round block, with no consecutive byes. Each opponent is faced once or twice. This is not a perfect round robin."
+                  ? sixPlayerMoneyballRounds === 9
+                    ? " Everyone plays 6 games, partners with all 5 other players and repeats 1 partner. Each player has 3 byes, one in each three-round block, with no consecutive byes. Each opponent is faced twice or three times."
+                    : " Balanced six-player rotation: 4 games with 4 different partners and 2 byes each, one in each three-round block, with no consecutive byes. Each opponent is faced once or twice. This is not a perfect round robin."
                   : " Everyone partners once and faces each opponent twice."}
                 {` Moneyball uses ${setup.totalRounds} fixed rounds. The starting lineup and scheduled slots stay fixed. Substitutions make both players ineligible to win.`}
               </>
