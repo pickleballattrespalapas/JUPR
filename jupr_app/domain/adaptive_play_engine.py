@@ -888,7 +888,10 @@ def _perfect_doubles_round(
     count = len(initial_ids)
     if event.get("playoff") or (event.get("adaptiveFromRound") and round_number >= int(event["adaptiveFromRound"])):
         return None
-    template = moneyball_doubles_schedule(initial_ids) if is_moneyball(event) else perfect_doubles_schedule(initial_ids)
+    template = (
+        moneyball_doubles_schedule(initial_ids, int(event["totalRounds"]))
+        if is_moneyball(event) else perfect_doubles_schedule(initial_ids)
+    )
     if template is None:
         return None
     cycle_length = len(template)
@@ -1332,7 +1335,7 @@ def create_generator_preview(
     if event_format == "moneyball_expectations":
         if kind != "round_robin" or fmt != "doubles" or scoring != "scored" :
             raise ValueError("Moneyball vs Expectations requires a scored doubles round robin.")
-        rotation = moneyball_doubles_schedule([p["id"] for p in participants])
+        rotation = moneyball_doubles_schedule([p["id"] for p in participants], int(total_rounds))
         if rotation is None:
             raise ValueError("Choose six players or a supported perfect doubles RR player count for Moneyball.")
         if resolved_court_count not in {0, len(participants)//4} or int(total_rounds) != len(rotation):

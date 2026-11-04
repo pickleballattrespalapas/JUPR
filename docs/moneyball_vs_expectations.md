@@ -1,8 +1,15 @@
 # Moneyball vs Expectations
 
-Choose **Event format → Moneyball vs Expectations** in either the public or staff Round-Robin Generator. Set the complete starting lineup using different players from the club directory. Choose six players for the balanced six-round rotation, or any supported perfect doubles RR count: 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29, 32, 33, 36, 37 or 40. Each must have a valid doubles club rating before setup. Use all required courts and the full fixed rotation, with games to 11 and win by two. For the perfect rotations, each player plays N−1 games. Multiples of four use N−1 rounds; counts one above a multiple of four use N rounds with one bye each. Every player partners once with every other player and faces each twice. There are no handicap starting scores.
+Choose **Event format → Moneyball vs Expectations** in either the public or staff Round-Robin Generator. Set the complete starting lineup using different players from the club directory. For six players, **Moneyball rounds** offers six or nine rounds. Other supported player counts are 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29, 32, 33, 36, 37 or 40. Each must have a valid doubles club rating before setup. Use all required courts and the full fixed rotation, with games to 11 and win by two. For the perfect rotations, each player plays N−1 games. Multiples of four use N−1 rounds; counts one above a multiple of four use N rounds with one bye each. Every player partners once with every other player and faces each twice. There are no handicap starting scores.
 
-**Six-player exception:** one court, six rounds, four games and two byes per player. Each player has four distinct partners, faces every opponent once or twice, and sits once in each three-round block with no consecutive byes. This is balanced but is not a perfect round robin: everyone misses one potential partner and opponent counts vary. It uses the same frozen rating expectations and independent balance audit, with distributions based on four games per player and a 600 MXN pool. Standard six-player round robins keep their existing adaptive scheduling.
+Six-player Moneyball uses one court and offers two rotations.
+
+| Rounds | Games per player | Byes per player | Partners | Opponents |
+| --- | --- | --- | --- | --- |
+| 6 | 4 | 2 | Four different partners | Each faced once or twice |
+| 9 | 6 | 3 | All five other players, with one partner repeated | Each faced twice or three times |
+
+Both rotations give everyone one bye in each three-round block with no consecutive byes. The selected rotation determines the frozen rating expectations and independent balance audit for the full event. Both use a 600 MXN pool. Choose the number of rounds before generating the preview and starting the session.
 
 Each player contributes 100 MXN. The highest Moneyball score takes the 100 × starting-player-count MXN pool; tied winners split it. The application shows settlement amounts for the organizer to pay manually. It does not collect or transfer money.
 
@@ -14,7 +21,7 @@ Wins and expected wins are displayed for context. There is no separate win bonus
 
 ## Frozen inputs and live results
 
-Before starting, both the public and staff matchup previews show each player's scheduled games, expected wins, expected losses, and expected point differential for the **full event** above the round-by-round matchups. These totals come from the same frozen game probabilities used for scoring, without exposing individual ratings. Byes are excluded (six-player rotations show four games per player). Decimal expectations are averages: three wins beats an expectation of 2.6 wins, but wins do not award a separate bonus or guarantee the prize. An older saved preview without these totals prompts the organizer to generate a new preview.
+Before starting, both the public and staff matchup previews show each player's scheduled games, expected wins, expected losses, and expected point differential for the **full event** above the round-by-round matchups. These totals come from the same frozen game probabilities used for scoring, without exposing individual ratings. Byes are excluded. Six-player rotations show four games per player for six rounds or six games per player for nine rounds. Decimal expectations are averages: three wins beats an expectation of 2.6 wins, but wins do not award a separate bonus or guarantee the prize. An older saved preview without these totals prompts the organizer to generate a new preview.
 
 The same full-event expectations remain available on both round runners under **View full-event Moneyball expectations**, and on the public and staff standings pages. They include saved and unplayed games; the standings' expected figures still cover saved games only.
 

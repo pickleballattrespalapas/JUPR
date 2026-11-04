@@ -38,12 +38,11 @@ const button = (tree,label) => tree.root.findAllByType("button").find(node => te
 const reply = body => ({ok:true,status:200,json:async()=>body});
 (async () => {
   for (const Workspace of [PublicWorkspace,AdminWorkspace]) {
-    for (const playerCount of [8,6]) {
+    for (const [playerCount, roundCount, games] of [[8, 7, 7], [6, 6, 4], [6, 9, 6]]) {
     const storage = new Map();
     global.sessionStorage = {getItem:key=>storage.get(key)||null,setItem:(key,val)=>storage.set(key,val),removeItem:key=>storage.delete(key)};
     global.window = {sessionStorage};
     const players = Array.from({length:playerCount},(_,i)=>({id:i+1,name:`Player ${i}`}));
-    const games = playerCount === 6 ? 4 : 7;
     const expectations = players.map((player, i) => ({participantId:`p-${i+1}`,name:player.name,
       scheduledGames:games,expectedWins:i === 0 ? 2.63 : games/2,expectedLosses:i === 0 ? games-2.63 : games/2,
       expectedDifferential:i === 0 ? -11.88 : i === 1 ? 11.88 : 0}));
@@ -52,7 +51,7 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
       if (url.includes("/players?")) return reply({players});
       if (!options.body) return reply({sessions:[]});
       calls.push(JSON.parse(options.body));
-      return reply({preview:{generatorKind:"round_robin",playFormat:"doubles",eventFormat:"moneyball_expectations",name:"Moneyball",totalRounds:playerCount === 6 ? 6 : 7,courtCount:playerCount === 6 ? 1 : 2,participants:[],rounds:[],previewFingerprint:"frozen",moneyballExpectations:expectations}});
+      return reply({preview:{generatorKind:"round_robin",playFormat:"doubles",eventFormat:"moneyball_expectations",name:"Moneyball",totalRounds:roundCount,courtCount:playerCount === 6 ? 1 : 2,participants:[],rounds:[],previewFingerprint:"frozen",moneyballExpectations:expectations}});
     };
     let tree;
     await act(async()=>{tree=create(React.createElement(Workspace,{apiBase:"https://api.test",clubId:"club",generatorKind:"round_robin",status:{enabled:true,writes_enabled:true}}));});
@@ -71,6 +70,18 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
       assert.ok(body.includes("no consecutive byes") && body.includes("not a perfect round robin"));
       assert.ok(!body.includes("Everyone partners once and faces each opponent twice"));
       assert.ok(body.includes("600-peso pool"));
+      const rounds = tree.root.findByProps({"aria-label":"Moneyball rounds"});
+      assert.equal(rounds.props.value, 6);
+      assert.deepEqual(rounds.findAllByType("option").map(option => option.props.value), [6, 9]);
+      if (roundCount === 9) {
+        await act(async()=>rounds.props.onChange({target:{value:"9"}}));
+        const longerRotation = text(tree.toJSON());
+        assert.ok(longerRotation.includes("partners with all 5 other players and repeats 1 partner"));
+        assert.ok(longerRotation.includes("3 byes, one in each three-round block, with no consecutive byes"));
+        assert.ok(longerRotation.includes("9 fixed rounds"));
+      }
+    } else {
+      assert.equal(tree.root.findAllByProps({"aria-label":"Moneyball rounds"}).length, 0);
     }
     for (const player of players) {
       await act(async()=>tree.root.findByProps({placeholder:"Type at least 2 letters, then add a player"}).props.onChange({target:{value:player.name}}));
@@ -93,14 +104,31 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
       assert.equal(text(expectationRows[i].findAllByType("td")[0]), String(games));
     }
     assert.equal(calls.at(-1).event_format,"moneyball_expectations");
-    assert.equal(calls.at(-1).total_rounds,playerCount === 6 ? 6 : 7);
+    assert.equal(calls.at(-1).total_rounds,roundCount);
     assert.equal(calls.at(-1).court_count,0); // Server resolves the fixed court count. assert.equal(calls.at(-1).scoring_mode,"scored");
     assert.ok(!Object.hasOwn(calls.at(-1),"ratings"));
     assert.ok([...storage.values()].some(value=>value.includes('"eventFormat":"moneyball_expectations"')));
     await act(async()=>tree.unmount());
+    if (playerCount === 6 && roundCount === 6) {
+      // Saved drafts from before the selector existed keep the six-round format.
+      for (const [key, value] of storage) {
+        const draft = JSON.parse(value);
+        delete draft.sixPlayerMoneyballRounds;
+        storage.set(key, JSON.stringify(draft));
+      }
+    }
     await act(async()=>{tree=create(React.createElement(Workspace,{apiBase:"https://api.test",clubId:"club",generatorKind:"round_robin",status:{enabled:true,writes_enabled:true}}));});
     assert.equal(tree.root.findByProps({"aria-label":"Moneyball player expectations"}).findByType("tbody").findAllByType("tr").length, playerCount);
+    if (playerCount === 6) {
+      assert.equal(tree.root.findByProps({"aria-label":"Moneyball rounds"}).props.value, roundCount);
+      const changedRounds = roundCount === 9 ? 6 : 9;
+      await act(async()=>tree.root.findByProps({"aria-label":"Moneyball rounds"}).props.onChange({target:{value:String(changedRounds)}}));
+      assert.equal(tree.root.findAllByProps({"aria-label":"Moneyball player expectations"}).length, 0);
+      await act(async()=>button(tree,"Preview matchups").props.onClick());
+      assert.equal(calls.at(-1).total_rounds, changedRounds);
+    }
     await act(async()=>tree.root.findByProps({"aria-label":"Event format"}).props.onChange({target:{value:"standard"}}));
+    assert.equal(tree.root.findAllByProps({"aria-label":"Moneyball rounds"}).length, 0);
     assert.equal(tree.root.findAllByProps({"aria-label":"Moneyball player expectations"}).length, 0);
     await act(async()=>tree.unmount());
     }
@@ -117,5 +145,5 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
   assert.ok(!body.includes("Prize") && !body.includes("starting order"));
   await act(async()=>{tree=create(React.createElement(Pool,{value:{entryFeeMxn:100,prizePoolMxn:800,completedGames:14,totalGames:14,final:true,winners:[{participantId:"p-1",name:"Example",payoutMxn:800}]}}));});
   assert.ok(JSON.stringify(tree.toJSON()).includes("Example: 800.00 pesos"));
-  console.log("Moneyball: public/staff full-event preview expectations, six-player byes, restored drafts, standard-format isolation, format selection, live standings and settlement passed.");
+  console.log("Moneyball: public/staff full-event preview expectations, six- and nine-round rotations, restored drafts, standard-format isolation, format selection, live standings and settlement passed.");
 })().catch(error=>{console.error(error);process.exitCode=1;});

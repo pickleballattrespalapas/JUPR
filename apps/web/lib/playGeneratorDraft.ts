@@ -7,6 +7,7 @@ export type StoredPlayGeneratorDraft<TPreview> = {
   standingsSort?: "wins" | "points" | "differential";
   scoringMode?: "scored" | "unscored";
   eventFormat?: "standard" | "moneyball_expectations";
+  sixPlayerMoneyballRounds?: 6 | 9;
   ratingMode?: "rated" | "unrated";
   targetCount: number;
   doublesCourtCount?: number;
