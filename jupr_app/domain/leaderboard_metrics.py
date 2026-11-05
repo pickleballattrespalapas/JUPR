@@ -217,6 +217,55 @@ def team_upset_highlights(
     return [{**row, "rank": rank, "rank_position": rank} for rank, row in enumerate(eligible[:depth], start=1)]
 
 
+def team_partnership_highlights(
+    matches: list[dict[str, Any]], *, players: list[dict[str, Any]],
+    status: str, search: str, min_games: int, options: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Rank all unique pairs by win percentage, then games played together.
+
+    Use the full canonical period history, not each player's best partner:
+    a qualifying pair can rank even when both members have a better partner.
+    Individual partnership metrics remain available to the recap editor.
+    """
+    players_by_id = {str(row["player_id"]): row for row in players}
+    pairs: dict[tuple[str, str], dict[str, int]] = {}
+    for match in matches:
+        for side in (0, 1):
+            pair = tuple(sorted(str(match[slot]) for slot in _SLOTS[side * 2:side * 2 + 2]))
+            if not all(pid in players_by_id for pid in pair):
+                continue
+            totals = pairs.setdefault(pair, {"games": 0, "wins": 0})
+            totals["games"] += 1
+            totals["wins"] += int(match["score_t1" if side == 0 else "score_t2"] > match["score_t2" if side == 0 else "score_t1"])
+
+    minimum = max(1, min_games, int(options.get("minimum", 0)))
+    depth = max(1, min(10, int(options.get("depth", 5))))
+    needle = search.casefold()
+    eligible = []
+    for pair, totals in pairs.items():
+        if totals["games"] < minimum:
+            continue
+        members = [players_by_id[pid] for pid in pair]
+        active = all(member.get("is_active") is True for member in members)
+        if (status == "active" and not active) or (status == "inactive" and active):
+            continue
+        if needle and not any(needle in str(member["player_name"]).casefold() for member in members):
+            continue
+        team_members = [{"player_id": member["player_id"], "player_name": member["player_name"]} for member in members]
+        percentage = 100 * totals["wins"] / totals["games"]
+        eligible.append({
+            "team_key": ":".join(pair), "team_members": team_members,
+            "player_id": None, "player_name": " & ".join(member["player_name"] for member in team_members),
+            "club_id": members[0]["club_id"], "league_name": members[0]["league_name"],
+            "is_active": active, "matches_played": totals["games"],
+            "metric_value": percentage,
+            "metric_display": f"{percentage:.1f}% ({totals['wins']}/{totals['games']})",
+            "metric_sample": totals["games"],
+        })
+    eligible.sort(key=lambda row: (-row["metric_value"], -row["metric_sample"], row["team_key"]))
+    return [{**row, "rank": rank, "rank_position": rank} for rank, row in enumerate(eligible[:depth], start=1)]
+
+
 def overall_highlights(
     rows: list[dict[str, Any]], *, metrics: dict[str, dict[str, Any]],
     min_games: int, card_options: dict[str, dict[str, int]],
