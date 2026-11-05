@@ -181,13 +181,14 @@ def test_all_card_metrics_are_public_but_internal_calculations_are_not(client, m
 
 
 @pytest.mark.parametrize('suffix', ['', '/public'])
-def test_team_upset_projection_keeps_both_teammates_without_private_fields(client, monkeypatch, suffix):
+@pytest.mark.parametrize('card', ['biggest_upset', 'best_partnership'])
+def test_team_highlight_projection_keeps_both_teammates_without_private_fields(client, monkeypatch, suffix, card):
     from services.api import main
     previous = main.build_public_leaderboard
 
     def build(db, **kwargs):
         payload = previous(db, **kwargs)
-        payload['highlights']['biggest_upset'] = [{
+        payload['highlights'][card] = [{
             'rank': 1, 'team_key': 'p1:p2', 'player_id': None,
             'player_name': 'Alex & Blair',
             'team_members': [
@@ -202,7 +203,7 @@ def test_team_upset_projection_keeps_both_teammates_without_private_fields(clien
     monkeypatch.setattr(main, 'build_public_leaderboard', build)
     response = client.get(f'/clubs/test-club/leaderboards{suffix}')
     assert response.status_code == 200
-    teams = response.json()['highlights']['biggest_upset']
+    teams = response.json()['highlights'][card]
     assert len(teams) == 1
     assert teams[0]['team_key'] == 'p1:p2'
     assert teams[0]['player_id'] is None
