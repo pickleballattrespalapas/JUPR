@@ -10,6 +10,7 @@ from jupr_app.domain.leaderboard_metrics import (
     EXTENDED_CARD_KEYS,
     compute_overall_metrics,
     overall_highlights,
+    team_partnership_highlights,
     team_upset_highlights,
 )
 
@@ -744,6 +745,10 @@ def build_public_leaderboard(
         highlights["biggest_upset"] = team_upset_highlights(
             matches, players=all_ranked, status=clean_status, search=clean_search,
             min_games=min_games, options=card_options.get("biggest_upset") or {},
+        )
+        highlights["best_partnership"] = team_partnership_highlights(
+            matches, players=all_ranked, status=clean_status, search=clean_search,
+            min_games=min_games, options=card_options.get("best_partnership") or {},
         )
     else:
         highlights = _highlight_rows(filtered, min_games=min_games, league_name=selected)
