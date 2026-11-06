@@ -46,7 +46,10 @@ async function main() {
         awards: [{ category_key: "mvp", category_label: "MVP" }],
         award_count: 1,
         races: [],
-        race_count: 0
+        race_count: 0,
+        finalized: true,
+        frozen_at: "2026-11-05T20:00:00Z",
+        unavailable_categories: ["best_partnership"]
       }
     },
     {
@@ -57,6 +60,22 @@ async function main() {
       standings: [],
       registration: {},
       registration_players: []
+    },
+    {
+      ok: true,
+      league: {},
+      teams: [],
+      fixtures: [],
+      standings: [],
+      registration: {},
+      registration_players: [],
+      award_progress: {
+        awards: [],
+        award_count: 0,
+        finalized: false,
+        frozen_at: null,
+        unavailable_categories: []
+      }
     }
   ];
 
@@ -84,6 +103,9 @@ async function main() {
     assert.deepEqual(currentLeague.data.past_leagues, [{ name: "Past league" }]);
     assert.equal(currentLeague.data.award_progress.award_count, 1);
     assert.equal(currentLeague.data.award_progress.awards[0].category_key, "mvp");
+    assert.equal(currentLeague.data.award_progress.finalized, true);
+    assert.equal(currentLeague.data.award_progress.frozen_at, "2026-11-05T20:00:00Z");
+    assert.deepEqual(currentLeague.data.award_progress.unavailable_categories, ["best_partnership"]);
 
     const legacyTeamLeague = await teamLeagueApi.getPublicTeamLeague(
       "club",
@@ -92,6 +114,17 @@ async function main() {
     assert.deepEqual(legacyTeamLeague.data.award_progress, {
       awards: [],
       award_count: 0
+    });
+    const currentTeamLeague = await teamLeagueApi.getPublicTeamLeague(
+      "club",
+      "Team league"
+    );
+    assert.deepEqual(currentTeamLeague.data.award_progress, {
+      awards: [],
+      award_count: 0,
+      finalized: false,
+      frozen_at: null,
+      unavailable_categories: []
     });
     assert.equal(payloads.length, 0);
   } finally {

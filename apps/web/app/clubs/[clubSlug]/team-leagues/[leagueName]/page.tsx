@@ -59,8 +59,8 @@ export default async function TeamLeagueDetailPage(props: Props) {
       <article style={{ ...card, background: "#eff6ff", borderColor: "#bfdbfe" }} data-testid="team-league-awards">
         <h2 style={{ marginTop: 0 }}>Awards race</h2>
         {data.award_progress.awards.length ? <>
-          <p style={{ color: "#475569" }}>Showing the top five for each award. Expand an award to see every team that qualifies.</p>
-          <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} />
+          <p style={{ color: "#475569" }}>Showing the top five for each award. Select an award title for its full leaderboard.</p>
+          <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} leagueName={leagueName} teamLeague returnTo={`/clubs/${encodeURIComponent(params.clubSlug)}/team-leagues/${encodeURIComponent(leagueName)}`} />
         </> : <p style={{ color: "#475569", marginBottom: 0 }}>No team qualifies for an award yet.</p>}
       </article>
       <article style={card}>

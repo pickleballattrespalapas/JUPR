@@ -8,8 +8,12 @@ from jupr_app.domain.player_activity import is_player_leaderboard_active
 from jupr_app.domain.gamification.presentation import badge_category
 from jupr_app.domain.leaderboard_metrics import (
     EXTENDED_CARD_KEYS,
+    LEADERBOARD_CARD_KEYS,
+    LEADERBOARD_CARD_METRICS,
+    _display,
     compute_overall_metrics,
     overall_highlights,
+    team_partnership_highlights,
     team_upset_highlights,
 )
 
@@ -73,6 +77,10 @@ class LeaderboardDataUnavailable(RuntimeError):
 
 class LeaderboardPeriodInvalid(ValueError):
     """Raised when a requested leaderboard season does not belong to this club."""
+
+
+class LeaderboardStatInvalid(ValueError):
+    """A requested statistic or scope is not a public leaderboard."""
 
 
 def _leaderboard_settings(supabase: Any, club_id: str) -> dict[str, Any]:
@@ -569,7 +577,7 @@ def _sort_rows(rows: list[dict[str, Any]], sort: str) -> list[dict[str, Any]]:
     return sorted(rows, key=key)
 
 
-def _highlight_rows(rows: list[dict[str, Any]], *, min_games: int, league_name: str) -> dict[str, list[dict[str, Any]]]:
+def _highlight_rows(rows: list[dict[str, Any]], *, min_games: int, league_name: str, full: bool = False) -> dict[str, list[dict[str, Any]]]:
     source = rows
     if league_name != OVERALL_SCOPE and min_games > 0:
         source = [row for row in rows if row.get("qualified") is True]
@@ -585,7 +593,8 @@ def _highlight_rows(rows: list[dict[str, Any]], *, min_games: int, league_name: 
         if key != "rating_jupr":
             eligible = [row for row in source if int(row.get("matches_played") or 0) >= max(1, min_games)
                         and row.get(key) is not None]
-        return sorted(eligible, key=lambda row: (-value(row), int(row.get("rank") or 0)))[:5]
+        ranked = sorted(eligible, key=lambda row: (-value(row), int(row.get("rank") or 0)))
+        return ranked if full else ranked[:5]
 
     return {
         "highest_rating": top("rating_jupr", null_last=True),
@@ -609,6 +618,7 @@ def build_public_leaderboard(
     limit: int = DEFAULT_PAGE_SIZE,
     offset: int = 0,
     season: str | None = None,
+    stat: str | None = None,
 ) -> dict[str, Any]:
     """Build the complete, public-safe leaderboard projection for one scope.
 
@@ -616,6 +626,8 @@ def build_public_leaderboard(
     allowlist and never forwards raw player, badge, or metadata rows.
     """
 
+    if stat is not None and stat not in LEADERBOARD_CARD_KEYS:
+        raise LeaderboardStatInvalid("Choose a supported leaderboard statistic.")
     cid = str(club_id or "").strip()
     safe_limit = max(1, min(int(limit or DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE))
     safe_offset = max(0, int(offset or 0))
@@ -659,6 +671,11 @@ def build_public_leaderboard(
             (name for name in names if name.casefold() == requested.casefold()),
             default_selected,
         )
+    if stat is not None:
+        if league_name and selected.casefold() != str(league_name).strip().casefold():
+            raise LeaderboardStatInvalid("This league is not available in the selected view.")
+        if selected != OVERALL_SCOPE and stat not in LEADERBOARD_CARD_KEYS[:5]:
+            raise LeaderboardStatInvalid("This statistic is not available on this league leaderboard.")
     selected_meta = next(
         (dict(scope) for scope in scopes if scope.get("name") == selected),
         {
@@ -677,7 +694,7 @@ def build_public_leaderboard(
     if selected == OVERALL_SCOPE:
         base_rows = _overall_rows(players, club_id=cid)
         min_games = settings["min_games"]
-        extended = bool(EXTENDED_CARD_KEYS.intersection(settings["cards"]))
+        extended = stat in EXTENDED_CARD_KEYS if stat is not None else bool(EXTENDED_CARD_KEYS.intersection(settings["cards"]))
         as_of = datetime.now(timezone.utc)
         matches = _overall_matches(supabase, club_id=cid, period=period, now=as_of) if cid and (period["id"] is not None or extended) else []
         if period["id"] is not None:
@@ -716,6 +733,54 @@ def build_public_leaderboard(
         badges_by_player=badges,
     )
 
+    if stat is not None:
+        options = ((settings.get("card_options") or {}).get(stat) or {}) if selected == OVERALL_SCOPE else {}
+        if selected == OVERALL_SCOPE:
+            if stat in {"biggest_upset", "best_partnership"}:
+                builder = team_upset_highlights if stat == "biggest_upset" else team_partnership_highlights
+                stat_rows = builder(matches, players=all_ranked, status=clean_status, search="",
+                                    min_games=min_games, options=options, full=True)
+            else:
+                stat_rows = overall_highlights(ranked, metrics=metrics, min_games=min_games,
+                    card_options=settings.get("card_options") or {}, full=True, keys=(stat,))[stat]
+        else:
+            field, sample_field, kind = LEADERBOARD_CARD_METRICS[stat]
+            stat_rows = [
+                {**row, "rank": index, "rank_position": index, "metric_value": row.get(field),
+                 "metric_display": _display(kind, row[field], row) if row.get(field) is not None else "—",
+                 "metric_sample": row.get(sample_field, 0)}
+                for index, row in enumerate(_highlight_rows(ranked, min_games=min_games,
+                    league_name=selected, full=True)[stat], start=1)
+            ]
+        total_qualified = len(stat_rows)
+        if clean_search:
+            stat_rows = [row for row in stat_rows if any(matches_player_search(member.get("player_name"), clean_search)
+                         for member in row.get("team_members") or [row])]
+        total = len(stat_rows)
+        entries = stat_rows[safe_offset:safe_offset + safe_limit]
+        minimum_metric = LEADERBOARD_CARD_METRICS[stat][1]
+        minimum = int(options.get("minimum", 0))
+        if stat != "highest_rating":
+            minimum = max(1, minimum)
+        if minimum_metric in {"games", "matches_played", "best_partnership_games"}:
+            minimum = max(min_games if stat != "highest_rating" or selected != OVERALL_SCOPE else 0, minimum)
+        pagination = {"total": total, "offset": safe_offset, "limit": safe_limit,
+                      "has_more": safe_offset + len(entries) < total}
+        active_count = sum(row.get("is_active") is True for row in base_rows)
+        return {
+            "scopes": scopes, "selected_scope": selected, "scope": selected_meta,
+            "leaderboard_settings": settings, "period": period,
+            "filters": {"league_view": clean_league_view, "status": clean_status, "search": clean_search, "sort": clean_sort},
+            "summary": {"ranked_players": len(base_rows), "active_players": active_count,
+                        "inactive_players": len(base_rows) - active_count, "leaderboard_scopes": len(scopes), "filtered_players": total},
+            "leaderboard": [], "snapshot": None, "highlights": {}, "badges_available": True,
+            "pagination": pagination,
+            "stat_ranking": {"key": stat, "entries": entries, "total_qualified": total_qualified,
+                             "minimum": minimum, "minimum_metric": minimum_metric,
+                             "min_games": min_games if stat != "highest_rating" or selected != OVERALL_SCOPE else 0,
+                             "pagination": pagination},
+        }
+
     filtered = ranked
     if clean_search:
         needle = clean_search.casefold()
@@ -735,10 +800,19 @@ def build_public_leaderboard(
     active_count = sum(1 for row in base_rows if row.get("is_active") is True)
     if selected == OVERALL_SCOPE:
         card_options = settings.get("card_options") or {}
-        highlights = overall_highlights(filtered, metrics=metrics, min_games=min_games, card_options=card_options)
+        highlights = overall_highlights(ranked, metrics=metrics, min_games=min_games, card_options=card_options, full=True)
+        for key, entries in highlights.items():
+            depth = max(1, min(10, int((card_options.get(key) or {}).get("depth", 5))))
+            if clean_search:
+                entries = [row for row in entries if matches_player_search(row.get("player_name"), clean_search)]
+            highlights[key] = entries[:depth]
         highlights["biggest_upset"] = team_upset_highlights(
             matches, players=all_ranked, status=clean_status, search=clean_search,
             min_games=min_games, options=card_options.get("biggest_upset") or {},
+        )
+        highlights["best_partnership"] = team_partnership_highlights(
+            matches, players=all_ranked, status=clean_status, search=clean_search,
+            min_games=min_games, options=card_options.get("best_partnership") or {},
         )
     else:
         highlights = _highlight_rows(filtered, min_games=min_games, league_name=selected)

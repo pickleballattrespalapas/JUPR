@@ -67,7 +67,7 @@ export const LEADERBOARD_CARD_DETAILS: Record<LeaderboardCard, {
   most_upsets: { group: "Competition", description: "Wins against teams averaging at least 0.25 JUPR higher before the game.", sample: "upset wins", fields: ["ratings", "records"] },
   opponent_strength: { group: "Competition", description: "Average opposing team rating, using ratings before each game.", sample: "games", fields: ["ratings"] },
   over_performance: { group: "Competition", description: "Actual wins minus expected wins based on both teams’ pre-game ratings.", sample: "games", fields: ["ratings", "records"] },
-  best_partnership: { group: "Participation & partnerships", description: "Each player’s highest win percentage with a qualifying partner in this period.", sample: "games with that partner", fields: ["win_percentage"] },
+  best_partnership: { group: "Participation & partnerships", description: "Pairs ranked by win percentage together in this period. More games together breaks ties. Each pair appears once.", sample: "games together", fields: ["win_percentage"] },
   partner_variety: { group: "Participation & partnerships", description: "Number of different doubles partners in this period.", sample: "games", fields: ["match_counts"] },
   playing_days: { group: "Participation & partnerships", description: "Different days with recorded games, using the selected period’s timezone.", sample: "playing days", fields: ["match_counts"] },
 };
@@ -119,7 +119,7 @@ export function leaderboardSettingsError(settings?: LeaderboardSettings): string
       return `${label}: use a minimum from 0 to 10,000.`;
     }
     if (!Number.isInteger(options.depth) || options.depth < 1 || options.depth > 10) {
-      return `${label}: show between 1 and 10 ${key === "biggest_upset" ? "teams" : "players"}.`;
+      return `${label}: show between 1 and 10 ${(key === "biggest_upset" || key === "best_partnership") ? "teams" : "players"}.`;
     }
   }
   for (const [index, season] of settings.seasons.entries()) {

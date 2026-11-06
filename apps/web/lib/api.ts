@@ -42,6 +42,14 @@ export type LeaderboardEntry = {
   metric_value?: number | null;
   metric_display?: string | null;
   metric_sample?: number | null;
+  expected_wins?: number | null;
+  actual_wins?: number | null;
+  upset_opponents?: LeaderboardTeamMember[];
+  upset_score_for?: number | null;
+  upset_score_against?: number | null;
+  upset_date?: string | null;
+  close_games?: number | null;
+  close_wins?: number | null;
 };
 
 export type LeaderboardBadge = {
@@ -79,6 +87,15 @@ export type LeaderboardResponse = {
     filtered_players: number;
   };
   leaderboard: LeaderboardEntry[];
+  stat_ranking?: {
+    key: string;
+    entries: LeaderboardEntry[];
+    total_qualified: number;
+    minimum: number;
+    minimum_metric: string;
+    min_games?: number;
+    pagination: { total: number; offset: number; limit: number; has_more: boolean };
+  };
   badges_available?: boolean;
   snapshot?: LeaderboardEntry | null;
   leaderboard_settings?: LeaderboardSettings;
@@ -445,6 +462,11 @@ export type LeagueAwardProgressRow = {
   is_co_winner?: boolean | null;
   min_games?: number | null;
   minimum_metric?: string | null;
+  team_members?: LeaderboardTeamMember[];
+  metric_sample?: number | null;
+  wins?: number | null;
+  losses?: number | null;
+  games?: number | null;
 };
 
 export type LeagueAwardRace = {
@@ -458,6 +480,9 @@ export type LeagueAwardRace = {
 };
 
 export type LeagueAwardProgress = {
+  finalized?: boolean;
+  frozen_at?: string | null;
+  unavailable_categories?: string[];
   awards: LeagueAwardProgressRow[];
   award_count: number;
   races?: LeagueAwardRace[];
@@ -481,6 +506,16 @@ export function normalizeLeagueAwardProgress(
       typeof progress.race_count === "number"
         ? progress.race_count
         : progress.races.length;
+  }
+  if (typeof progress?.finalized === "boolean") {
+    normalized.finalized = progress.finalized;
+  }
+  const frozenAt = progress?.frozen_at;
+  if (typeof frozenAt === "string" || frozenAt === null) {
+    normalized.frozen_at = frozenAt;
+  }
+  if (Array.isArray(progress?.unavailable_categories)) {
+    normalized.unavailable_categories = progress.unavailable_categories;
   }
   return normalized;
 }
@@ -561,6 +596,20 @@ export type LeagueResultsResponse = {
   player_summary?: LeagueResultsPlayerSummary | null;
   player_weekly: LeagueResultsStatRow[];
   recent_matches: LeagueResultsRecentMatch[];
+  weekly_stat_rankings?: Record<string, {
+    key: string;
+    title: string;
+    qualification: string;
+    entries: Array<{ rank: number; player_id: string | number; player_name: string; metric_value: number; metric_display: string; metric_sample: number; detail?: string }>;
+    total_qualified: number;
+  }>;
+  season_stat_rankings?: Record<string, {
+    key: string;
+    title: string;
+    qualification: string;
+    entries: Array<{ rank: number; player_id: string | number; player_name: string; metric_value: number; metric_display: string; metric_sample: number; detail?: string }>;
+    total_qualified: number;
+  }>;
   weekly_highlights: LeagueResultsHighlights;
   weekly_highlight_selection?: import("@/lib/leagueWeeklyHighlights").WeeklyHighlightSelection;
   season_highlights: LeagueResultsHighlights;
@@ -606,6 +655,7 @@ export async function getClub(clubSlug: string): Promise<ApiResult<ClubSummary>>
 }
 
 export type LeaderboardRequest = {
+  stat?: string | null;
   leagueName?: string | null;
   leagueView?: "active" | "past";
   status?: "active" | "inactive" | "all";
@@ -622,6 +672,7 @@ export async function getClubLeaderboard(
   options: LeaderboardRequest = {}
 ): Promise<ApiResult<LeaderboardResponse>> {
   const params = new URLSearchParams();
+  if (options.stat) params.set("stat", options.stat);
   if (options.leagueName) params.set("league_name", String(options.leagueName));
   if (options.leagueView) params.set("league_view", options.leagueView);
   if (options.status) params.set("status", options.status);
