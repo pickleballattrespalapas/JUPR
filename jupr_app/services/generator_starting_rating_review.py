@@ -47,11 +47,13 @@ def require_generator_starting_ratings(
         require_starting_rating_review(db, club_id=club_id, player_ids=player_ids, match_format=match_format)
 
 
-def require_published_starting_ratings(db: Any, *, club_id: str, matches: list[dict[str, Any]]) -> None:
+def require_published_starting_ratings(db: Any, *, club_id: str, matches: list[dict[str, Any]],
+    planned_player_ids: dict[str, set[int]] | None = None) -> None:
     """Check only participants with rated games being published, by format."""
     for match_format in ("doubles", "singles"):
         ids = sorted({int(match[key]) for match in matches
                       if match.get("match_format") == match_format and match.get("rating_scope") != "unrated"
                       for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if match.get(key) is not None})
+        ids = [pid for pid in ids if pid not in (planned_player_ids or {}).get(match_format, set())]
         if ids:
             require_starting_rating_review(db, club_id=club_id, player_ids=ids, match_format=match_format)

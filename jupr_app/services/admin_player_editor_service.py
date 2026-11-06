@@ -163,7 +163,7 @@ def _fetch_player_rows_by_name(
 ) -> list[dict[str, Any]]:
     return _safe_rows(
         supabase.table("players")
-        .select("id,club_id,name,rating,starting_rating,wins,losses,matches_played,active,inactive_at,last_game_at")
+        .select("*")
         .eq("club_id", str(club_id))
         .eq("name", str(name))
         .execute()
@@ -286,7 +286,7 @@ def reconcile_admin_player_editor_operation(
         )
         new_rows = [row for row in rows if row.get("id") not in preexisting_ids]
         authoritative = _player_payload(new_rows[0]) if len(new_rows) == 1 else None
-        proven = authoritative is not None and _payload_matches_patch(authoritative, expected_after)
+        proven = authoritative is not None and _payload_matches_patch(new_rows[0], expected_after)
         create_absence_proven = (
             not new_rows
             and {row.get("id") for row in rows} == set(preexisting_ids)
@@ -557,6 +557,7 @@ def create_admin_player_editor_player(
     actor_role: str,
     idempotency_key: str,
     source: str = "next_player_editor",
+    generator_estimate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not is_admin_player_editor_enabled():
         raise PermissionError("Next Player Editor is disabled.")
@@ -569,6 +570,8 @@ def create_admin_player_editor_player(
     if rating < 1.0 or rating > 7.0:
         raise ValueError("Starting JUPR must be between 1.0 and 7.0.")
     request_payload = {"name": clean_name, "starting_jupr": float(rating)}
+    if generator_estimate is not None:
+        request_payload["generator_estimate"] = generator_estimate
     operation, idempotent = begin_guarded_operation(
         supabase,
         club_id=str(club_id),
@@ -579,7 +582,7 @@ def create_admin_player_editor_player(
         actor_email=actor_email,
         actor_role=actor_role,
         source=source,
-        before_json=None,
+        before_json={"generator_estimate": generator_estimate} if generator_estimate is not None else None,
     )
     if idempotent:
         return operation_result(operation)
@@ -595,6 +598,12 @@ def create_admin_player_editor_player(
         "last_game_at": None,
         "inactive_at": None,
     }
+    if generator_estimate is not None and "singles" in generator_estimate.get("ratings", {}):
+        singles = float(generator_estimate["ratings"]["singles"]["rating_jupr"]) * 400.0
+        insert_payload.update(singles_rating=singles, singles_wins=0, singles_losses=0,
+                              singles_matches_played=0, singles_last_game_at=None,
+                              singles_replay_baseline={"rating": singles, "wins": 0, "losses": 0,
+                                                       "matches_played": 0, "last_game_at": None})
     try:
         preexisting_rows = _fetch_player_rows_by_name(
             supabase,
@@ -712,6 +721,7 @@ def create_admin_player_editor_player(
             "operator_rule": "Retry the exact unchanged request with the same idempotency key after an interrupted response.",
         },
         "warnings": warnings,
+        **({"rating_estimates": generator_estimate["ratings"]} if generator_estimate is not None else {}),
     }
     update_guarded_operation(
         supabase,
