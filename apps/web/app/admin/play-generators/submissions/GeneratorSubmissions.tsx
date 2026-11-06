@@ -12,10 +12,12 @@ import GeneratorPlayerCreate from "./GeneratorPlayerCreate";
 type ReviewRequest = { expected_version: number; action: "approve" | "reject"; player_ids: Record<string, number>; match_date: string; reason: string };
 type MatchFormat = "doubles" | "singles";
 type PlayerRating = { rating_jupr: number | null; matches_played: number; can_set_starting_rating: boolean; state_fingerprint: string };
+type RatingEstimate = { rating_jupr: number; provisional: boolean; method: string; games_used: number; anchored_games: number; prior_jupr: number; known_players: number };
 type Submission = {
   id: string; session_key: string; title: string; version: number; status: string;
   organizer_name: string; rating_mode: "rated" | "unrated"; match_date: string; match_count: number; approved_mode?: string;
   review?: { request: ReviewRequest };
+  estimated_players?: Record<string, { player_id: number; ratings: Partial<Record<MatchFormat, RatingEstimate>> }>;
   participants: Array<{ id: string; name: string; player_id?: number | null }>;
   matches: Array<{ id: string; round_number: number; sideA?: string[]; sideB?: string[]; teamA?: string[]; teamB?: string[]; scoreA: number; scoreB: number }>;
 };
@@ -122,7 +124,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
     for (const participant of item.participants) {
       const exact = queue.players.filter(p => p.name.trim().toLocaleLowerCase() === participant.name.trim().toLocaleLowerCase());
       const chosen = participant.player_id || (exact.length === 1 ? exact[0].id : 0);
-      if (chosen) ids[participant.id] = chosen;
+      if (chosen && queue.players.some(player => player.id === chosen)) ids[participant.id] = chosen;
     }
     setMapping(item.review?.request.player_ids || ids);
   }, [queue.players]);
@@ -183,7 +185,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         scores: scoreChanges.map(({ match, draft }) => ({ round_number: match.round_number, match_id: match.id, score_a: Number(draft.a), score_b: Number(draft.b) }))
       }, undefined, "PATCH");
       if (queueScope.current !== scope || generation.current !== current) return;
-      const updated: Submission = payload.submission;
+      const updated: Submission = { ...payload.submission, estimated_players: selected.estimated_players || payload.submission?.estimated_players };
       if (!updated || updated.session_key !== selected.session_key || !Array.isArray(updated.matches)) throw new Error("Could not confirm the saved scores.");
       setSelected(updated);
       setQueue(old => ({ ...old, submissions: old.submissions.map(item => item.session_key === updated.session_key ? updated : item) }));
@@ -224,7 +226,8 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
     if (queueScope.current !== scope) throw new Error("The club workspace changed. Reopen the submission in its original club.");
     const player = payload.players.find(p => p.id === playerId);
     if (!player) throw new Error("The player profile is not available yet. Refresh the player list and try again.");
-    setQueue(old => ({ ...old, players: payload.players }));
+    setQueue(old => ({ ...old, players: payload.players, submissions: payload.submissions }));
+    setSelected(current => payload.submissions.find(item => item.session_key === current?.session_key) || current);
     setMapping(old => ({ ...old, [participantId]: player.id }));
     setMessage(player.name + " is selected. Review the remaining players, then approve the results.");
   }
@@ -256,6 +259,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   const allMapped = selected?.participants.every(p => queue.players.some(player => player.id === mapping[p.id]));
   const ratingChecks = selected?.rating_mode === "rated" ? selected.participants.flatMap(p => {
     const player = queue.players.find(player => player.id === mapping[p.id]);
+    if (selected.estimated_players?.[p.id]?.player_id === player?.id) return [];
     return playerFormats(selected, p.id).filter(format => format === "doubles").map(format => {
       const rating = player?.ratings?.[format];
       const draft = ratingDrafts[player?.id + ":" + format];
@@ -265,9 +269,9 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   }) : [];
   const ratingsReady = ratingChecks.every(check => !check.missing && !check.dirty);
   const reviewGroups = (["doubles", "singles"] as const).map(format => ({
-    format, ids: [...new Set((selected?.participants || []).filter(participant => playerFormats(selected!, participant.id).includes(format)).map(participant => mapping[participant.id]).filter(id => id > 0))]
+    format, ids: [...new Set((selected?.participants || []).filter(participant => playerFormats(selected!, participant.id).includes(format) && !(selected!.estimated_players?.[participant.id]?.player_id === mapping[participant.id])).map(participant => mapping[participant.id]).filter(id => id > 0))]
   })).filter(group => group.ids.length > 0);
-  const reviewKey = JSON.stringify([selected?.id, selected?.rating_mode, mapping, ratingReviewRevision]);
+  const reviewKey = JSON.stringify([selected?.id, selected?.rating_mode, mapping, selected?.estimated_players, ratingReviewRevision]);
   const startingRatingsConfirmed = !editable || selected?.rating_mode !== "rated" || reviewGroups.every(group => ratingReviewChecks[reviewKey + group.format] === true);
   async function refreshReviewedPlayers() {
     const scope = clubId + ":" + accessToken;
@@ -310,7 +314,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
             <option value="unrated">Unrated</option><option value="rated">Rated</option>
           </select>
         </label>
-        <p style={{ margin: 0 }}>{sessionRating === "rated" ? "These games will update club ratings when approved." : "These games will not change player ratings."}</p>
+        <p style={{ margin: 0 }}>{sessionRating === "rated" ? "These games will update club ratings when approved." : "New players keep their provisional estimates. Existing player ratings stay unchanged."}</p>
         {!normalizedTitle ? <small role="alert">Enter a title.</small> : null}
         <div style={{ display: "flex", gap: "0.6rem" }}>
           <button type="submit" style={field} disabled={busy || !normalizedTitle || normalizedTitle.length > 160 || (normalizedTitle === selected.title && sessionRating === selected.rating_mode)}>Save session details</button>
@@ -320,19 +324,27 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
       <p>{selected.match_count} scored games · Submitted by {selected.organizer_name}</p>
       <label>Date played <input type="date" value={matchDate} disabled={!editable || busy} onChange={e => setMatchDate(e.target.value)} style={field} /></label>
       <h3>Match players{selected.rating_mode === "rated" ? " and review ratings" : " to club profiles"}</h3>
-      <p>Choose an existing club profile for each player. If someone is missing, use <strong>Create new player</strong> below their name and enter their starting level.</p>
-      {selected.rating_mode === "rated" ? <p>Set and save a doubles starting level for players who have no rated doubles games. Saving updates their club profile immediately; approving applies these scores from that level. Players with rated games use their current rating. Singles ratings are shown separately.</p> : null}
+      <p>Choose an existing club profile for each player. If someone is missing, use <strong>Create new player</strong> below their name. The name is filled in for you, and a starting estimate is calculated from the group’s ratings and saved results.</p>
+      {selected.rating_mode === "rated" ? <p>New players receive an automatic starting estimate. Existing profiles without rated games can still have their starting level reviewed below. Players with rated games use their current rating.</p> : null}
       <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))" }}>
         {selected.participants.map(p => {
           const player = queue.players.find(player => player.id === mapping[p.id]);
+          const estimate = selected.estimated_players?.[p.id];
+          const hasEstimate = Boolean(player && estimate?.player_id === player.id);
           return <div key={selected.id + ":" + p.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "0.75rem", display: "grid", gap: "0.65rem", alignContent: "start" }}>
             <PlayerProfileChoice name={p.name} value={mapping[p.id]} players={queue.players} disabled={!editable || busy}
               onChange={value => setMapping(old => { const next = { ...old }; if (value) next[p.id] = value; else delete next[p.id]; return next; })} />
             {editable && accessToken ? <GeneratorPlayerCreate clubId={clubId} sessionKey={selected.session_key} participantId={p.id} participantName={p.name}
-              apiBase={apiBase} accessToken={accessToken} players={queue.players} disabled={busy} matched={Boolean(player)} onPendingChange={markCreationPending}
+              apiBase={apiBase} accessToken={accessToken} players={queue.players} playerIds={mapping} expectedVersion={selected.version} ratingMode={selected.rating_mode} disabled={busy || editingScores || editingTitle} matched={Boolean(player)} onPendingChange={markCreationPending}
               onBusyChange={value => { if (queueScope.current === clubId + ":" + accessToken) setBusy(value); }}
               onCreated={playerId => selectCreatedPlayer(p.id, playerId)} /> : null}
-            {selected.rating_mode === "rated" && player ? playerFormats(selected, p.id).map(format => {
+            {hasEstimate ? Object.entries(estimate!.ratings).map(([format, rating]) => rating ? <small key={format}>
+              {format === "singles" ? "Singles" : "Doubles"} {selected.rating_mode === "unrated" ? "provisional rating" : "estimated starting rating"}: <strong>{rating.rating_jupr.toFixed(3)}</strong>
+              {rating.games_used ? ` · ${rating.games_used} games used` : rating.method === "default_estimate" ? " · default estimate" : " · group average fallback"}
+              {rating.known_players === 0 ? " · no rated reference players yet" : ""}
+              {editable ? " · finalized on approval" : ""}
+            </small> : null) : null}
+            {selected.rating_mode === "rated" && player && !hasEstimate ? playerFormats(selected, p.id).map(format => {
               const rating = player.ratings?.[format];
               const key = player.id + ":" + format;
               const draft = ratingDrafts[key];
@@ -403,7 +415,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         </div>
       </div> : null}
       {editable ? <>
-        <p>This session is marked {selected.rating_mode}. {selected.rating_mode === "rated" ? "Approval updates the appropriate singles or doubles ratings." : "Approval leaves ratings unchanged."} Approved games count toward stats and recaps.</p>
+        <p>This session is marked {selected.rating_mode}. {selected.rating_mode === "rated" ? "Approval updates the appropriate singles or doubles ratings." : "New players keep their provisional estimates; existing ratings stay unchanged."} Approved games count toward stats and recaps.</p>
         {!allMapped ? <p>Choose a club profile for every player before approving.</p> : null}
         {!ratingsReady ? <p role="status">Save the missing or edited doubles starting levels before approving.</p> : null}
         {!creationsReady ? <p role="status">Check unfinished player creation before approving.</p> : null}
@@ -412,7 +424,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         <div style={{ display: "flex", gap: "0.7rem", flexWrap: "wrap", marginTop: "1rem" }}>
           {(["approve", "reject"] as const).map(action => <ConfirmAction key={action}
             triggerLabel={action === "reject" ? "Reject" : `Approve ${selected.rating_mode} results`} title={action === "reject" ? "Reject these results?" : `Approve ${selected.match_count} ${selected.rating_mode} games?`}
-            description={action === "reject" ? "These games will stay out of club records." : selected.rating_mode === "rated" ? "These games will update player ratings and count toward stats and recaps." : "These games will count toward stats and recaps. Ratings stay unchanged."}
+            description={action === "reject" ? "These games will stay out of club records." : selected.rating_mode === "rated" ? "These games will update player ratings and count toward stats and recaps." : "These games will count toward stats and recaps. New players keep provisional estimates; existing ratings stay unchanged."}
             confirmLabel={action === "reject" ? "Reject results" : `Approve ${selected.rating_mode} results`} confirmationText="" disabled={busy || editingTitle || editingScores || (action !== "reject" && (!allMapped || !matchDate || !ratingsReady || !creationsReady || !startingRatingsConfirmed))} onConfirm={() => decide(action)} />)}
         </div>
       </> : null}

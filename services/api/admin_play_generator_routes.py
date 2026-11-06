@@ -48,6 +48,8 @@ from jupr_app.services.admin_play_generator_service import (
 )
 from jupr_app.services.production_feature_policy import production_feature_enabled
 from services.api.auth import authenticate_bearer, auth_header
+from jupr_app.services.generator_player_creation_service import create_generator_submission_player
+from jupr_app.services.admin_guarded_write_service import GuardedWriteRecoveryRequired
 from jupr_app.services.generator_submission_service import (
     list_generator_submissions, require_reviewer, review_generator_submission, submit_generator_session,
     set_generator_starting_rating, update_generator_submission_title, correct_generator_submission_scores,
@@ -167,6 +169,15 @@ class GeneratorReviewRequest(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class GeneratorPlayerCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(strict=True, ge=1)
+    participant_id: str = Field(min_length=1, max_length=160)
+    name: str = Field(min_length=1, max_length=160)
+    player_ids: dict[str, int] = Field(default_factory=dict, max_length=2500)
+    idempotency_key: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$")
+
+
 class GeneratorStartingRatingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -247,6 +258,8 @@ def _handle(exc: Exception) -> None:
     from jupr_app.services.generator_compute import compute_unavailable_cause
     if unavailable := compute_unavailable_cause(exc):
         raise HTTPException(status_code=503, detail=str(unavailable), headers={"Retry-After": "2"}) from exc
+    if isinstance(exc, GuardedWriteRecoveryRequired):
+        raise HTTPException(status_code=409, detail={"message": str(exc), "recovery_required": True, "operation_key": exc.operation_key}) from exc
     if isinstance(exc, DirectMatchConflictError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, DirectMatchRecoveryRequiredError):
@@ -395,6 +408,19 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
         try:
             return correct_generator_submission_scores(supabase, club_id=club_id, session_key=session_key,
                 actor_email=email, actor_role=role, **_model_payload(payload))
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/play-generators/sessions/{session_key}/players")
+    def post_generator_player(club_id: str, session_key: str,
+        payload: GeneratorPlayerCreateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        _require_write_gate(club_id)
+        supabase = get_supabase_client()
+        email, role = _resolve_role_or_403(supabase=supabase, club_id=club_id,
+            authorization=authorization, source="generator_submission_estimate")
+        try:
+            return create_generator_submission_player(supabase, club_id=club_id,
+                session_key=session_key, actor_email=email, actor_role=role, **_model_payload(payload))
         except Exception as exc:
             _handle(exc)
 
