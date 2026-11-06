@@ -97,6 +97,29 @@ async function correctThenApprove() {
     expected_version:4, action:'approve', player_ids:{p1:1,p2:2,p3:3,p4:5}, match_date:'2026-10-09', reason:'Review note'});
   await act(async () => tree.unmount());
 }
+async function correctedScoresKeepAutomaticEstimate() {
+  const queue = structuredClone(seed);
+  queue.submissions[0].rating_mode = 'rated';
+  queue.players.forEach(player => { player.ratings = {doubles:{rating_jupr:3.75, matches_played:player.id === 4 ? 0 : 10, can_set_starting_rating:player.id === 4, state_fingerprint:'a'.repeat(64)}}; });
+  queue.submissions[0].estimated_players = {p4:{player_id:4, ratings:{doubles:{rating_jupr:3.75, provisional:true, method:'results', games_used:2, anchored_games:2}}}};
+  const corrected = {...structuredClone(queue.submissions[0]), version:4};
+  delete corrected.estimated_players; // The score-save response contains base session data, without ledger metadata.
+  corrected.matches[0].scoreA = 6;
+  const {tree, calls} = await mount(queue, () => reply({ok:true, submission:corrected, corrected_games:1}));
+  assert.equal(input(tree, 'Player 4 doubles starting level'), undefined);
+  assert.match(label(tree.root), /estimated starting rating: 3\.750/);
+  await click(tree, 'Edit scores');
+  await change(tree, scoreName, '6');
+  await click(tree, 'Save score corrections');
+  assert.match(label(tree.root), /6 – 8/);
+  assert.match(label(tree.root), /estimated starting rating: 3\.750/, 'Saving corrected scores preserves the automatic estimate display');
+  assert.equal(input(tree, 'Player 4 doubles starting level'), undefined, 'Score corrections do not bring back a manual starting-rating prompt');
+  assert.equal(input(tree, 'Club profile for Player 4').props.value, 4);
+  assert.equal(button(tree, 'Approve rated results').props.disabled, false, 'Automatic estimate handling remains ready for approval');
+  await click(tree, 'Approve rated results');
+  assert.equal(JSON.parse(calls.find(call => call.url.endsWith('/review')).options.body).expected_version, 4);
+  await act(async () => tree.unmount());
+}
 async function invalidAndCanceledEdits() {
   const {tree, calls} = await mount();
   await click(tree, 'Edit scores');
@@ -157,7 +180,7 @@ async function oldWorkspaceResponseIsIgnored() {
   await act(async () => tree.unmount());
 }
 (async () => {
-  await correctThenApprove(); await invalidAndCanceledEdits(); await failuresKeepDrafts();
+  await correctThenApprove(); await correctedScoresKeepAutomaticEstimate(); await invalidAndCanceledEdits(); await failuresKeepDrafts();
   await lockedAndSwitchedSubmissions(); await oldWorkspaceResponseIsIgnored();
-  console.log('PASS submission score edits: filters, bulk save, preserved mappings/date, current approval version, validation, cancel, failures, sealed states, and workspace isolation');
+  console.log('PASS submission score edits: filters, bulk save, preserved mappings/date/automatic estimates, current approval version, validation, cancel, failures, sealed states, and workspace isolation');
 })().catch(error => {console.error(error); process.exitCode=1;});

@@ -49,7 +49,7 @@ assert.match(adminRunner, /Round Played/);
 assert.match(publicRunner, /Mark round played/);
 
 assert.match(adminSubmissions, /Approval updates the appropriate singles or doubles ratings/);
-assert.match(adminSubmissions, /Approval leaves ratings unchanged/);
+assert.match(adminSubmissions, /New players keep their provisional estimates; existing ratings stay unchanged/);
 assert.match(adminStandings, /Doubles \+ Singles Mix/);
 assert.match(publicStandings, /Doubles \+ Singles Mix/);
 
