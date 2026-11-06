@@ -16,9 +16,13 @@ const initial = {
 let site = { club_id: "alpha", slug: "alpha", club_active: true, revision: 1,
   draft: structuredClone(initial), published: structuredClone(initial), published_at: "2026-09-16" };
 let publicGold = [], goldRequests = [], goldUnavailable = false;
+const renderedLinks = [];
 const mocks = {
   "@/components/interaction": { InteractionProvider: ({ children }) => children },
-  "next/link": Object.assign(({ children, prefetch, ...props }) => React.createElement("a", props, children), { useLinkStatus: () => ({ pending: false }) }),
+  "next/link": Object.assign(({ children, prefetch, ...props }) => {
+    renderedLinks.push({ ...props, prefetch });
+    return React.createElement("a", props, children);
+  }, { useLinkStatus: () => ({ pending: false }) }),
   "next/navigation": { usePathname: () => pathname, notFound: () => { throw Error("NOT_FOUND"); } },
   "next/headers": { headers: () => new Headers({ "x-pcs-club-path": pathname }) },
   "@/lib/clubSiteServer": {
@@ -141,15 +145,49 @@ global.fetch = async (url, options = {}) => {
   assert.doesNotMatch(await homeHtml(), /Tournament gold medalists|data-home-tournament-gold/);
 
   const { default: Link, ClubPageNavigationProvider: Provider } = load("components/PublicClubLink.tsx");
+  const profileHrefs = [
+    "/clubs/alpha/players/12", "/clubs/alpha/players/12?source=rankings#record",
+    "/clubs/alpha/players/12/matches", "/clubs/beta/players/player-id",
+    { pathname: "/clubs/alpha/players/12", query: { source: "rankings" }, hash: "record" },
+  ];
+  for (const withProvider of [false, true]) {
+    for (const href of profileHrefs) {
+      const clicked = () => {};
+      renderedLinks.length = 0;
+      const link = h(Link, { href, prefetch: true, onClick: clicked }, "Player profile");
+      renderToStaticMarkup(withProvider ? h(Provider, { slug: "alpha", settings: initial }, link) : link);
+      assert.equal(renderedLinks.length, 1);
+      assert.equal(renderedLinks[0].prefetch, false, "Player records never start viewport/hover prefetch, even when a caller enables it");
+      assert.equal(renderedLinks[0].href, href, "Profile destinations, filters and anchors remain unchanged");
+      assert.equal(renderedLinks[0].onClick, clicked, "Explicit navigation handlers remain intact");
+    }
+  }
+  renderedLinks.length = 0;
+  renderToStaticMarkup(h(Provider, { slug: "alpha", settings: initial },
+    Array.from({ length: 50 }, (_, index) => h("span", { key: index },
+      h(Link, { href: `/clubs/alpha/players/${2 * index + 1}` }, "First partner"), " & ",
+      h(Link, { href: `/clubs/alpha/players/${2 * index + 2}` }, "Second partner")))));
+  assert.equal(renderedLinks.length, 100);
+  assert.ok(renderedLinks.every(link => link.prefetch === false), "Fifty partnership rows do not trigger 100 speculative profile metadata requests");
+  for (const href of ["/clubs/alpha", "/clubs/alpha/players", "/clubs/alpha/players?sort=rank", "/clubs/alpha/leaderboards", "/clubs/alpha/pages/players/12"]) {
+    for (const prefetch of [undefined, false, true]) {
+      renderedLinks.length = 0;
+      renderToStaticMarkup(h(Link, { href, prefetch }, "Navigation"));
+      assert.equal(renderedLinks[0].prefetch, prefetch, "Non-profile navigation keeps its existing prefetch policy");
+      assert.equal(renderedLinks[0].href, href);
+    }
+  }
   const links = () => h(Provider, { slug: "alpha", settings: doc },
     h(Link, { href: "/clubs/alpha/players/12" }, "Avery"),
     h(Link, { href: "/clubs/alpha/players" }, "All players"),
     h(Link, { href: "/clubs/alpha/matches/20" }, "11–8"),
     h(Link, { href: "/clubs/alpha/tournament-registration?id=3" }, "Register"));
   pathname = "/clubs/alpha/leaderboards";
+  renderedLinks.length = 0;
   let markup = renderToStaticMarkup(links());
   assert.match(markup, /<span>Avery<\/span>.*<span>11–8<\/span>/);
   assert.doesNotMatch(markup, /href=|All players|Register/);
+  assert.equal(renderedLinks.length, 0, "Private record names remain plain text without a mounted prefetching Link");
   pathname = "/clubs/alpha/players/12";
   markup = renderToStaticMarkup(links());
   assert.match(markup, /href="\/clubs\/alpha\/players\/12"/);
