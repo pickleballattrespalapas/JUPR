@@ -653,46 +653,65 @@ def _public_stat_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _highlights(
-    rows: list[dict[str, Any]],
-    *,
-    scope: str,
-    min_games: int,
-    week_num: int | None = None,
-) -> dict[str, Any]:
+def _highlight_rankings(rows: list[dict[str, Any]], *, min_games: int) -> dict[str, list[dict[str, Any]]]:
+    """Shared complete field for weekly previews and their ranking pages."""
     current = list(rows)
-    climbers = sorted(
-        [
-            row
-            for row in current
-            if (row.get("rating_delta_jupr") or 0) > 0
-        ],
-        key=lambda row: (row.get("rating_delta_jupr") or 0, row.get("games") or 0),
-        reverse=True,
-    )[:3]
-    qualified = [
-        row
-        for row in current
-        if int(row.get("games") or 0) >= int(min_games) and row.get("win_pct") is not None
-    ]
-    best = sorted(
-        qualified,
-        key=lambda row: (row.get("win_pct") or 0, row.get("games") or 0),
-        reverse=True,
-    )[:3]
-    active = sorted(
-        current,
-        key=lambda row: (row.get("games") or 0, row.get("wins") or 0),
-        reverse=True,
-    )[:3]
     return {
-        "scope": scope,
-        "week_num": week_num,
-        "min_games": int(min_games),
-        "biggest_climbers": [_public_stat_row(row) for row in climbers],
-        "best_win_pct": [_public_stat_row(row) for row in best],
-        "most_active": [_public_stat_row(row) for row in active],
+        "biggest_climbers": sorted(
+            [row for row in current if (row.get("rating_delta_jupr") or 0) > 0],
+            key=lambda row: (row.get("rating_delta_jupr") or 0, row.get("games") or 0), reverse=True,
+        ),
+        "best_win_pct": sorted(
+            [row for row in current if int(row.get("games") or 0) >= min_games and row.get("win_pct") is not None],
+            key=lambda row: (row.get("win_pct") or 0, row.get("games") or 0), reverse=True,
+        ),
+        "most_active": sorted(
+            current, key=lambda row: (row.get("games") or 0, row.get("wins") or 0), reverse=True,
+        ),
     }
+
+
+def _highlights(
+    rows: list[dict[str, Any]], *, scope: str, min_games: int, week_num: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "scope": scope, "week_num": week_num, "min_games": int(min_games),
+        **{key: [_public_stat_row(row) for row in entries[:3]]
+           for key, entries in _highlight_rankings(rows, min_games=min_games).items()},
+    }
+
+
+def _record_stat_rankings(rows: list[dict[str, Any]], *, min_games: int, scope: str = "week") -> dict[str, Any]:
+    fields = {
+        "record_wins": ("Weekly wins", "wins", "All players with recorded games this week."),
+        "record_games": ("Weekly games", "games", "All players with recorded games this week."),
+        "record_gain": ("Weekly rating change", "rating_delta_jupr", "Players with recorded rating changes this week."),
+        "biggest_climbers": ("Biggest climbers", "rating_delta_jupr", "Positive rating change this week."),
+        "best_win_pct": ("Best win percentage", "win_pct", f"At least {min_games} games this week."),
+        "most_active": ("Most active", "games", "Ranked by games, then wins this week."),
+    }
+    ranked = _highlight_rankings(rows, min_games=min_games)
+    for key in (("record_wins", "record_games", "record_gain") if scope == "week" else ()):
+        field = fields[key][1]
+        ranked[key] = sorted([row for row in rows if row.get(field) is not None],
+                             key=lambda row: row.get(field) or 0, reverse=True)
+    result = {}
+    for key, entries in ranked.items():
+        title, field, qualification = fields[key]
+        if scope == "season":
+            qualification = qualification.replace("this week", "this league season")
+        public_entries = []
+        for rank, row in enumerate(entries, 1):
+            value = row.get(field) or 0
+            display = f"{value:+.3f}" if field == "rating_delta_jupr" else f"{value:.1f}%" if field == "win_pct" else str(int(value))
+            public_entries.append({
+                "rank": rank, "player_id": row["player_id"], "player_name": row["player_name"],
+                "metric_value": value, "metric_display": display, "metric_sample": int(row.get("games") or 0),
+                "detail": f"{int(row.get('wins') or 0)}–{int(row.get('losses') or 0)} in {int(row.get('games') or 0)} games",
+            })
+        result[key] = {"key": key, "title": title, "qualification": qualification,
+                       "entries": public_entries, "total_qualified": len(public_entries)}
+    return result
 
 
 def _player_options(
@@ -803,7 +822,9 @@ def _build_resolved_league_results(
             "player_weekly": [],
             "recent_matches": [],
             "weekly_highlights": empty_highlights,
+            "weekly_stat_rankings": {},
             "season_highlights": _highlights([], scope="season", min_games=1),
+            "season_stat_rankings": {},
             "highlights": empty_highlights,
             "award_progress": {"awards": [], "award_count": 0},
         }
@@ -941,7 +962,7 @@ def _build_resolved_league_results(
         row for row in weekly if int(row.get("player_id") or 0) == int(selected_player_id or 0)
     ]
 
-    from jupr_app.services.league_weekly_highlights_service import build_weekly_highlights
+    from jupr_app.services.league_weekly_highlights_service import build_weekly_highlights, weekly_stat_rankings
 
     highlight_selection = build_weekly_highlights(
         supabase, club_id=cid, league_name=selected, week_num=selected_week,
@@ -968,7 +989,12 @@ def _build_resolved_league_results(
         ),
         "weekly_highlights": weekly_highlights,
         "weekly_highlight_selection": highlight_selection,
+        "weekly_stat_rankings": {
+            **weekly_stat_rankings(matches, players=scoped_players, week_num=selected_week),
+            **_record_stat_rankings(selected_week_rows, min_games=weekly_min_games),
+        },
         "season_highlights": season_highlights,
+        "season_stat_rankings": _record_stat_rankings(season_highlight_rows, min_games=season_min_games, scope="season"),
         # Compatibility alias for the former latest-week highlight object.
         "highlights": weekly_highlights,
         "award_progress": _public_award_progress(

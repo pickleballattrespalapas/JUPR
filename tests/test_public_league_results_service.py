@@ -609,3 +609,35 @@ def test_failed_later_history_page_does_not_publish_partial_results(monkeypatch)
     monkeypatch.setattr(FakeQuery, 'execute', execute)
     with pytest.raises(DataReadUnavailable):
         build_public_league_results(db, club_id='club', league_name='Open')
+
+
+def test_weekly_stat_rankings_follow_selected_week_and_card_rules():
+    db = fake_supabase()
+    payload = build_public_league_results(db, club_id="club", league_name="Open", week_num=2, weekly_min_games=1)
+    rankings = payload["weekly_stat_rankings"]
+    assert payload["selected_week"] == 2
+    assert "court" not in rankings
+    for key in ("biggest_climbers", "best_win_pct", "most_active"):
+        assert [row["player_id"] for row in rankings[key]["entries"][:3]] == [
+            row["player_id"] for row in payload["weekly_highlights"][key]
+        ]
+    weekly = [row for row in payload["weekly_results"] if row["week_num"] == 2]
+    assert rankings["record_games"]["total_qualified"] == len(weekly)
+    assert [row["metric_value"] for row in rankings["record_games"]["entries"]] == sorted(
+        [row["games"] for row in weekly], reverse=True
+    )
+    assert "private@example.com" not in str(rankings)
+
+
+def test_season_stat_rankings_match_season_preview_and_ignore_selected_week():
+    week_one = build_public_league_results(fake_supabase(), club_id="club", league_name="Open", week_num=1, weekly_min_games=1)
+    week_two = build_public_league_results(fake_supabase(), club_id="club", league_name="Open", week_num=2, weekly_min_games=20)
+    rankings = week_one["season_stat_rankings"]
+    assert rankings == week_two["season_stat_rankings"]
+    assert set(rankings) == {"biggest_climbers", "best_win_pct", "most_active"}
+    for key, ranking in rankings.items():
+        assert [row["player_id"] for row in ranking["entries"][:3]] == [
+            row["player_id"] for row in week_one["season_highlights"][key]
+        ]
+        assert "this week" not in ranking["qualification"]
+    assert rankings["best_win_pct"]["qualification"] == "At least 4 games this league season."

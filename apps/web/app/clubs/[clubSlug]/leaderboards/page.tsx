@@ -1,4 +1,5 @@
 
+import { statLeaderboardHref } from "@/lib/statLeaderboardLinks";
 import PublicControls from "@/components/PublicControls";
 import PublicPlayerSearch from "@/components/PublicPlayerSearch";
 import { Display } from "@/components/ClubDisplay";
@@ -180,6 +181,7 @@ function BadgeStrip({ clubSlug, entry }: { clubSlug: string; entry: LeaderboardE
 
 function BarList({
   title,
+  href,
   description,
   rows,
   value,
@@ -187,6 +189,7 @@ function BarList({
   clubSlug
 }: {
   title: string;
+  href: string;
   description: string;
   rows: LeaderboardEntry[];
   value: (row: LeaderboardEntry) => number;
@@ -195,8 +198,8 @@ function BarList({
 }) {
   const max = Math.max(...rows.map((row) => Math.abs(value(row))), 0);
   return (
-    <article style={cardStyle} data-testid="leaderboard-highlight-card">
-      <h2 style={{ marginTop: 0, fontSize: "1.05rem" }}>{title}</h2>
+    <article id={`stat-card-${href.split("?")[0].split("/").pop()}`} style={cardStyle} data-testid="leaderboard-highlight-card">
+      <h2 style={{ marginTop: 0, fontSize: "1.05rem" }}><Link href={href} prefetch={false} title={`View the full ${title.toLowerCase()} leaderboard`}>{title}</Link></h2>
       <p style={{ color: "#475569", fontSize: ".85rem", marginTop: "-.3rem" }}>{description}</p>
       {!rows.length ? <p style={{ color: "#64748b", marginBottom: 0 }}>Not enough qualifying data yet.</p> : null}
       <div style={{ display: "grid", gap: "0.65rem" }}>
@@ -460,7 +463,7 @@ export default async function ClubLeaderboardPage(props: LeaderboardPageProps) {
           const card = LEADERBOARD_CARD_DETAILS[key];
           const minimum = overall ? settings.card_options?.[key]?.minimum ?? 0 : 0;
           const description = `${card.description}${minimum > 0 ? ` Minimum ${minimum} ${card.sample}.` : ""}`;
-          const highlight = <BarList key={key} title={LEADERBOARD_CARD_LABELS[key]} description={description} rows={data.highlights[key] ?? []} value={row => highlightValue(key, row)} detail={row => highlightDetail(key, row)} clubSlug={clubSlug} />;
+          const highlight = <BarList key={key} title={LEADERBOARD_CARD_LABELS[key]} href={statLeaderboardHref(clubSlug, key, { league: state.league, leagueView: state.leagueView, status: state.status, season: state.season, search: state.search, returnTo: pageHref(clubSlug, state, {}, `stat-card-${key}`) })} description={description} rows={data.highlights[key] ?? []} value={row => highlightValue(key, row)} detail={row => highlightDetail(key, row)} clubSlug={clubSlug} />;
           // The Overall selector is the authority for its featured cards.
           // Table columns and default league cards retain display preferences.
           if (overall) return highlight;

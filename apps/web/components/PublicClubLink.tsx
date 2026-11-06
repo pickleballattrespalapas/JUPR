@@ -32,7 +32,7 @@ function ClubLink({ context, children, ...props }: ComponentProps<typeof Link> &
   if (!canLinkClubPage(context.settings, context.slug, href, pathname || "")) {
     // Preserve names/scores in records while removing links to a private section.
     // Standalone navigation actions disappear rather than becoming dead buttons.
-    const recordLink = /\/(players|matches)\/[^/?#]+/.test(href);
+    const recordLink = /\/(players|matches|leaderboards)\/[^/?#]+/.test(href);
     return recordLink ? <span>{children}</span> : null;
   }
   return <PublicPageLink {...props}>{children}</PublicPageLink>;

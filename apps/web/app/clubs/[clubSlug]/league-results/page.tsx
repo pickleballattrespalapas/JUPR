@@ -1,4 +1,5 @@
 
+import { statLeaderboardHref } from "@/lib/statLeaderboardLinks";
 import PublicControls from "@/components/PublicControls";
 import PublicLeagueNav from "@/components/PublicLeagueNav";
 import { Display } from "@/components/ClubDisplay";
@@ -140,10 +141,10 @@ function pageHref({
   return `/clubs/${clubSlug}/league-results${query ? `?${query}` : ""}`;
 }
 
-function HighlightList({ title, rows, clubSlug }: { title: string; rows: LeagueResultsStatRow[]; clubSlug: string }) {
+function HighlightList({ title, rows, clubSlug, href }: { title: string; rows: LeagueResultsStatRow[]; clubSlug: string; href?: string }) {
   return (
     <article style={cardStyle}>
-      <h3 style={{ marginTop: 0 }}>{title}</h3>
+      <h3 style={{ marginTop: 0 }}>{href ? <Link prefetch={false} href={href}>{title}</Link> : title}</h3>
       {rows.length === 0 ? <p style={{ color: "#64748b" }}>No results yet.</p> : null}
       <ol style={{ marginBottom: 0, paddingLeft: "1.25rem" }}>
         {rows.map((row) => (
@@ -158,13 +159,13 @@ function HighlightList({ title, rows, clubSlug }: { title: string; rows: LeagueR
   );
 }
 
-function HighlightGrid({ highlights, clubSlug }: { highlights: LeagueResultsHighlights; clubSlug: string }) {
+function HighlightGrid({ highlights, clubSlug, rankHref }: { highlights: LeagueResultsHighlights; clubSlug: string; rankHref?: (key: string) => string }) {
   const qualifier = Math.max(1, Number(highlights.min_games || 1));
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-      <HighlightList title="Biggest climbers" rows={highlights.biggest_climbers} clubSlug={clubSlug} />
-      <HighlightList title={`Best win % (${qualifier}+ ${qualifier === 1 ? "game" : "games"})`} rows={highlights.best_win_pct} clubSlug={clubSlug} />
-      <HighlightList title="Most active" rows={highlights.most_active} clubSlug={clubSlug} />
+      <HighlightList title="Biggest climbers" rows={highlights.biggest_climbers} clubSlug={clubSlug} href={rankHref?.("biggest_climbers")} />
+      <HighlightList title={`Best win % (${qualifier}+ ${qualifier === 1 ? "game" : "games"})`} rows={highlights.best_win_pct} clubSlug={clubSlug} href={rankHref?.("best_win_pct")} />
+      <HighlightList title="Most active" rows={highlights.most_active} clubSlug={clubSlug} href={rankHref?.("most_active")} />
     </div>
   );
 }
@@ -199,11 +200,11 @@ function RecentMatchesTable({ rows, clubSlug }: { rows: LeagueResultsRecentMatch
   );
 }
 
-function BarList({ title, rows, emptyText = "Nothing to show yet." }: { title: string; rows: BarRow[]; emptyText?: string }) {
+function BarList({ title, rows, emptyText = "Nothing to show yet.", href }: { title: string; rows: BarRow[]; emptyText?: string; href?: string }) {
   const max = Math.max(...rows.map((row) => Math.abs(row.value)), 0);
   return (
     <article style={cardStyle}>
-      <h3 style={{ marginTop: 0 }}>{title}</h3>
+      <h3 style={{ marginTop: 0 }}>{href ? <Link prefetch={false} href={href}>{title}</Link> : title}</h3>
       {!rows.length ? <p style={{ color: "#64748b" }}>{emptyText}</p> : null}
       <div style={{ display: "grid", gap: "0.65rem" }}>
         {rows.map((row) => {
@@ -329,6 +330,14 @@ export default async function LeagueResultsPage(props: LeagueResultsPageProps) {
   );
   const selectedLeague = data?.selected_league ?? null;
   const selectedWeek = data?.selected_week ?? null;
+  const seasonRankHref = (key: string) => statLeaderboardHref(clubSlug, key, {
+    source: "season", league: selectedLeague ?? undefined,
+    returnTo: pageHref({ clubSlug, league: selectedLeague, section: activeSection, week: selectedWeek, player: selectedPlayerId, weeklyMinGames }),
+  });
+  const weeklyRankHref = (key: string) => statLeaderboardHref(clubSlug, key, {
+    source: "weekly", league: selectedLeague ?? undefined, week: selectedWeek ?? undefined, weeklyMinGames,
+    returnTo: pageHref({ clubSlug, league: selectedLeague, section: activeSection, week: selectedWeek, player: selectedPlayerId, weeklyMinGames }),
+  });
   const recentWeeklyRows = selectedWeek ? (data?.weekly_results ?? []).filter((row) => row.week_num === selectedWeek) : [];
   const playerCandidates = data?.players ?? [];
   const selectedPlayerId = data?.selected_player_id ?? null;
@@ -454,8 +463,8 @@ export default async function LeagueResultsPage(props: LeagueResultsPageProps) {
             <section style={sectionStyle} data-testid="league-results-awards-race">
               <h2>Awards race</h2>
               {data.award_progress.awards.length ? <>
-                <p style={{ color: "#64748b" }}>Showing the top five for each award. Expand an award to see everyone who qualifies.</p>
-                <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={clubSlug} />
+                <p style={{ color: "#64748b" }}>Showing the top five for each award. Select an award title for its full leaderboard.</p>
+                <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={clubSlug} leagueName={selectedLeague} returnTo={pageHref({ clubSlug, league: selectedLeague, section: "overall", week: selectedWeek, player: selectedPlayerId, weeklyMinGames })} />
               </> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No one qualifies for an award yet.</article>}
             </section>
           ) : null}
@@ -470,7 +479,7 @@ export default async function LeagueResultsPage(props: LeagueResultsPageProps) {
 
               <h2>Season highlights</h2>
               <p style={{ color: "#64748b" }}>Season totals only; win-percentage leaders must meet the league minimum of {data.season_highlights.min_games ?? 1} games.</p>
-              <HighlightGrid highlights={data.season_highlights} clubSlug={clubSlug} />
+              <HighlightGrid highlights={data.season_highlights} clubSlug={clubSlug} rankHref={seasonRankHref} />
             </section>
           ) : null}
 
@@ -481,14 +490,14 @@ export default async function LeagueResultsPage(props: LeagueResultsPageProps) {
                 Weekly results show recorded matches. Season standings include all official league results.
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-                <BarList title="Weekly wins" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.wins) - safeNumber(a.wins)).slice(0, 10).map((row) => ({ key: `wins-${row.player_id}`, label: row.player_name, value: safeNumber(row.wins), detail: countLabel(row.wins, "win"), href: playerHref(clubSlug, row.player_id) }))} />
-                <BarList title="Weekly games" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.games) - safeNumber(a.games)).slice(0, 10).map((row) => ({ key: `games-${row.player_id}`, label: row.player_name, value: safeNumber(row.games), detail: countLabel(row.games, "game"), href: playerHref(clubSlug, row.player_id) }))} />
-                <BarList title="Weekly rating Δ" rows={recentWeeklyRows.filter((row) => row.rating_delta_jupr != null).sort((a, b) => safeNumber(b.rating_delta_jupr) - safeNumber(a.rating_delta_jupr)).slice(0, 10).map((row) => ({ key: `delta-${row.player_id}`, label: row.player_name, value: safeNumber(row.rating_delta_jupr), detail: deltaLabel(row.rating_delta_jupr), href: playerHref(clubSlug, row.player_id) }))} />
+                <BarList title="Weekly wins" href={weeklyRankHref("record_wins")} rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.wins) - safeNumber(a.wins)).slice(0, 10).map((row) => ({ key: `wins-${row.player_id}`, label: row.player_name, value: safeNumber(row.wins), detail: countLabel(row.wins, "win"), href: playerHref(clubSlug, row.player_id) }))} />
+                <BarList title="Weekly games" href={weeklyRankHref("record_games")} rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.games) - safeNumber(a.games)).slice(0, 10).map((row) => ({ key: `games-${row.player_id}`, label: row.player_name, value: safeNumber(row.games), detail: countLabel(row.games, "game"), href: playerHref(clubSlug, row.player_id) }))} />
+                <BarList title="Weekly rating Δ" href={weeklyRankHref("record_gain")} rows={recentWeeklyRows.filter((row) => row.rating_delta_jupr != null).sort((a, b) => safeNumber(b.rating_delta_jupr) - safeNumber(a.rating_delta_jupr)).slice(0, 10).map((row) => ({ key: `delta-${row.player_id}`, label: row.player_name, value: safeNumber(row.rating_delta_jupr), detail: deltaLabel(row.rating_delta_jupr), href: playerHref(clubSlug, row.player_id) }))} />
               </div>
               <StatTable title="Weekly" rows={recentWeeklyRows.slice(0, 40)} clubSlug={clubSlug} />
               <h3>Week {selectedWeek ?? "—"} highlights</h3>
               <p style={{ color: "#64748b" }}>Highlights for this week.</p>
-              <HighlightGrid highlights={data.weekly_highlights} clubSlug={clubSlug} />
+              <HighlightGrid highlights={data.weekly_highlights} clubSlug={clubSlug} rankHref={weeklyRankHref} />
             </section>
           ) : null}
 
