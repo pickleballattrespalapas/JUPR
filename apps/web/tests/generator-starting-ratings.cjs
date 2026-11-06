@@ -4,6 +4,7 @@ const path = require('node:path');
 const React = require('react');
 const ts = require('typescript');
 const {create, act} = require('react-test-renderer');
+global.IS_REACT_ACT_ENVIRONMENT = true;
 let automaticallyReviewed = true;
 const reviewPanels = new Map();
 function RatingReview(props) {
@@ -36,6 +37,7 @@ const label = node => typeof node === 'string' ? node : (node?.children || []).m
 const button = (tree, text) => tree.root.findAllByType('button').find(node => label(node) === text);
 const input = (tree, name) => tree.root.findByProps({'aria-label':name});
 const rating = (level, games = 0, editable = true) => ({rating_jupr:level, matches_played:games, can_set_starting_rating:editable && games === 0, state_fingerprint:'a'.repeat(64)});
+const estimate = {rating_jupr:3.75, provisional:true, method:'results', games_used:1, anchored_games:1, prior_jupr:3.5, known_players:3, algorithm:'test-estimator'};
 const seed = {
   submissions:[{id:'review', session_key:'session', title:'Evening RR', version:3, status:'pending', organizer_name:'Joe', rating_mode:'rated', match_date:'2026-10-10', match_count:2,
     participants:[1,2,3,4].map(id => ({id:'p'+id, name:'Player '+id, player_id:id})),
@@ -49,6 +51,7 @@ const operations = new Map();
 async function mount(queue = structuredClone(seed), options = {}) {
   const calls = [];
   let failReload = false;
+  let creationAttempts = 0;
   global.fetch = async (url, options) => {
     calls.push({url, options});
     if (options.method === 'PATCH') {
@@ -59,11 +62,20 @@ async function mount(queue = structuredClone(seed), options = {}) {
       return {ok:true, json:async () => ({ok:true, player:structuredClone(player)})};
     }
     if (url.endsWith('/review')) return {ok:true, json:async () => ({status:'approved'})};
-    if (url.endsWith('/players/editor/players') && options.method === 'POST') {
+    if (url.endsWith('/sessions/session/players') && options.method === 'POST') {
       const body = JSON.parse(options.body);
-      const player = {id:9, name:body.name, ratings:{doubles:rating(body.starting_jupr), singles:rating(3.5, 0, false)}};
+      assert.equal(body.participant_id, 'p4');
+      assert.equal(body.expected_version, 3);
+      assert.deepEqual(body.player_ids, {p1:1, p2:2, p3:3});
+      assert.equal(Object.hasOwn(body, 'starting_jupr'), false, 'Submission creation never requests a manual starting rating');
+      creationAttempts += 1;
+      if (['not-started', 'stale-retry'].includes(creationFailure) && creationAttempts === 1) throw new TypeError('Request never reached the server');
+      if (['stale', 'stale-retry'].includes(creationFailure)) return {ok:false, status:409, json:async () => ({detail:{message:'Submission changed. Refresh before creating a player.', recovery_required:false}})};
+      const player = {id:9, name:body.name, ratings:{doubles:rating(3.75), singles:rating(3.5, 0, false)}};
       queue.players.push(player);
-      const result = {ok:true, player:{id:9, name:body.name}};
+      queue.submissions[0].estimated_players = {p4:{player_id:9, ratings:{doubles:structuredClone(estimate)}}};
+      queue.submissions[0].participants[3].player_id = 9;
+      const result = {ok:true, player:{id:9, name:body.name}, rating_estimate:structuredClone(estimate), rating_estimates:{doubles:structuredClone(estimate)}};
       operations.set(body.idempotency_key, result);
       if (creationFailure === 'lost') throw new TypeError('Network response lost');
       if (creationFailure === 'reconcile') return {ok:false, status:409, json:async () => ({detail:{message:'Check saved player', recovery_required:true}})};
@@ -73,6 +85,7 @@ async function mount(queue = structuredClone(seed), options = {}) {
     if (url.includes('/players/editor/operations/')) {
       const key = decodeURIComponent(url.split('/operations/')[1].split('/')[0]);
       const result = operations.get(key);
+      if (!result) return {ok:false, status:404, json:async () => ({detail:'Operation not found'})};
       if (url.endsWith('/reconcile')) return {ok:true, json:async () => result};
       return {ok:true, json:async () => ({status:creationFailure === 'reconcile' ? 'recovery_required' : 'completed', result})};
     }
@@ -144,14 +157,12 @@ async function main() {
   assert.equal(button(unscored.tree, 'Approve unrated results').props.disabled, false);
   await act(async () => unscored.tree.unmount());
 
-  const missingProfile = () => { const q = structuredClone(seed); q.players = q.players.filter(p => p.id !== 4); return q; };
+  const missingProfile = () => { const q = structuredClone(seed); q.players = q.players.filter(p => p.id !== 4); delete q.submissions[0].participants[3].player_id; return q; };
   async function openCreator(tree) {
     await act(async () => tree.root.findByProps({'aria-label':'Create new player for Player 4'}).props.onClick());
     assert.equal(input(tree, 'New player name for Player 4').props.value, 'Player 4');
-    assert.equal(button(tree, 'Create and select player').props.disabled, true);
-    await act(async () => input(tree, 'New player starting level for Player 4').props.onChange({target:{value:'7.5'}}));
-    assert.equal(button(tree, 'Create and select player').props.disabled, true);
-    await act(async () => input(tree, 'New player starting level for Player 4').props.onChange({target:{value:'3.75'}}));
+    assert.equal(tree.root.findAllByProps({'aria-label':'New player starting level for Player 4'}).length, 0, 'A completed submission estimates the rating automatically');
+    assert.equal(button(tree, 'Create and select player').props.disabled, false, 'The prefilled name is enough to create a missing player');
   }
   async function submitCreator(tree) {
     await act(async () => tree.root.findByProps({'aria-label':'New club player for Player 4'}).props.onSubmit({preventDefault(){}}));
@@ -162,17 +173,41 @@ async function main() {
   await openCreator(creation.tree);
   await submitCreator(creation.tree);
   assert.equal(input(creation.tree, 'Club profile for Player 4').props.value, 9);
-  assert.equal(input(creation.tree, 'Player 4 doubles starting level').props.value, '3.75');
+  assert.equal(creation.tree.root.findAllByProps({'aria-label':'Player 4 doubles starting level'}).length, 0, 'An inferred starting level does not reopen a manual rating prompt');
+  assert.match(label(creation.tree.toJSON()), /3\.750/);
+  assert.deepEqual(reviewPanels.get('doubles').playerIds, [1,2,3], 'Automatically estimated players do not require manual starting-rating confirmation');
   assert.equal(input(creation.tree, 'Player 1 doubles starting level').props.value, '4.5', 'Other starting-level edits survive creation');
   assert.equal(button(creation.tree, 'Approve rated results').props.disabled, true, 'Other unsaved edits still block approval');
-  const creationCall = creation.calls.find(c => c.url.endsWith('/players/editor/players'));
-  assert.equal(JSON.parse(creationCall.options.body).starting_jupr, 3.75);
+  const creationCall = creation.calls.find(c => c.url.endsWith('/sessions/session/players'));
+  assert.equal(Object.hasOwn(JSON.parse(creationCall.options.body), 'starting_jupr'), false);
   assert.equal(creationCall.options.headers.Authorization, 'Bearer admin-token');
   assert.match(JSON.parse(creationCall.options.body).idempotency_key, /^generator-player:/);
   await act(async () => button(creation.tree, 'Save doubles starting level').props.onClick());
   assert.equal(button(creation.tree, 'Approve rated results').props.disabled, false);
   assert.equal(stored.size, 0, 'Completed creation is cleared from recovery storage');
+  const createdQueue = structuredClone(creation.queue);
   await act(async () => creation.tree.unmount());
+  const afterRefresh = await mount(createdQueue);
+  assert.equal(input(afterRefresh.tree, 'Club profile for Player 4').props.value, 9);
+  assert.equal(afterRefresh.tree.root.findAllByProps({'aria-label':'Player 4 doubles starting level'}).length, 0, 'Inferred metadata survives a full page reload');
+  assert.deepEqual(reviewPanels.get('doubles').playerIds, [1,2,3]);
+  await act(async () => afterRefresh.tree.unmount());
+
+  const unratedCreationQueue = missingProfile();
+  unratedCreationQueue.submissions[0].rating_mode = 'unrated';
+  const unratedCreation = await mount(unratedCreationQueue);
+  await openCreator(unratedCreation.tree);
+  await act(async () => input(unratedCreation.tree, 'New player name for Player 4').props.onChange({target:{value:'  '}}));
+  assert.equal(button(unratedCreation.tree, 'Create and select player').props.disabled, true, 'A blank name cannot create a profile');
+  await act(async () => input(unratedCreation.tree, 'New player name for Player 4').props.onChange({target:{value:'  Corrected Player  '}}));
+  await submitCreator(unratedCreation.tree);
+  assert.equal(input(unratedCreation.tree, 'Club profile for Player 4').props.value, 9);
+  assert.equal(unratedCreation.queue.players.find(player => player.id === 9).name, 'Corrected Player', 'The prefilled name can be corrected');
+  assert.match(label(unratedCreation.tree.toJSON()), /[Pp]rovisional/);
+  assert.match(label(unratedCreation.tree.toJSON()), /3\.750/);
+  assert.equal(unratedCreation.tree.root.findAllByType('input').filter(node => node.props.type === 'number').length, 0);
+  assert.equal(button(unratedCreation.tree, 'Approve unrated results').props.disabled, false);
+  await act(async () => unratedCreation.tree.unmount());
 
   const duplicate = await mount(missingProfile());
   await openCreator(duplicate.tree);
@@ -187,6 +222,9 @@ async function main() {
   await openCreator(interrupted.tree); await submitCreator(interrupted.tree);
   assert(button(interrupted.tree, 'Check player creation'));
   assert.equal(stored.size, 1, 'Interrupted creation survives refresh');
+  const retained = JSON.parse([...stored.values()][0]);
+  assert.deepEqual(retained.estimateRequest, {participant_id:'p4', player_ids:{p1:1,p2:2,p3:3}, expected_version:3}, 'Recovery retains the exact estimate inputs');
+  assert.equal(Object.hasOwn(retained, 'level'), false, 'Automatic creation does not invent a manual level in recovery storage');
   const afterInterrupted = interrupted.queue;
   await act(async () => interrupted.tree.unmount());
   const resumed = await mount(afterInterrupted);
@@ -197,9 +235,43 @@ async function main() {
   assert.equal(resumed.queue.players.filter(p => p.name === 'Player 4').length, 1);
   await act(async () => resumed.tree.unmount());
 
+  const retry = await mount(missingProfile(), {creationFailure:'not-started'});
+  await openCreator(retry.tree); await submitCreator(retry.tree);
+  assert(button(retry.tree, 'Check player creation'));
+  await act(async () => retry.tree.root.findAllByType('select').find(node => node.props['aria-label'] === 'Club profile for Player 1').props.onChange({target:{value:'3'}}));
+  await submitCreator(retry.tree);
+  const attempts = retry.calls.filter(call => call.url.endsWith('/sessions/session/players'));
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(JSON.parse(attempts[0].options.body), JSON.parse(attempts[1].options.body), 'A missing-operation retry reuses its original mapping, version, name and key');
+  assert.equal(retry.queue.players.filter(player => player.id === 9).length, 1);
+  await act(async () => retry.tree.unmount());
+
+  for (const creationFailure of ['stale', 'stale-retry']) {
+    const staleQueue = missingProfile();
+    staleQueue.players.push({id:5, name:'Existing Profile', ratings:{doubles:rating(3.5), singles:rating(3.5,0,false)}});
+    const stale = await mount(staleQueue, {creationFailure});
+    await openCreator(stale.tree); await submitCreator(stale.tree);
+    if (creationFailure === 'stale-retry') {
+      assert(button(stale.tree, 'Check player creation'));
+      assert.equal(stored.size, 1);
+      await submitCreator(stale.tree);
+      assert(stale.calls.some(call => call.url.includes('/players/editor/operations/')));
+    }
+    assert.equal(stored.size, 0, 'A definitive stale rejection clears recovery state');
+    assert.equal(stale.queue.players.length, 4, 'A stale request creates no profile');
+    assert.match(label(stale.tree.toJSON()), /Submission changed/);
+    assert.doesNotMatch(label(stale.tree.toJSON()), /Check unfinished player creation/);
+    assert.equal(button(stale.tree, 'Check player creation'), undefined);
+    await act(async () => button(stale.tree, 'Cancel').props.onClick());
+    await openCreator(stale.tree);
+    await act(async () => stale.tree.root.findAllByType('select').find(node => node.props['aria-label'] === 'Club profile for Player 4').props.onChange({target:{value:'5'}}));
+    assert.equal(button(stale.tree, 'Approve rated results').props.disabled, false, 'Discarded creation cannot block selecting and approving an existing profile');
+    await act(async () => stale.tree.unmount());
+  }
+
   const reconcile = await mount(missingProfile(), {creationFailure:'reconcile'});
   await openCreator(reconcile.tree); await submitCreator(reconcile.tree); await submitCreator(reconcile.tree);
-  assert.equal(reconcile.calls.filter(c => c.url.endsWith('/players/editor/players')).length, 1);
+  assert.equal(reconcile.calls.filter(c => c.url.endsWith('/sessions/session/players')).length, 1);
   assert(reconcile.calls.some(c => c.url.endsWith('/reconcile')));
   assert.equal(button(reconcile.tree, 'Approve rated results').props.disabled, false);
   await act(async () => reconcile.tree.unmount());
@@ -208,10 +280,10 @@ async function main() {
   await openCreator(reload.tree); await submitCreator(reload.tree);
   assert(button(reload.tree, 'Use created player'));
   await submitCreator(reload.tree);
-  assert.equal(reload.calls.filter(c => c.url.endsWith('/players/editor/players')).length, 1, 'A failed list refresh never creates a second profile');
+  assert.equal(reload.calls.filter(c => c.url.endsWith('/sessions/session/players')).length, 1, 'A failed list refresh never creates a second profile');
   assert.equal(button(reload.tree, 'Approve rated results').props.disabled, false);
   await act(async () => reload.tree.unmount());
-  console.log('PASS: inline creation, required starting level, preserved edits, duplicate prevention, refresh recovery, reconciliation, and single-insert retries');
+  console.log('PASS: prefilled inline creation, automatic starting rating, preserved edits, duplicate prevention, refresh recovery, reconciliation, and single-insert retries');
   console.log('PASS: doubles starting levels, established ratings, singles isolation, validation, save-before-approve, and unrated results');
 }
 main().catch(error => {console.error(error); process.exitCode=1;});

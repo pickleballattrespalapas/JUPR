@@ -195,6 +195,7 @@ def _submission_payload(row: dict) -> dict:
         "session_key": row["session_key"], "title": row.get("title") or event.get("name"),
         "version": int(row.get("version") or 1), "generator_kind": event.get("generatorKind"),
         "play_format": event.get("playFormat"),
+        "estimated_players": {},
         **{k: v for k, v in submission.items() if k not in {"review", "results"}},
         "review": {"request": submission["review"].get("request")} if submission.get("review") else None,
         "participants": [p for p in event.get("participants", []) if str(p.get("id")) in played],
@@ -207,14 +208,43 @@ def list_generator_submissions(db, *, club_id: str, actor_role: str, status: str
     statuses = ["pending", "processing"] if status == "pending" else [status]
     rows = _rows(db.table("live_sessions").select("*").eq("club_id", club_id)
         .in_("state->generator_submission->>status", statuses).order("updated_at", desc=True).limit(200))
+    from jupr_app.services.generator_player_creation_service import generator_created_players
+    created = generator_created_players(db, club_id=club_id, session_keys=[row["session_key"] for row in rows]) if rows else {}
     submissions = []
     for row in rows:
         if (row.get("state") or {}).get("mode") not in GENERATOR_MODES:
             continue
-        submissions.append(_submission_payload(row))
-    players = [_review_player(p) for p in read_all_rows(
-        lambda: db.table("players").select(RATING_PLAYER_COLUMNS).eq("club_id", club_id)
-    ) if not is_merged_player(p)]
+        item = _submission_payload(row)
+        item["estimated_players"] = created.get(row["session_key"], {})
+        if (row["state"]["generator_submission"].get("review") or {}).get("estimated_players"):
+            item["estimated_players"] = row["state"]["generator_submission"]["review"]["estimated_players"]
+        for participant in item["participants"]:
+            estimated = item["estimated_players"].get(str(participant["id"]))
+            if estimated and not participant.get("player_id"):
+                participant["player_id"] = estimated["player_id"]
+        submissions.append(item)
+    raw_players = read_all_rows(lambda: db.table("players").select(RATING_PLAYER_COLUMNS).eq("club_id", club_id))
+    raw_by_id = {int(p["id"]): p for p in raw_players}
+    players = [_review_player(p) for p in raw_players if not is_merged_player(p)]
+    by_id = {p["id"]: p for p in players}
+    for item in submissions:
+        if item.get("status") != "pending":
+            continue
+        eligible = {}
+        for participant_id, estimated in item["estimated_players"].items():
+            current = by_id.get(estimated["player_id"])
+            original = estimated["ratings"].get("doubles", {}).get("rating_jupr")
+            if current and original is not None:
+                rating = current["ratings"]["doubles"]
+                raw = raw_by_id.get(estimated["player_id"])
+                if (rating["can_set_starting_rating"] and rating["rating_jupr"] is not None
+                        and all(current["ratings"][fmt]["matches_played"] == 0
+                                for fmt in estimated["ratings"])
+                        and abs(rating["rating_jupr"] - original) < 0.000001
+                        and raw and raw.get("starting_rating") is not None
+                        and abs(float(raw["starting_rating"]) / 400 - original) < 0.000001):
+                    eligible[participant_id] = estimated
+        item["estimated_players"] = eligible
     players.sort(key=lambda p: (str(p.get("name") or "").casefold(), p["id"]))
     return {"ok": True, "submissions": submissions, "players": players}
 
@@ -426,6 +456,8 @@ def review_generator_submission(
         if row.get("pending_operation_key"):
             raise PublicLiveConflictError("A previous change is pending. Retry it first.")
         payloads = []
+        estimated_players = {}
+        estimate_plans = {}
         if action != "reject":
             event = _event(row)
             for participant in event.get("participants", []):
@@ -452,8 +484,13 @@ def review_generator_submission(
                         if value is None or not math.isfinite(float(value)) or float(value) <= 0:
                             raise ValueError(f"Set the doubles starting level for {by_id[pid]['name']} before approving.")
                 match["rating_scope"] = "unrated" if rating_mode == "unrated" else "overall_only"
-            require_published_starting_ratings(db, club_id=club_id, matches=payloads)
+            from jupr_app.services.generator_player_creation_service import plan_generator_estimates
+            estimated_players, estimate_plans = plan_generator_estimates(db, club_id=club_id,
+                session_key=session_key, event=event, player_ids=player_ids)
+            require_published_starting_ratings(db, club_id=club_id, matches=payloads,
+                planned_player_ids={fmt: {r["player_id"] for r in entries} for fmt, entries in estimate_plans.items()})
         review = {"request": request, "fingerprint": fingerprint, "payloads": payloads,
+                  "estimated_players": estimated_players, "estimate_plans": estimate_plans,
                   "actor_email": actor_email, "actor_role": actor_role, "started_at": _now()}
         submission.update({"status": "processing", "review": review})
         row = _save(db, row, state, pending_operation_key=operation_key,
@@ -466,6 +503,9 @@ def review_generator_submission(
     results = []
     badge_refs = []
     if action != "reject":
+        from jupr_app.services.generator_player_creation_service import apply_generator_estimates
+        apply_generator_estimates(db, club_id=club_id, plans=review.get("estimate_plans") or {},
+            actor_email=review["actor_email"], actor_role=review["actor_role"])
         for match_format in ("doubles", "singles"):
             matches = [m for m in review["payloads"] if m["match_format"] == match_format]
             for start in range(0, len(matches), 200):
