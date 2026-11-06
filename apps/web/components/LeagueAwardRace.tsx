@@ -1,4 +1,5 @@
 import Link from "@/components/PublicClubLink";
+import { statLeaderboardHref } from "@/lib/statLeaderboardLinks";
 import type { LeagueAwardProgress, LeagueAwardProgressRow, LeagueAwardRace } from "@/lib/api";
 
 const cardStyle = {
@@ -31,7 +32,8 @@ function fallbackRaces(progress: LeagueAwardProgress): LeagueAwardRace[] {
 }
 
 export function awardRaces(progress: LeagueAwardProgress): LeagueAwardRace[] {
-  return progress.races?.filter((race) => race.entries?.length) || fallbackRaces(progress);
+  const unavailable = new Set(progress.unavailable_categories || []);
+  return (progress.races?.filter((race) => race.entries?.length) || fallbackRaces(progress)).filter(race => !unavailable.has(race.category_key));
 }
 
 function previewEntries(entries: LeagueAwardProgressRow[]): LeagueAwardProgressRow[] {
@@ -56,6 +58,7 @@ function minimumLabel(race: LeagueAwardRace): string {
 }
 
 function playerName(clubSlug: string, entry: LeagueAwardProgressRow) {
+  if (entry.team_members?.length) return <>{entry.team_members.map((member, index) => <span key={member.player_id}>{index ? " & " : ""}<Link href={`/clubs/${encodeURIComponent(clubSlug)}/players/${encodeURIComponent(String(member.player_id))}`}>{member.player_name}</Link></span>)}</>;
   if (entry.player_id == null) return entry.recipient_name || "—";
   return <Link href={`/clubs/${clubSlug}/players/${entry.player_id}`}>{entry.recipient_name || "—"}</Link>;
 }
@@ -69,11 +72,12 @@ function placementRow(clubSlug: string, entry: LeagueAwardProgressRow, index: nu
   );
 }
 
-export function LeagueAwardRaceGrid({ progress, clubSlug }: { progress: LeagueAwardProgress; clubSlug: string }) {
+export function LeagueAwardRaceGrid({ progress, clubSlug, leagueName, returnTo, teamLeague = false }: { progress: LeagueAwardProgress; clubSlug: string; leagueName?: string; returnTo?: string; teamLeague?: boolean }) {
   const races = awardRaces(progress);
-  if (!races.length) return null;
+  if (!races.length && !progress.unavailable_categories?.length) return null;
   return (
     <div data-testid="league-award-races" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "0.75rem" }}>
+      {progress.unavailable_categories?.length ? <p role="status" style={{ color: "#475569" }}>Complete historical rankings are unavailable for {progress.unavailable_categories.map(key => key.replaceAll("_", " ")).join(", ")}; the original award recipients remain recorded.</p> : null}
       {races.map((race) => {
         const entries = race.entries || [];
         const preview = previewEntries(entries);
@@ -85,7 +89,7 @@ export function LeagueAwardRaceGrid({ progress, clubSlug }: { progress: LeagueAw
         const minimum = minimumLabel(race);
         return (
           <article key={race.category_key} data-testid={`league-award-race-${race.category_key}`} style={cardStyle}>
-            <h3 style={{ margin: "0 0 0.25rem" }}>{race.category_label}</h3>
+            <h3 style={{ margin: "0 0 0.25rem" }}>{leagueName ? <Link prefetch={false} href={statLeaderboardHref(clubSlug, race.category_key, { source: teamLeague ? "team-awards" : "awards", league: leagueName, returnTo })} style={{ color: "#1d4ed8", textUnderlineOffset: "3px" }}>{race.category_label}</Link> : race.category_label}</h3>
             <p style={{ margin: "0 0 0.65rem", color: "#475569", fontSize: "0.88rem" }}>
               {qualifierLabel} · {minimum}
             </p>

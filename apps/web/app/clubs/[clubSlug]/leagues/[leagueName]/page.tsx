@@ -266,7 +266,7 @@ export default async function PublicLeagueHomePage(props: Props) {
           </Link>
         </div>
 
-        {data.award_progress.awards.length ? <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} /> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No one qualifies for an award yet.</article>}
+        {data.award_progress.awards.length ? <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} leagueName={leagueName} returnTo={`/clubs/${encodeURIComponent(params.clubSlug)}/leagues/${encodeURIComponent(leagueName)}`} /> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No one qualifies for an award yet.</article>}
       </section>
     </section>
   );

@@ -1,4 +1,5 @@
 
+import { statLeaderboardHref } from "@/lib/statLeaderboardLinks";
 import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import PublicLeagueNav from "@/components/PublicLeagueNav";
@@ -111,8 +112,8 @@ export default async function PublicLeagueStandingsPage(props: Props) {
         <h2>Awards race</h2>
         {data.award_progress.awards.length ? (
           <>
-            <p style={{ color: "#64748b" }}>Showing the top five for each award. Expand an award to see everyone who qualifies.</p>
-            <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} />
+            <p style={{ color: "#64748b" }}>Showing the top five for each award. Select an award title for its full leaderboard.</p>
+            <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} leagueName={leagueName} returnTo={`/clubs/${encodeURIComponent(params.clubSlug)}/leagues/${encodeURIComponent(leagueName)}/standings`} />
           </>
         ) : <article style={{ ...cardStyle, background: "#f8fafc" }}>No one qualifies for an award yet.</article>}
       </section>
@@ -129,15 +130,15 @@ export default async function PublicLeagueStandingsPage(props: Props) {
         <h2>Season highlights</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
           <article style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>Biggest climbers</h3>
+            <h3 style={{ marginTop: 0 }}><Link prefetch={false} href={statLeaderboardHref(params.clubSlug, "biggest_climbers", { source: "season", league: leagueName, returnTo: `/clubs/${params.clubSlug}/leagues/${encodeURIComponent(leagueName)}/standings` })}>Biggest climbers</Link></h3>
             <p style={{ marginBottom: 0 }}>{highlightNames(data.season_highlights.biggest_climbers)}</p>
           </article>
           <article style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>Best win percentage</h3>
+            <h3 style={{ marginTop: 0 }}><Link prefetch={false} href={statLeaderboardHref(params.clubSlug, "best_win_pct", { source: "season", league: leagueName, returnTo: `/clubs/${params.clubSlug}/leagues/${encodeURIComponent(leagueName)}/standings` })}>Best win percentage</Link></h3>
             <p style={{ marginBottom: 0 }}>{highlightNames(data.season_highlights.best_win_pct)}</p>
           </article>
           <article style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>Most active</h3>
+            <h3 style={{ marginTop: 0 }}><Link prefetch={false} href={statLeaderboardHref(params.clubSlug, "most_active", { source: "season", league: leagueName, returnTo: `/clubs/${params.clubSlug}/leagues/${encodeURIComponent(leagueName)}/standings` })}>Most active</Link></h3>
             <p style={{ marginBottom: 0 }}>{highlightNames(data.season_highlights.most_active)}</p>
           </article>
         </div>

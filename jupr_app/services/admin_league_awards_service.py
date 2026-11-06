@@ -346,6 +346,10 @@ def _award_inputs(
             for row in player_analytics["players"]
             if int(row.get("player_id") or 0) in active_member_ids
         ]
+        player_analytics["partnerships"] = [
+            row for row in player_analytics["partnerships"]
+            if all(member["player_id"] in active_member_ids for member in row["team_members"])
+        ]
     team_analytics = compute_team_league_analytics(
         resolved_fixture_rows, resolved_team_rows
     )
@@ -357,6 +361,7 @@ def _award_inputs(
             else []
         ),
         "player_analytics": player_analytics["players"],
+        "partnership_analytics": player_analytics["partnerships"],
         "team_analytics": team_analytics["teams"],
         "provenance": player_analytics["provenance"],
         "expected_weeks": expected_weeks,
@@ -558,6 +563,13 @@ def _award_race_entries(
                 ) > 1,
                 "min_games": minimum,
                 "minimum_metric": minimum_metric,
+                "metric_sample": row.get(minimum_metric),
+                **({
+                    "team_members": row["team_members"],
+                    "games": row.get("games"), "wins": row.get("wins"),
+                    "losses": row.get("losses"),
+                    "metric_display": f"{numeric_metric * 100:.1f}% ({row.get('wins', 0)}/{row.get('games', 0)})",
+                } if row.get("team_members") else {}),
             }
         )
     return result
@@ -599,6 +611,9 @@ def _public_award_races(
             if spec.get("recipient_type") == "team"
             else analytics.get("player_analytics", [])
         )
+        if category_key == "best_partnership":
+            spec = {**spec, "recipient_type": "team"}
+            recipients = analytics.get("partnership_analytics", [])
         minimum = _award_minimum(config, meta_row, awards_config)
         entries = _award_race_entries(spec, recipients, minimum=minimum)
         if not entries:
@@ -635,6 +650,14 @@ def _public_award_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "is_co_winner": row.get("is_co_winner"),
         "min_games": row.get("min_games"),
         "minimum_metric": row.get("minimum_metric"),
+        **({"metric_sample": row["metric_sample"]} if "metric_sample" in row else {}),
+        **({
+            "team_members": [
+                {"player_id": member.get("player_id"), "player_name": member.get("player_name")}
+                for member in row["team_members"] if isinstance(member, Mapping)
+            ],
+            "games": row.get("games"), "wins": row.get("wins"), "losses": row.get("losses"),
+        } if row.get("team_members") else {}),
     }
 
 
@@ -1132,6 +1155,37 @@ def _has_explicit_award_categories(meta_row: Mapping[str, Any]) -> bool:
     return isinstance(awards_config, Mapping) and "categories" in awards_config
 
 
+def _public_award_progress_projection(
+    rows: Sequence[Mapping[str, Any]], races: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    safe_rows = [_public_award_row(row) for row in rows]
+    safe_races = [
+        {
+            "category_key": race.get("category_key"),
+            "category_label": race.get("category_label"),
+            "recipient_type": race.get("recipient_type"),
+            "min_games": race.get("min_games"),
+            "minimum_metric": race.get("minimum_metric"),
+            "eligible_count": race.get("eligible_count"),
+            "entries": [
+                _public_award_row(entry)
+                for entry in race.get("entries", [])
+                if isinstance(entry, Mapping)
+            ],
+        }
+        for race in races
+        if isinstance(race, Mapping)
+    ]
+    response = {
+        "awards": safe_rows,
+        "award_count": len(safe_rows),
+    }
+    if safe_races:
+        response["races"] = safe_races
+        response["race_count"] = len(safe_races)
+    return response
+
+
 def get_public_league_award_progress(
     supabase: Any,
     *,
@@ -1159,6 +1213,39 @@ def get_public_league_award_progress(
         )
         if not meta_row:
             return {"awards": [], "award_count": 0}
+        workflow = _workflow_from_meta(meta_row)
+        frozen = workflow.get("frozen_snapshot")
+        if isinstance(frozen, Mapping) and (
+            isinstance(frozen.get("player_analytics"), list)
+            or isinstance(frozen.get("team_analytics"), list)
+        ):
+            # A frozen ranking must remain anchored to the recorded period even
+            # when current player ratings or league settings change afterward.
+            config = frozen.get("awards_config") or {}
+            config = config if isinstance(config, Mapping) else {}
+            frozen_meta = {**meta_row, "awards_config": config,
+                           "min_games": frozen.get("min_games", meta_row.get("min_games"))}
+            analytics = {
+                "catalog": frozen.get("catalog") or _award_catalog_for_league(frozen_meta),
+                "player_analytics": frozen.get("player_analytics", []),
+                "team_analytics": frozen.get("team_analytics", []),
+                "partnership_analytics": frozen.get("partnership_analytics", []),
+            }
+            races = _public_award_races(
+                frozen_meta, analytics, config,
+                explicit_categories=_has_explicit_award_categories(frozen_meta),
+            )
+            rows = workflow.get("final_awards") or frozen.get("awards") or []
+            response = _public_award_progress_projection(rows, races)
+            response["frozen_at"] = frozen.get("frozen_at") or workflow.get("frozen_at")
+            response["finalized"] = _WORKFLOW_RANK.get(str(workflow.get("status")), 0) >= 3
+            # Older snapshots contain only each player's best pair, insufficient
+            # for a complete partnership leaderboard. Do not invent missing ranks.
+            categories = config.get("categories") or {}
+            if ("partnership_analytics" not in frozen and "best_partnership" in categories
+                    and categories["best_partnership"].get("enabled") is not False):
+                response["unavailable_categories"] = ["best_partnership"]
+            return response
         awards_config = _json_value(meta_row.get("awards_config"), {}) or {}
         enabled_specs = _enabled_public_award_specs(meta_row)
         explicit_categories = _has_explicit_award_categories(meta_row)
@@ -1210,32 +1297,7 @@ def get_public_league_award_progress(
     except Exception:
         rows = []
         races = []
-    safe_rows = [_public_award_row(row) for row in rows]
-    safe_races = [
-        {
-            "category_key": race.get("category_key"),
-            "category_label": race.get("category_label"),
-            "recipient_type": race.get("recipient_type"),
-            "min_games": race.get("min_games"),
-            "minimum_metric": race.get("minimum_metric"),
-            "eligible_count": race.get("eligible_count"),
-            "entries": [
-                _public_award_row(entry)
-                for entry in race.get("entries", [])
-                if isinstance(entry, Mapping)
-            ],
-        }
-        for race in races
-        if isinstance(race, Mapping)
-    ]
-    response = {
-        "awards": safe_rows,
-        "award_count": len(safe_rows),
-    }
-    if safe_races:
-        response["races"] = safe_races
-        response["race_count"] = len(safe_races)
-    return response
+    return _public_award_progress_projection(rows, races)
 
 
 def get_admin_league_awards_wizard(supabase: Any, *, club_id: str, league_name: str) -> dict[str, Any]:
@@ -1424,6 +1486,11 @@ def freeze_admin_league_awards(
                 "team_analytics": dict(
                     meta_row.get("_analytics") or {}
                 ).get("team_analytics", []),
+                "partnership_analytics": dict(
+                    meta_row.get("_analytics") or {}
+                ).get("partnership_analytics", []),
+                "min_games": meta_row.get("min_games"),
+                "catalog": _award_catalog_for_league(meta_row),
                 "provenance": dict(meta_row.get("_analytics") or {}).get(
                     "provenance", {}
                 ),

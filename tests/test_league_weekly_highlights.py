@@ -109,3 +109,41 @@ def test_save_rejects_wrong_week_unqualified_choices_operator_and_conflicts(monk
     db.rpc = conflict
     with pytest.raises(HighlightsConflict):
         save_weekly_highlights(db, **args)
+
+
+def test_full_weekly_rankings_share_preview_evidence_and_keep_complete_field():
+    from jupr_app.services.league_weekly_highlights_service import weekly_stat_rankings
+    names = {pid: f"Player {pid:02d}" for pid in range(1, 25)}
+    games = []
+    for start in range(1, 25, 4):
+        for index in range(4):
+            games.append(game(len(games) + 1, t1_p1=start, t1_p2=start + 1, t2_p1=start + 2, t2_p2=start + 3))
+    candidates = stat_candidates(games, names)
+    # Other weeks and deleted games must not affect either value or rank.
+    games += [game(40, week_num=1), game(41, deleted_at="removed")]
+    rankings = weekly_stat_rankings(games, players={pid: {"name": name, "email": "private@example.com"} for pid, name in names.items()}, week_num=2)
+    assert "court" not in rankings
+    assert rankings["games"]["total_qualified"] == 24
+    assert [row["rank"] for row in rankings["games"]["entries"]] == list(range(1, 25))
+    for key, ranking in rankings.items():
+        expected = [row for row in candidates if row["category"] == key]
+        assert [(row["player_id"], row["metric_value"], row["metric_display"]) for row in ranking["entries"]] == [
+            (row["player_ids"][0], row["value"], row["metric"]) for row in expected
+        ]
+    assert "private@example.com" not in str(rankings)
+
+
+def test_public_weekly_records_match_legacy_cards_and_qualification():
+    from jupr_app.services.public_league_results_service import _highlights, _record_stat_rankings
+    rows = [
+        {"player_id": 1, "player_name": "Alex", "games": 2, "wins": 2, "losses": 0, "rating_delta_jupr": -.1, "win_pct": 100},
+        {"player_id": 2, "player_name": "Blair", "games": 5, "wins": 4, "losses": 1, "rating_delta_jupr": .2, "win_pct": 80},
+        {"player_id": 3, "player_name": "Casey", "games": 5, "wins": 3, "losses": 2, "rating_delta_jupr": .3, "win_pct": 60},
+    ]
+    highlights = _highlights(rows, scope="week", min_games=4, week_num=2)
+    rankings = _record_stat_rankings(rows, min_games=4)
+    for key in ("biggest_climbers", "best_win_pct", "most_active"):
+        assert [row["player_id"] for row in rankings[key]["entries"][:3]] == [row["player_id"] for row in highlights[key]]
+    assert rankings["record_gain"]["entries"][-1]["metric_value"] == -.1
+    assert [row["player_id"] for row in rankings["best_win_pct"]["entries"]] == [2, 3]
+    assert _record_stat_rankings(rows, min_games=1)["best_win_pct"]["entries"][0]["player_id"] == 1

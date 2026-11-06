@@ -443,7 +443,27 @@ def compute_league_player_analytics(
             "expected_weeks": expected_weeks,
         }
     )
-    return {"players": output, "provenance": provenance}
+    # Keep every unique pair, including partnerships that are neither member's
+    # personal best. Public full rankings must not lose those qualifying pairs.
+    pairs = []
+    for player_id, current in stats.items():
+        for partner_id, totals in current["partners"].items():
+            if player_id >= partner_id:
+                continue
+            members = [
+                {"player_id": pid, "player_name": names.get(pid, f"Player {pid}")}
+                for pid in (player_id, partner_id)
+            ]
+            pairs.append({
+                "team_id": f"pair:{player_id}:{partner_id}",
+                "team_name": " & ".join(member["player_name"] for member in members),
+                "team_members": members,
+                "best_partnership_games": totals["games"],
+                "best_partnership_win_pct": totals["wins"] / totals["games"],
+                "games": totals["games"], "wins": totals["wins"],
+                "losses": totals["games"] - totals["wins"],
+            })
+    return {"players": output, "partnerships": pairs, "provenance": provenance}
 
 
 def compute_team_league_standings(

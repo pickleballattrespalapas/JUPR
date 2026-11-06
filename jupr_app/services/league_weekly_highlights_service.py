@@ -88,6 +88,30 @@ def stat_candidates(matches, names):
     return sorted(output, key=lambda row: (-row["value"], -row["sample"], row["name"].casefold(), row["id"]))
 
 
+def weekly_stat_rankings(matches, *, players, week_num):
+    """Complete public rankings using the exact weekly highlight criteria.
+
+    Rank before a consumer searches or paginates. Court winners are separate
+    results and deliberately have no statistical ranking here.
+    """
+    games = [row for row in matches if week_num is not None and row.get("week_num") == week_num and not row.get("deleted_at")]
+    names = {pid: str(row.get("name") or f"Player {pid}") for pid, row in players.items()}
+    candidates = stat_candidates(games, names)
+    output = {}
+    for key, title, qualification in CATEGORIES:
+        if key == "court":
+            continue
+        entries = [
+            {"rank": rank, "player_id": row["player_ids"][0], "player_name": row["name"],
+             "metric_value": row["value"], "metric_display": row["metric"],
+             "metric_sample": row["sample"], "detail": row["detail"]}
+            for rank, row in enumerate((row for row in candidates if row["category"] == key), 1)
+        ]
+        output[key] = {"key": key, "title": title, "qualification": qualification,
+                       "entries": entries, "total_qualified": len(entries)}
+    return output
+
+
 def _court_candidates(db, *, club_id, league_name, week_num, matches, names):
     from jupr_app.domain.recaps.recap_evidence import court_result, identity_key
     from jupr_app.services.public_league_results_service import _parse_week_num
@@ -155,7 +179,7 @@ def _config(db, club_id, league_name, week_num):
 
 def build_weekly_highlights(db, *, club_id, league_name, week_num, matches, players, include_candidates=False):
     config, available = _config(db, club_id, league_name, week_num) if week_num else ({"mode": "automatic", "selected_ids": [], "revision": 0}, True)
-    games = [row for row in matches if row.get("week_num") == week_num and not row.get("deleted_at")]
+    games = [row for row in matches if week_num is not None and row.get("week_num") == week_num and not row.get("deleted_at")]
     names = {pid: str(row.get("name") or f"Player {pid}") for pid, row in players.items()}
     candidates = stat_candidates(games, names)
     warnings = []

@@ -24,7 +24,7 @@ from jupr_app.services.direct_match_entry_service import (
     DirectMatchRecoveryRequiredError,
     submit_atomic_direct_matches,
 )
-from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, LeaderboardPeriodInvalid, build_public_leaderboard
+from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, LeaderboardPeriodInvalid, LeaderboardStatInvalid, build_public_leaderboard
 from services.api.club_site_models import LeaderboardSettings
 from jupr_app.services.public_live_service import is_public_live_session_row, public_live_session_detail, public_live_sessions_from_rows
 from jupr_app.services.public_live_operation_service import (
@@ -123,6 +123,13 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "metric_value",
     "metric_display",
     "metric_sample",
+    "expected_wins",
+    "actual_wins",
+    "close_games",
+    "close_wins",
+    "upset_score_for",
+    "upset_score_against",
+    "upset_date",
     "team_key",
 }
 PUBLIC_LEADERBOARD_BADGE_FIELDS = {"badge_id", "name", "prestige", "category", "icon_key", "rarity", "earned_at"}
@@ -523,6 +530,14 @@ def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[
                 and isinstance(member.get("player_id"), (str, int))
                 and isinstance(member.get("player_name"), str)
             ][:2]
+        if isinstance(row.get("upset_opponents"), list):
+            clean["upset_opponents"] = [
+                {"player_id": member["player_id"], "player_name": member["player_name"]}
+                for member in row["upset_opponents"]
+                if isinstance(member, dict)
+                and isinstance(member.get("player_id"), (str, int))
+                and isinstance(member.get("player_name"), str)
+            ][:2]
         clean["badges"] = [
             {key: badge.get(key) for key in PUBLIC_LEADERBOARD_BADGE_FIELDS if key in badge}
             for badge in (row.get("badges") or [])
@@ -532,6 +547,25 @@ def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[
             clean["rank"] = clean.get("rank_position") if clean.get("rank_position") is not None else idx
         normalized.append(clean)
     return normalized
+
+
+def _normalize_stat_ranking(payload: dict[str, Any]) -> dict[str, Any]:
+    ranking = payload.get("stat_ranking")
+    if not isinstance(ranking, dict) or ranking.get("key") not in LEADERBOARD_CARD_KEYS:
+        return {}
+    page = ranking.get("pagination") or {}
+    return {"stat_ranking": {
+        "key": ranking["key"],
+        "entries": _normalize_public_leaderboard_rows(ranking.get("entries") or []),
+        "total_qualified": max(0, int(ranking.get("total_qualified") or 0)),
+        "minimum": max(0, int(ranking.get("minimum") or 0)),
+        "minimum_metric": str(ranking.get("minimum_metric") or "games"),
+        "min_games": max(0, int(ranking.get("min_games") or 0)),
+        "pagination": {"total": max(0, int(page.get("total") or 0)),
+                       "offset": max(0, int(page.get("offset") or 0)),
+                       "limit": max(1, min(int(page.get("limit") or 50), 100)),
+                       "has_more": bool(page.get("has_more"))},
+    }}
 
 
 def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[str, Any]:
@@ -557,6 +591,7 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
     period_id = (payload.get("period") or {}).get("id")
     period = next((item for item in settings["seasons"] if item["id"] == period_id), None)
     return {
+        **_normalize_stat_ranking(payload),
         "leaderboard_settings": settings,
         "period": period or {"id": None, "name": "All time", "start_date": None, "end_date": None, "timezone": settings["timezone"]},
         "scopes": scopes,
@@ -612,6 +647,7 @@ def _build_leaderboard_response(
     limit: int = 50,
     offset: int = 0,
     season: str | None = None,
+    stat: str | None = None,
 ) -> dict[str, Any]:
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
@@ -629,8 +665,9 @@ def _build_leaderboard_response(
             limit=limit,
             offset=offset,
             **({"season": season} if season is not None else {}),
+            **({"stat": stat} if stat is not None else {}),
         )
-    except LeaderboardPeriodInvalid as exc:
+    except (LeaderboardPeriodInvalid, LeaderboardStatInvalid) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LeaderboardDataUnavailable as exc:
         raise HTTPException(status_code=503, detail="Leaderboard data is temporarily unavailable.") from exc
@@ -1141,6 +1178,7 @@ def get_club_leaderboard(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     season: str | None = Query(default=None, max_length=80),
+    stat: str | None = Query(default=None, max_length=80),
 ) -> dict[str, Any]:
     return _build_leaderboard_response(
         club_slug,
@@ -1153,6 +1191,7 @@ def get_club_leaderboard(
         limit=limit,
         offset=offset,
         season=season,
+        stat=stat,
     )
 
 
@@ -1168,6 +1207,7 @@ def get_club_leaderboard_compat(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     season: str | None = Query(default=None, max_length=80),
+    stat: str | None = Query(default=None, max_length=80),
 ) -> dict[str, Any]:
     return _build_leaderboard_response(
         club_slug,
@@ -1180,6 +1220,7 @@ def get_club_leaderboard_compat(
         limit=limit,
         offset=offset,
         season=season,
+        stat=stat,
     )
 
 
