@@ -5,7 +5,7 @@ const { renderToStaticMarkup } = require("react-dom/server");
 const h = React.createElement;
 const initial = { schema_version: 1, name: "Tres Palapas", description: "", location: "", visitor_info: "", logo_url: "", accent: "#1d4ed8", visibility: "listed", display: {}, pages: [{ slug: "home", title: "Home", in_navigation: true, blocks: [] }] };
 let site = { club_id: "tres_palapas", slug: "tres-palapas", club_active: true, revision: 1, draft: structuredClone(initial), published: structuredClone(initial), published_at: "2026-09-19" };
-const Link = ({ children, ...props }) => h("a", props, children);
+const Link = ({ children, prefetch, ...props }) => h("a", props, children);
 const mocks = {
   "next/link": Link,
   "@/components/PublicClubLink": Link,
@@ -140,7 +140,7 @@ global.fetch = async (url, options = {}) => {
   };
   let markup = await render({ season: seasonId });
   assert.equal(requests.at(-1).options.season, seasonId);
-  const titles = [...markup.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]);
+  const titles = [...markup.matchAll(/<h2[^>]*>(?:<a[^>]*>)?([^<]+)(?:<\/a>)?<\/h2>/g)].map(match => match[1]);
   assert.deepEqual(titles, ["Stu", "Most improved", "Most games played", "Best win %", "Most wins", "Best close-game record", "Best partnership", "Biggest upset"]);
   assert.doesNotMatch(markup, /data-testid="leaderboard-summary"/);
   assert.match(markup, /Sep 15, 2026 onward/);
@@ -155,15 +155,15 @@ global.fetch = async (url, options = {}) => {
     assert.ok(match[1].includes(`season=${seasonId}`), `${match[2]} preserves the selected season`);
   }
   markup = await render({ season: seasonId }, { match_counts: false, records: false });
-  assert.match(markup, /<h2[^>]*>Most games played/);
-  assert.match(markup, /<h2[^>]*>Most wins/);
-  assert.match(markup, /<h2[^>]*>Most improved/);
+  assert.match(markup, /<h2[^>]*><a[^>]*>Most games played/);
+  assert.match(markup, /<h2[^>]*><a[^>]*>Most wins/);
+  assert.match(markup, /<h2[^>]*><a[^>]*>Most improved/);
   assert.doesNotMatch(markup, /<th\b[^>]*>(Games|W-L)<\/th>/, "Stats controls still hide table columns");
 
   const savedCards = [...data.leaderboard_settings.cards];
   data.leaderboard_settings.cards = ["most_improved", "most_wins", "average_margin", "biggest_upset"];
   markup = await render({ season: seasonId }, { rating_changes: false });
-  assert.deepEqual([...markup.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]),
+  assert.deepEqual([...markup.matchAll(/<h2[^>]*>(?:<a[^>]*>)?([^<]+)(?:<\/a>)?<\/h2>/g)].map(match => match[1]),
     ["Stu", "Most improved", "Most wins", "Best average margin", "Biggest upset"],
     "All four selected cards appear even when rating gains are hidden elsewhere");
   assert.doesNotMatch(markup, /<th\b[^>]*>(Gain|Gap)<\/th>/, "Showing Most improved does not enable Gain or Gap columns");
@@ -202,31 +202,31 @@ global.fetch = async (url, options = {}) => {
   assert.match(markup, /width:0%;height:100%;border-radius:999px;background:#2563eb/, "A zero metric has an empty bar");
   assert.doesNotMatch(markup, /width:(?:NaN|Infinity|-)/, "Bars use finite, nonnegative widths");
   const cardMarkup = (html, title) => [...html.matchAll(/<article\b[^>]*data-testid="leaderboard-highlight-card"[\s\S]*?<\/article>/g)]
-    .map(match => match[0]).find(card => card.includes(`>${title}</h2>`));
+    .map(match => match[0]).find(card => card.includes(`>${title}</a></h2>`));
   const upsetCard = cardMarkup(markup, "Biggest upset");
   assert.equal((upsetCard.match(/data-testid="leaderboard-team-row"/g) || []).length, 3, "Top three upset places represent three teams");
   assert.deepEqual([...upsetCard.matchAll(/data-testid="leaderboard-team-place"[^>]*>#(\d+)<\/span>/g)].map(match => Number(match[1])), [1, 2, 3]);
-  assert.deepEqual([...upsetCard.matchAll(/<a href="([^"]+)"/g)].map(match => match[1]),
+  assert.deepEqual([...upsetCard.matchAll(/<a href="([^"]*\/players\/[^"]+)"/g)].map(match => match[1]),
     [101, 102, 103, 104, 105, 106].map(id => `/clubs/tres-palapas/players/${id}`), "Each team's two names link to their own profile");
   assert.match(upsetCard, /Sam &amp; Pat/);
   assert.doesNotMatch(upsetCard, /players\/(?:null|undefined)/);
   const partnershipCard = cardMarkup(markup, "Best partnership");
   assert.equal((partnershipCard.match(/data-testid="leaderboard-team-row"/g) || []).length, 3, "Best partnership shows three teams, not three individual players");
   assert.deepEqual([...partnershipCard.matchAll(/data-testid="leaderboard-team-place"[^>]*>#(\d+)<\/span>/g)].map(match => Number(match[1])), [1, 2, 3]);
-  assert.deepEqual([...partnershipCard.matchAll(/<a href="([^"]+)"/g)].map(match => match[1]),
+  assert.deepEqual([...partnershipCard.matchAll(/<a href="([^"]*\/players\/[^"]+)"/g)].map(match => match[1]),
     [301, 302, 303, 304, 305, 306].map(id => `/clubs/tres-palapas/players/${id}`));
   assert.match(partnershipCard, /100\.0% \(6\/6\)/);
   assert.match(partnershipCard, /100\.0% \(5\/5\)/);
   assert.match(partnershipCard, /Sam &amp; Pat/);
   assert.doesNotMatch(partnershipCard, /players\/(?:null|undefined)|with Suzanne|with Esteban/);
   const marginCard = cardMarkup(markup, "Best average margin");
-  assert.deepEqual([...marginCard.matchAll(/<a href="([^"]+)"/g)].map(match => match[1]),
+  assert.deepEqual([...marginCard.matchAll(/<a href="([^"]*\/players\/[^"]+)"/g)].map(match => match[1]),
     [201, 202, 203].map(id => `/clubs/tres-palapas/players/${id}`), "Distinct players remain separate even when their names match");
   assert.doesNotMatch(marginCard, /leaderboard-team-(?:row|place)/, "Player cards keep their existing presentation");
   const displayColumns = { ratings: ["Rating"], records: ["W-L"], win_percentage: ["Win %"], match_counts: ["Games"], rating_changes: ["Gain", "Gap"] };
   for (const [displayField, hiddenColumns] of Object.entries(displayColumns)) {
     const gated = await render({}, { [displayField]: false });
-    const renderedTitles = [...gated.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]);
+    const renderedTitles = [...gated.matchAll(/<h2[^>]*>(?:<a[^>]*>)?([^<]+)(?:<\/a>)?<\/h2>/g)].map(match => match[1]);
     for (const key of data.leaderboard_settings.cards) {
       assert.ok(renderedTitles.includes(LEADERBOARD_CARD_LABELS[key]), `Selected ${key} remains visible when ${displayField} is hidden elsewhere`);
     }
@@ -245,7 +245,7 @@ global.fetch = async (url, options = {}) => {
   const defaultLeagueCards = ["Highest rating", "Most improved", "Best win %", "Most wins"];
   for (const [displayField, hiddenCard] of Object.entries({ ratings: "Highest rating", rating_changes: "Most improved", win_percentage: "Best win %", records: "Most wins" })) {
     const gated = await render({ league: "Ladder" }, { [displayField]: false });
-    const renderedTitles = [...gated.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]);
+    const renderedTitles = [...gated.matchAll(/<h2[^>]*>(?:<a[^>]*>)?([^<]+)(?:<\/a>)?<\/h2>/g)].map(match => match[1]);
     for (const title of defaultLeagueCards) {
       assert.equal(renderedTitles.includes(title), title !== hiddenCard, `League card ${title} still honors ${displayField}`);
     }

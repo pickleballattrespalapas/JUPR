@@ -13,7 +13,9 @@ function load(file, mocks = {}) {
   new Function('require', 'module', 'exports', code)(name => mocks[name] ? (mocks[name].default ? { __esModule: true, ...mocks[name] } : mocks[name]) : require(name), module, module.exports);
   return module.exports;
 }
-const Cards = load('components/WeeklyHighlightCards.tsx').default;
+const rankLinks = load('lib/statLeaderboardLinks.ts');
+const publicLink = { default: ({ children, prefetch, ...props }) => React.createElement('a', props, children) };
+const Cards = load('components/WeeklyHighlightCards.tsx', { '@/components/PublicClubLink': publicLink, '@/lib/statLeaderboardLinks': rankLinks }).default;
 const Editor = load('app/admin/league-manager/results/WeeklyHighlightsEditor.tsx', { '@/components/WeeklyHighlightCards': { default: Cards } }).default;
 const cards = ['Alex', 'Blair', 'Casey', 'Devon', 'Eden', 'Frank', 'Gale'].map((name, i) => ({ id: `wins:${i + 1}`, category: 'wins', title: 'Weekly wins', name, metric: `${8 - i} wins`, detail: 'Week-specific record', player_ids: [i + 1], value: 8 - i, sample: 9 }));
 const data = week => ({ week_num: week, mode: 'automatic', cards: cards.slice(0, 3), automatic_cards: cards.slice(0, 3), selected_ids: [], revision: 0, max_highlights: 6, available: true, warnings: [], unavailable_ids: [], categories: [{ id: 'wins', title: 'Weekly wins', qualification: 'At least 3 wins.', candidates: cards }] });
@@ -33,6 +35,12 @@ const findButton = (tree, label) => tree.root.findAllByType('button').find(node 
 const checkbox = (tree, index) => tree.root.findAllByType('input').filter(node => node.props.type === 'checkbox')[index];
 async function click(button) { await act(async () => button.props.onClick()); }
 (async () => {
+  const returnTo = '/clubs/club/leagues/Open/weekly-history?week=2';
+  const publicCards = renderToStaticMarkup(React.createElement(Cards, { cards: [cards[0], { ...cards[0], id: 'court:1', category: 'court', title: 'Court winner' }], clubSlug: 'club', leagueName: 'Open', week: 2, returnTo }));
+  assert.match(publicCards, /leaderboards\/wins\?source=weekly&amp;league=Open&amp;week=2/);
+  assert.match(publicCards, /return_to=/);
+  assert.doesNotMatch(publicCards, /leaderboards\/court/);
+  assert.doesNotMatch(renderToStaticMarkup(React.createElement(Cards, { cards })), /href=/, 'admin previews stay within the editor');
   let tree;
   await act(async () => { tree = create(React.createElement(Editor, props)); });
   assert.match(text(tree.toJSON()), /Choose Week 2 highlights/);
@@ -72,6 +80,7 @@ async function click(button) { await act(async () => button.props.onClick()); }
   };
   const Page = load('app/clubs/[clubSlug]/leagues/[leagueName]/weekly-history/page.tsx', {
     '@/components/WeeklyHighlightCards': { default: Cards },
+    '@/lib/statLeaderboardLinks': rankLinks,
     '@/components/PublicControls': { default: ({children}) => React.createElement('details', null, children) },
     '@/components/PublicClubLink': { default: ({children, ...p}) => React.createElement('a', p, children) },
     '@/components/PublicLeagueNav': { default: () => null },

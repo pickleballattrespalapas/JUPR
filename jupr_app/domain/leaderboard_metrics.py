@@ -11,6 +11,8 @@ from math import isclose, isfinite
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from jupr_app.domain.player_search import matches_player_search
+
 
 # key -> (value field, sample field, display format)
 LEADERBOARD_CARD_METRICS = {
@@ -127,6 +129,7 @@ def compute_overall_metrics(
             "largest_upset_jupr": current["largest_upset_jupr"] if complete else None,
             "average_opponent_jupr": current["opponent_total"] / games if complete else None,
             "wins_above_expected": current["wins"] - current["expected_wins"] if complete else None,
+            "expected_wins": current["expected_wins"] if complete else None, "actual_wins": current["wins"],
             "best_partnership_win_pct": 100 * pair["wins"] / pair["games"] if pair["games"] else None,
             "best_partnership_games": pair["games"], "best_partnership_wins": pair["wins"],
             "best_partner_name": names.get(other, f"Player {other}") if other else None,
@@ -160,6 +163,7 @@ def _display(kind: str, value: float, stats: dict[str, Any]) -> str:
 def team_upset_highlights(
     matches: list[dict[str, Any]], *, players: list[dict[str, Any]],
     status: str, search: str, min_games: int, options: dict[str, int],
+    full: bool = False,
 ) -> list[dict[str, Any]]:
     """Rank each partnership once, using its largest qualifying upset.
 
@@ -186,7 +190,9 @@ def team_upset_highlights(
             won = match["score_t1" if side == 0 else "score_t2"] > match["score_t2" if side == 0 else "score_t1"]
             if won and (gap >= 0.25 or isclose(gap, 0.25, rel_tol=0, abs_tol=1e-12)):
                 totals["upset_wins"] += 1
-                totals["largest_upset"] = max(totals["largest_upset"], gap)
+                if gap > totals["largest_upset"]:
+                    totals["largest_upset"] = gap
+                    totals["best_match"] = (match, side)
 
     minimum = max(1, int(options.get("minimum", 0)))
     depth = max(1, min(10, int(options.get("depth", 5))))
@@ -197,14 +203,19 @@ def team_upset_highlights(
         active = all(member.get("is_active") is True for member in members)
         if (status == "active" and not active) or (status == "inactive" and active):
             continue
-        if needle and not any(needle in str(member["player_name"]).casefold() for member in members):
-            continue
         if totals["games"] < max(1, min_games) or totals["upset_wins"] < minimum:
             continue
         if totals["rating_games"] != totals["games"]:
             continue
         team_members = [{"player_id": member["player_id"], "player_name": member["player_name"]} for member in members]
+        best_match, winning_side = totals["best_match"]
+        opponents = [str(best_match[slot]) for slot in _SLOTS[(1 - winning_side) * 2:(1 - winning_side) * 2 + 2]]
         eligible.append({
+            "upset_opponents": [{"player_id": players_by_id[pid]["player_id"] if pid in players_by_id else pid,
+                                  "player_name": players_by_id[pid]["player_name"] if pid in players_by_id else f"Player {pid}"} for pid in opponents],
+            "upset_score_for": best_match["score_t1" if winning_side == 0 else "score_t2"],
+            "upset_score_against": best_match["score_t2" if winning_side == 0 else "score_t1"],
+            "upset_date": best_match["date"],
             "team_key": ":".join(pair), "team_members": team_members,
             "player_id": None, "player_name": " & ".join(member["player_name"] for member in team_members),
             "club_id": members[0]["club_id"], "league_name": members[0]["league_name"],
@@ -214,12 +225,16 @@ def team_upset_highlights(
             "metric_sample": totals["upset_wins"],
         })
     eligible.sort(key=lambda row: (-row["metric_value"], -row["metric_sample"], -row["matches_played"], row["team_key"]))
-    return [{**row, "rank": rank, "rank_position": rank} for rank, row in enumerate(eligible[:depth], start=1)]
+    ranked = [{**row, "rank": rank, "rank_position": rank} for rank, row in enumerate(eligible, start=1)]
+    if needle:
+        ranked = [row for row in ranked if any(matches_player_search(member["player_name"], needle) for member in row["team_members"])]
+    return ranked if full else ranked[:depth]
 
 
 def team_partnership_highlights(
     matches: list[dict[str, Any]], *, players: list[dict[str, Any]],
     status: str, search: str, min_games: int, options: dict[str, int],
+    full: bool = False,
 ) -> list[dict[str, Any]]:
     """Rank all unique pairs by win percentage, then games played together.
 
@@ -234,9 +249,10 @@ def team_partnership_highlights(
             pair = tuple(sorted(str(match[slot]) for slot in _SLOTS[side * 2:side * 2 + 2]))
             if not all(pid in players_by_id for pid in pair):
                 continue
-            totals = pairs.setdefault(pair, {"games": 0, "wins": 0})
+            totals = pairs.setdefault(pair, {"games": 0, "wins": 0, "losses": 0})
             totals["games"] += 1
             totals["wins"] += int(match["score_t1" if side == 0 else "score_t2"] > match["score_t2" if side == 0 else "score_t1"])
+            totals["losses"] += int(match["score_t1" if side == 0 else "score_t2"] < match["score_t2" if side == 0 else "score_t1"])
 
     minimum = max(1, min_games, int(options.get("minimum", 0)))
     depth = max(1, min(10, int(options.get("depth", 5))))
@@ -249,8 +265,6 @@ def team_partnership_highlights(
         active = all(member.get("is_active") is True for member in members)
         if (status == "active" and not active) or (status == "inactive" and active):
             continue
-        if needle and not any(needle in str(member["player_name"]).casefold() for member in members):
-            continue
         team_members = [{"player_id": member["player_id"], "player_name": member["player_name"]} for member in members]
         percentage = 100 * totals["wins"] / totals["games"]
         eligible.append({
@@ -258,21 +272,27 @@ def team_partnership_highlights(
             "player_id": None, "player_name": " & ".join(member["player_name"] for member in team_members),
             "club_id": members[0]["club_id"], "league_name": members[0]["league_name"],
             "is_active": active, "matches_played": totals["games"],
+            "wins": totals["wins"], "losses": totals["losses"],
             "metric_value": percentage,
             "metric_display": f"{percentage:.1f}% ({totals['wins']}/{totals['games']})",
             "metric_sample": totals["games"],
         })
     eligible.sort(key=lambda row: (-row["metric_value"], -row["metric_sample"], row["team_key"]))
-    return [{**row, "rank": rank, "rank_position": rank} for rank, row in enumerate(eligible[:depth], start=1)]
+    ranked = [{**row, "rank": rank, "rank_position": rank} for rank, row in enumerate(eligible, start=1)]
+    if needle:
+        ranked = [row for row in ranked if any(matches_player_search(member["player_name"], needle) for member in row["team_members"])]
+    return ranked if full else ranked[:depth]
 
 
 def overall_highlights(
     rows: list[dict[str, Any]], *, metrics: dict[str, dict[str, Any]],
     min_games: int, card_options: dict[str, dict[str, int]],
+    full: bool = False, keys: tuple[str, ...] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Public-safe highlight entries; calculation details never leave this layer."""
     output: dict[str, list[dict[str, Any]]] = {}
-    for key, (field, sample_field, kind) in LEADERBOARD_CARD_METRICS.items():
+    for key in keys if keys is not None else LEADERBOARD_CARD_KEYS:
+        field, sample_field, kind = LEADERBOARD_CARD_METRICS[key]
         if key == "biggest_upset":
             # This card is populated separately from complete partnerships,
             # never by duplicating the same win into two individual entries.
@@ -296,9 +316,11 @@ def overall_highlights(
                 continue
             if key in _POSITIVE_ONLY and value <= 0:
                 continue
-            eligible.append({**row, "metric_value": value, "metric_display": _display(kind, value, stats),
+            support = {name: stats[name] for name in ("close_games", "close_wins", "expected_wins", "actual_wins") if name in stats}
+            eligible.append({**row, **support, "metric_value": value, "metric_display": _display(kind, value, stats),
                              "metric_sample": sample})
         # More relevant observations resolve ties, then the existing rating rank.
         eligible.sort(key=lambda row: (-row["metric_value"], -row["metric_sample"], int(row.get("rank") or 0)))
-        output[key] = eligible[:depth]
+        ranked = [{**row, "rank": index, "rank_position": index} for index, row in enumerate(eligible, start=1)]
+        output[key] = ranked if full else ranked[:depth]
     return output

@@ -1,4 +1,5 @@
 
+import { statLeaderboardHref } from "@/lib/statLeaderboardLinks";
 import WeeklyHighlightCards from "@/components/WeeklyHighlightCards";
 import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
@@ -153,7 +154,7 @@ export default async function PublicLeagueWeeklyHistoryPage(props: Props) {
         data.weekly_highlight_selection.cards.length ? (
           <section style={{ marginBottom: "1.25rem" }} aria-label="Weekly highlights">
             <h2>Weekly highlights</h2>
-            <WeeklyHighlightCards cards={data.weekly_highlight_selection.cards} />
+            <WeeklyHighlightCards cards={data.weekly_highlight_selection.cards} clubSlug={params.clubSlug} leagueName={leagueName} week={selectedWeek} returnTo={selectedWeek ? weeklyHref(params.clubSlug, leagueName, selectedWeek) : undefined} />
           </section>
         ) : null
       ) : (
@@ -161,15 +162,15 @@ export default async function PublicLeagueWeeklyHistoryPage(props: Props) {
         <h2>Weekly highlights</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
           <article style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>Biggest climbers</h3>
+            <h3 style={{ marginTop: 0 }}>{selectedWeek ? <Link prefetch={false} href={statLeaderboardHref(params.clubSlug, "biggest_climbers", { source: "weekly", league: leagueName, week: selectedWeek, returnTo: weeklyHref(params.clubSlug, leagueName, selectedWeek) })}>Biggest climbers</Link> : "Biggest climbers"}</h3>
             <p style={{ marginBottom: 0 }}>{highlightRows(data.weekly_highlights.biggest_climbers)}</p>
           </article>
           <article style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>Best win percentage</h3>
+            <h3 style={{ marginTop: 0 }}>{selectedWeek ? <Link prefetch={false} href={statLeaderboardHref(params.clubSlug, "best_win_pct", { source: "weekly", league: leagueName, week: selectedWeek, returnTo: weeklyHref(params.clubSlug, leagueName, selectedWeek) })}>Best win percentage</Link> : "Best win percentage"}</h3>
             <p style={{ marginBottom: 0 }}>{highlightRows(data.weekly_highlights.best_win_pct)}</p>
           </article>
           <article style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>Most active</h3>
+            <h3 style={{ marginTop: 0 }}>{selectedWeek ? <Link prefetch={false} href={statLeaderboardHref(params.clubSlug, "most_active", { source: "weekly", league: leagueName, week: selectedWeek, returnTo: weeklyHref(params.clubSlug, leagueName, selectedWeek) })}>Most active</Link> : "Most active"}</h3>
             <p style={{ marginBottom: 0 }}>{highlightRows(data.weekly_highlights.most_active)}</p>
           </article>
         </div>
