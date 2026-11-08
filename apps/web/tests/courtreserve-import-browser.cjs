@@ -97,7 +97,7 @@ async function main() {
     await page.setViewportSize({width:390,height:844});
     await screenshot(page,'courtreserve-create-mobile.png');
     const dimensions=await page.evaluate(()=>({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth}));
-    assert(dimensions.scroll<=dimensions.width+1,'Import stays within the mobile page width');
+    assert(dimensions.scroll<=dimensions.width+1,`Import stays within the mobile page width: ${JSON.stringify(dimensions)}`);
     const created=await clickRequest(page,page.getByRole('button',{name:'Create and select player',exact:true}),'/players/editor/players');
     assert.equal(created.request.source,'courtreserve_roster_import');
     const playerId=created.body.player.id;

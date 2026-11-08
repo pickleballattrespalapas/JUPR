@@ -686,7 +686,7 @@ export default function GeneratorRosterSetup({
         </div>
       ) : null}
 
-      {apiBase && creationClubId && ratingReviewAccessToken ? <div>
+      {apiBase && creationClubId && ratingReviewAccessToken ? <div style={{ minWidth: 0 }}>
         <button type="button" style={secondaryButton} disabled={rosterLocked || Boolean(directoryError)} onClick={() => setImportOpen(value => !value)}>Import CourtReserve roster</button>
         {importOpen ? <CourtReserveRosterImport apiBase={apiBase} clubId={creationClubId} accessToken={ratingReviewAccessToken}
           players={directoryPlayers.map(player => ({ id: Number(player.id), name: player.name }))}
