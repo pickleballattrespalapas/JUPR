@@ -8,7 +8,7 @@ import { LeagueSavedRoundScores } from "./LeagueSavedRoundScores";
 import type { RoundScoreGame } from "./leagueRoundScores";
 import { actualGamePlayers, gameEditError, gameHasSubstitution, scheduledGamePlayers, type LeagueLiveGameEdits, type LeagueLiveGameEdit } from "./leagueLiveGameEdits";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
@@ -672,7 +672,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [benchOverrideIds, setBenchOverrideIds] = useState<number[]>([]);
   const [benchOverrideReason, setBenchOverrideReason] = useState("");
   const [loadingLeagueName, setLoadingLeagueName] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [actionBusy, setBusy] = useState(false);
+  const [courtPlayerCreationBusy, setCourtPlayerCreationBusy] = useState(false);
+  const [pendingCourtPlayerCreation, setPendingCourtPlayerCreation] = useState<string | null>(null);
+  const busy = actionBusy || courtPlayerCreationBusy || pendingCourtPlayerCreation != null;
+  const handleCourtPlayerPending = useCallback((court: string, pending: boolean) => {
+    setPendingCourtPlayerCreation(current => pending ? court : current === court ? null : current);
+  }, []);
   const [message, setMessage] = useState<string | null>(null);
   const [createRecovery, setCreateRecovery] = useState<LeagueLiveCreateRecovery | null>(null);
   const [checkingCreateRecovery, setCheckingCreateRecovery] = useState(false);
@@ -683,6 +689,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const hydratedSetupDraftRef = useRef("");
   const setupOperatorId = session?.user?.id || session?.user?.email || session?.capabilities?.user?.email || "";
   const setupDraftKey = leagueLiveSetupDraftKey(clubId, setupOperatorId, leagueName);
+  const courtPlayerScope = JSON.stringify([apiBase, clubId, setupOperatorId, accessToken, leagueName, loadedSessionId]);
+  const courtPlayerScopeRef = useRef(courtPlayerScope);
+  useEffect(() => { courtPlayerScopeRef.current = courtPlayerScope; }, [courtPlayerScope]);
   const restoringRoundDraftRef = useRef(false);
   const createSessionOperationRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const createPlayersOperationRef = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -1222,6 +1231,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
 
   function clearProtectedLiveWorkspace() {
     setEditingRatingPlayerId(null);
+    setCourtPlayerCreationBusy(false);
+    setPendingCourtPlayerCreation(null);
     restoringRoundDraftRef.current = false;
     leagueDetailRequest.invalidate();
     sessionListRequest.invalidate();
@@ -2457,6 +2468,52 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     }
   }
 
+  async function addSetupCourtPlayer(courtIndex: number, playerId: number, desiredOrder: string[]) {
+    if (actionBusy || sessionIsCurrentLeague || hasEnteredRoundScores || scoresPublished || roundPublished || !courts[courtIndex]) {
+      throw new Error("The court setup changed. Return to the current setup before adding this player.");
+    }
+    const court = courts[courtIndex];
+    const currentNames = splitNames(court.playerNames);
+    const alreadyAdded = sessionRoster.find(row => Number(row.player_id) === playerId);
+    if (alreadyAdded && currentNames.some(name => playerNameKey(name) === playerNameKey(alreadyAdded.player_name))) return;
+    if (currentNames.length >= 5) throw new Error("This court already has five players. Move a player before adding another.");
+    if (alreadyAdded) throw new Error("This player is already in the session. Move them using their existing row.");
+    const payload = await requestJson<{ player: PublicPlayer & { club_id?: string } }>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${playerId}`);
+    if (courtPlayerScopeRef.current !== courtPlayerScope) throw new Error("The setup changed while loading the player. Reopen the intended league to continue.");
+    const player = payload.player;
+    if (!player || Number(player.id) !== playerId || !player.name?.trim() || (player.club_id && player.club_id !== clubId)) throw new Error("Could not confirm this club player.");
+    if (knownPlayers.some(row => Number(row.id) !== playerId && playerNameKey(row.name) === playerNameKey(player.name))) {
+      throw new Error("This name matches multiple club players. Resolve the duplicate in Players first.");
+    }
+    const leagueRow = detail?.roster?.find(row => Number(row.player_id) === playerId);
+    const rating = leagueRow?.rating ?? player.rating;
+    const nextNames = [...currentNames, player.name];
+    const desiredKeys = desiredOrder.map(playerNameKey);
+    if (nextNames.every(name => desiredKeys.includes(playerNameKey(name)))) {
+      nextNames.sort((a, b) => desiredKeys.indexOf(playerNameKey(a)) - desiredKeys.indexOf(playerNameKey(b)));
+    }
+    const formatType = [4, 5].includes(nextNames.length)
+      ? liveCourtFormats.find(format => Number.parseInt(format, 10) === nextNames.length) ?? `${nextNames.length}-Player`
+      : court.formatType;
+    const nextCourts = courts.map((row, index) => index === courtIndex ? { ...row, playerNames: nextNames.join("\n"), formatType } : row);
+    const added: LeagueLiveRosterRow = { player_id: playerId, player_name: player.name, rating, status: "active", court_number: Number(court.court), slot: nextNames.indexOf(player.name) + 1 };
+    const nextRoster = [...sessionRoster, added].map(row => {
+      const position = nextNames.findIndex(name => playerNameKey(name) === playerNameKey(row.player_name));
+      return position < 0 ? row : { ...row, court_number: Number(court.court), slot: position + 1 };
+    });
+    setKnownPlayers(current => [...current.filter(row => Number(row.id) !== playerId), player].sort((a, b) => a.name.localeCompare(b.name)));
+    setAttendeePlayerIds(current => [...new Set([...current, playerId])]);
+    setSessionRoster(nextRoster);
+    setRosterSuggestion(current => current ? {
+      ...current, roster: nextRoster, active_roster: nextRoster.filter(row => row.status === "active"),
+      courts: courtsToPayload(nextCourts, currentRound), court_sizes: nextCourts.map(row => splitNames(row.playerNames).length),
+    } : current);
+    setCourts(nextCourts);
+    setPreview(null); setScores({}); setGameEdits({}); invalidateScoreReview();
+    createSessionOperationRef.current = null;
+    setMessage(`Added ${player.name} to Court ${court.court}. Review starting estimates before previewing. Your other court positions are preserved.`);
+  }
+
   function replaceSetupPlayer(name: string, replacementId: number) {
     if (courtEditingLocked || sessionIsCurrentLeague) return;
     const outgoing = sessionRoster.find(row => playerNameKey(row.player_name) === playerNameKey(name));
@@ -3409,6 +3466,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               onEditPlayerRating={name => { const row = sessionRoster.find(player => playerNameKey(player.player_name) === playerNameKey(name)); if (row) setEditingRatingPlayerId(Number(row.player_id)); }}
               replacementPlayers={knownPlayers.filter(player => !rosterPlayerIds.has(Number(player.id))).map(player => ({ id: Number(player.id), name: player.name, rating: detail?.roster?.find(row => Number(row.player_id) === Number(player.id))?.rating ?? player.rating }))}
               onReplacePlayer={sessionIsCurrentLeague ? undefined : replaceSetupPlayer}
+              playerCreation={!sessionIsCurrentLeague && liveDomainStatus.player_create_enabled && apiBase && accessToken ? {
+                apiBase, clubId, accessToken, sessionKey: `${setupDraftKey}:${matchDate}:${weekTag}:${currentRound}`,
+                players: knownPlayers.map(player => ({ id: Number(player.id), name: player.name })),
+                disabled: actionBusy || courtPlayerCreationBusy || hasEnteredRoundScores || scoresPublished || roundPublished,
+                pendingCourt: pendingCourtPlayerCreation, onPendingChange: handleCourtPlayerPending,
+                onBusyChange: setCourtPlayerCreationBusy, onCreated: addSetupCourtPlayer,
+              } : undefined}
               onChange={updateCourtAssignments}
               onEditRoster={() => navigateWorkflow(2)}
             />
