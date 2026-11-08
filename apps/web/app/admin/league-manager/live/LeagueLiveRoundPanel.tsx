@@ -16,6 +16,7 @@ import type { MovementBoardAssignment } from "./LeagueMovementCourtBoard";
 import type { AdminLeagueLiveStatusResponse, AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
 import type { AdminMatchUploaderCreatePlayersResult, AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinMatch, AdminMatchUploaderRoundRobinPreview } from "@/lib/adminMatchUploaderApi";
 import type { PublicPlayer } from "@/lib/api";
+import type { CourtReserveRosterSelection } from "@/lib/courtReserveRosterImport";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import type { StartingRatingReviewRow } from "@/components/StartingRatingReview";
@@ -1336,7 +1337,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     invalidateFlexRosterPlan(message);
   }
 
-  function importCourtReserveAttendees(selection: { playerIds: number[]; requestedRatings: Record<string, string> }) {
+  function importCourtReserveAttendees(selection: CourtReserveRosterSelection) {
+    if (selection.additionalPlayers?.length) setKnownPlayers(current => [...new Map([...current, ...selection.additionalPlayers!].map(player => [Number(player.id), player])).values()]);
     setRequestedStartingRatings(selection.requestedRatings);
     setStartingReviewState({ key: "", ready: false });
     setPastedPlayerText("");

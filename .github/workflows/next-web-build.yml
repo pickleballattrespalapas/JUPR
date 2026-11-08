@@ -42,6 +42,13 @@ jobs:
           NEXT_PUBLIC_JUPR_API_BASE_URL: http://127.0.0.1:8042
           NEXT_PUBLIC_JUPR_ENV: staging
         run: npm run build
+      - name: Verify inline CourtReserve player creation and roster import
+        working-directory: apps/web
+        env:
+          GENERATOR_BROWSER_ARTIFACTS: test-results/courtreserve-import
+          GENERATOR_BROWSER_NEXT_MODE: start
+          GENERATOR_BROWSER_API_PORT: "8042"
+        run: node tests/courtreserve-import-browser.cjs
       - name: Verify saved session edits and organizer/admin submission
         working-directory: apps/web
         env:

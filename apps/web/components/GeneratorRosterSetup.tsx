@@ -686,19 +686,21 @@ export default function GeneratorRosterSetup({
         </div>
       ) : null}
 
-      {apiBase && creationClubId && ratingReviewAccessToken ? <div>
+      {apiBase && creationClubId && ratingReviewAccessToken ? <div style={{ minWidth: 0 }}>
         <button type="button" style={secondaryButton} disabled={rosterLocked || Boolean(directoryError)} onClick={() => setImportOpen(value => !value)}>Import CourtReserve roster</button>
         {importOpen ? <CourtReserveRosterImport apiBase={apiBase} clubId={creationClubId} accessToken={ratingReviewAccessToken}
           players={directoryPlayers.map(player => ({ id: Number(player.id), name: player.name }))}
           matchFormat={playFormat === "singles" ? "singles" : "doubles"} requireRatingReview={ratedSetup}
           disabled={rosterLocked} submitLabel="Use imported roster" onCancel={() => setImportOpen(false)}
-          onImport={({ playerIds, requestedRatings: importedRequests }) => {
+          onImport={({ playerIds, requestedRatings: importedRequests, additionalPlayers = [] }) => {
             if (playerIds.length > 40) throw new Error("Generators support up to 40 players. Select up to 40 names for this round robin.");
             if (fixedPlayerCount && playerIds.length !== fixedPlayerCount) throw new Error(`Import exactly ${fixedPlayerCount} players for this lineup.`);
-            const selected = playerIds.map(id => directoryPlayers.find(player => Number(player.id) === id));
+            const availablePlayers = new Map([...directoryPlayers, ...additionalPlayers].map(player => [Number(player.id), player]));
+            const selected = playerIds.map(id => availablePlayers.get(id));
             if (selected.some(player => !player)) throw new Error("The club list changed. Refresh before importing.");
             const names = selected.map(player => player!.name);
             if (new Set(names.map(normalizeRosterName)).size !== names.length) throw new Error("These club profiles have the same display name. Resolve the name conflict before adding both to this generator.");
+            if (additionalPlayers.length) setDirectoryPlayers([...availablePlayers.values()]);
             onParticipantTextChange(names.join("\n"));
             onLinkedPlayerIdsChange(Object.fromEntries(selected.map(player => [normalizeRosterName(player!.name), Number(player!.id)])));
             onTargetCountChange(Math.max(minimumPlayers, playerIds.length));
