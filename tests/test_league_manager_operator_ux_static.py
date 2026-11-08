@@ -180,7 +180,8 @@ def test_league_live_uses_operator_language_instead_of_runtime_jargon() -> None:
     ):
         assert old_copy not in source
 
-    assert "Roster and bench suggestion" in source
+    assert "Roster and bench" in source
+    assert "Refresh roster suggestion" not in source
     assert "Movement planning:" in source
     assert "The server-generated court board opens automatically" in source
     assert "Validate board changes" in source
