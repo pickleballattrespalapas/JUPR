@@ -1,4 +1,5 @@
 "use client";
+import { leagueLiveDateReview, leagueLiveToday, leagueLiveTimeZone } from "@/lib/leagueLiveDateReview";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import { LeagueLiveGameEditor } from "./LeagueLiveGameEditor";
@@ -222,12 +223,8 @@ function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
 
-function todayIso(): string {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  const day = String(today.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function todayIso(clubId: string): string {
+  return leagueLiveToday(new Date(), leagueLiveTimeZone(clubId));
 }
 
 function splitNames(value: string): string[] {
@@ -616,7 +613,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [roundNumber, setRoundNumber] = useState("1");
   const [totalRounds, setTotalRounds] = useState("5");
   const [roundLabel, setRoundLabel] = useState("Round 1");
-  const [matchDate, setMatchDate] = useState(todayIso());
+  const [matchDate, setMatchDate] = useState(() => todayIso(clubId));
+  // Do not persist this acknowledgement with a restored browser/session draft.
+  const [acknowledgedMatchDateKey, setAcknowledgedMatchDateKey] = useState<string | null>(null);
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
   const [matchStructure, setMatchStructure] = useState<MatchStructure>(DEFAULT_MATCH_STRUCTURE);
   const [sessionRoster, setSessionRoster] = useState<LeagueLiveRosterRow[]>([]);
@@ -865,6 +864,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const currentRound = Number.isInteger(parsedCurrentRound) && parsedCurrentRound >= 1 && parsedCurrentRound <= 50 ? parsedCurrentRound : 1;
   const safeTotalRounds = Number.isInteger(parsedTotalRounds) && parsedTotalRounds >= currentRound && parsedTotalRounds <= 50 ? parsedTotalRounds : currentRound;
   const matchDateValid = /^\d{4}-\d{2}-\d{2}$/.test(matchDate);
+  const dateReview = leagueLiveDateReview(matchDate, loadedSessionId, currentRound, new Date(), leagueLiveTimeZone(clubId));
+  const matchDateReviewed = !dateReview.needsReview || acknowledgedMatchDateKey === dateReview.reviewKey;
+  useEffect(() => {
+    setAcknowledgedMatchDateKey(null);
+  }, [loadedSessionId, currentRound, matchDate]);
   const participationMode = participationModeFromDetail(detail);
   const activeLeagueMembers = useMemo(
     () => (detail?.roster || []).filter((row) => row.in_league),
@@ -1223,7 +1227,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setRoundNumber("1");
     setTotalRounds("5");
     setRoundLabel("Round 1");
-    setMatchDate(todayIso());
+    setMatchDate(todayIso(clubId));
     setSessionStatus("active");
     setSessionNotes("");
     setRoundHistory([]);
@@ -2884,6 +2888,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setMessage(error.message);
       throw error;
     }
+    // Existing-operation recovery has its own exact-payload path. Only a new
+    // publish needs this date review; never rewrite a saved operation's date.
+    const currentDateReview = leagueLiveDateReview(matchDate, loadedSessionId, currentRound, new Date(), leagueLiveTimeZone(clubId));
+    if (currentDateReview.needsReview && acknowledgedMatchDateKey !== currentDateReview.reviewKey) {
+      const error = new Error(`Confirm that ${matchDate} is the date these games were played before publishing.`);
+      setMessage(error.message);
+      throw error;
+    }
     if (!scoreReviewMode) {
       const error = new Error("Open the score review before publishing the round.");
       setMessage(error.message);
@@ -3212,6 +3224,25 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0 }}>League Live is disabled</h2>
         <p style={{ color: "#475569" }}>Live league operations are disabled on this site. Ask a site administrator to enable League Live, then reload this page.</p>
+      </article>
+    );
+  }
+
+  // A selected saved session is not a new setup. Keep every editing surface
+  // closed until both its detail and league context have been verified, and
+  // retain the selection so a failed read can be retried without starting over.
+  if (sessionId && !sessionIsCurrentLeague) {
+    return (
+      <article style={cardStyle} aria-labelledby="league-live-session-recovery-heading" aria-busy={busy}>
+        <h2 id="league-live-session-recovery-heading">{busy ? "Loading saved session…" : "Saved session could not be loaded"}</h2>
+        <p>Your saved session has not been reset. Players, courts, and scores can be edited after the saved session reloads.</p>
+        {message ? <p role="status">{message}</p> : null}
+        <label>Unfinished sessions for this league<br /><select value={sessionId} onChange={(event) => selectSession(event.target.value)} disabled={busy} style={inputStyle}>
+          <option value="">Return to setup</option>
+          {!liveSessions.some(row => row.id === sessionId) ? <option value={sessionId}>Selected saved session</option> : null}
+          {liveSessions.map(row => <option key={row.id} value={row.id}>{row.week_tag} · R{row.current_round}/{row.total_rounds} · {row.status}</option>)}
+        </select></label>
+        <p><button type="button" onClick={() => void loadSessionDetail()} disabled={busy || !accessToken} style={buttonStyle}>Retry selected session</button></p>
       </article>
     );
   }
@@ -3596,11 +3627,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               <h3 style={{ marginTop: 0 }}>Review entered scores</h3>
               <p style={{ color: "#92400e" }}><strong>Nothing has been submitted.</strong> Check the wins and losses for each court. Expand its games to check or correct a score.</p>
               <p><strong>{roundLabel || `Round ${currentRound}`}</strong> · {weekTag || "No week label"} · {matchDate}</p>
+              {dateReview.needsReview ? <section role="alert" data-testid="league-live-date-review" style={{ padding: "0.75rem", border: "1px solid #f59e0b", borderRadius: "10px", background: "#fff7ed", color: "#9a3412" }}>
+                <strong>Check the played date: {matchDate}.</strong>
+                <p>Today at the club is {dateReview.today} ({dateReview.timeZone}). Publishing with this date affects player activity and chronological results. Correct the date in Setup if it is left over from another event.</p>
+                <label><input type="checkbox" checked={matchDateReviewed} onChange={event => setAcknowledgedMatchDateKey(event.target.checked ? dateReview.reviewKey : null)} disabled={busy} /> I verified these games were played on {matchDate}.</label>
+              </section> : null}
               <LeagueRoundScoreReview games={scoreReviewRows} disabled={busy} onEdit={editReviewedGame} />
               {unusualScoreRows.length ? <section role="alert" style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #f59e0b", borderRadius: "10px", background: "#fff7ed", color: "#9a3412" }}><strong>Unusual score{unusualScoreRows.length === 1 ? " requires" : "s require"} review.</strong><ul>{unusualScoreRows.map((row) => <li key={`unusual-${row.key}`}>Court {row.court}: {row.score}. {row.unusualReason}</li>)}</ul><label><input type="checkbox" checked={unusualScoresAcknowledged} onChange={(event) => setUnusualScoresAcknowledged(event.target.checked)} disabled={busy} /> I verified {unusualScoreRows.length === 1 ? "this score is" : "these scores are"} correct.</label></section> : null}
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between", marginTop: "0.75rem" }}>
                 <button type="button" onClick={editReviewedScores} disabled={busy} style={ghostButtonStyle}>Edit scores</button>
-                <ConfirmAction triggerLabel="Publish reviewed scores" workingLabel="Publishing and checking official scores…" title={`Publish Round ${currentRound} scores?`} description="This makes every reviewed result official, then opens the generated next-round court board." confirmLabel="Yes, publish scores" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || Boolean(blockingCurrentRoundPublishOperation) || !allSeriesComplete || !scoreReviewMode || (unusualScoreRows.length > 0 && !unusualScoresAcknowledged) || !liveDomainStatus.submit_enabled || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={publishScoresAndContinue} />
+                <ConfirmAction triggerLabel="Publish reviewed scores" workingLabel="Publishing and checking official scores…" title={`Publish Round ${currentRound} scores?`} description={`This makes every reviewed result official for ${matchDate}, then opens the generated next-round court board.`} confirmLabel="Yes, publish scores" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || Boolean(blockingCurrentRoundPublishOperation) || !matchDateReviewed || !allSeriesComplete || !scoreReviewMode || (unusualScoreRows.length > 0 && !unusualScoresAcknowledged) || !liveDomainStatus.submit_enabled || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={publishScoresAndContinue} />
               </div>
             </section>
           )}

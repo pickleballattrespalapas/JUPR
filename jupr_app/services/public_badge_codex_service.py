@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.observability.request_timing import measured_phase
+
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -203,15 +205,41 @@ def _sort_sections(sections: dict[str, list[dict[str, Any]]], *, has_category: b
     ]
 
 
-def _fetch_badge_rows(supabase: Any) -> list[dict[str, Any]]:
-    return read_all_rows(lambda: supabase.table("badges").select(BADGE_SELECT), order="badge_id")
+def _fetch_badge_rows(supabase: Any, *, badge_id: str | None = None) -> list[dict[str, Any]]:
+    def query():
+        result = supabase.table("badges").select(BADGE_SELECT)
+        return result.eq("badge_id", badge_id) if badge_id is not None else result
 
-def _fetch_player_badge_rows(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
-    rows = read_all_rows(lambda: supabase.table("player_badges").select(PLAYER_BADGE_SELECT).eq("club_id", str(club_id)))
+    return read_all_rows(query, order="badge_id")
+
+
+def _fetch_player_badge_rows(
+    supabase: Any, *, club_id: str, badge_id: str | None = None,
+) -> list[dict[str, Any]]:
+    def query():
+        result = supabase.table("player_badges").select(PLAYER_BADGE_SELECT).eq("club_id", str(club_id))
+        return result.eq("badge_id", badge_id) if badge_id is not None else result
+
+    rows = read_all_rows(query)
     return [row for row in rows if not row.get("revoked_at")]
 
-def _fetch_player_names(supabase: Any, *, club_id: str) -> dict[int, str]:
-    rows = read_all_rows(lambda: supabase.table("players").select(PLAYER_SELECT).eq("club_id", str(club_id)))
+
+def _fetch_player_names(
+    supabase: Any, *, club_id: str, player_ids: set[int] | None = None,
+) -> dict[int, str]:
+    def query():
+        return supabase.table("players").select(PLAYER_SELECT).eq("club_id", str(club_id))
+
+    if player_ids is None:
+        rows = read_all_rows(query)
+    else:
+        # Counts must exclude unavailable identities before pagination. Read
+        # only this badge's earners, in bounded URL-sized batches, not the club.
+        rows = []
+        ids = sorted(player_ids)
+        for start in range(0, len(ids), 100):
+            batch = ids[start:start + 100]
+            rows.extend(read_all_rows(lambda: query().in_("id", batch)))
     names: dict[int, str] = {}
     for row in rows:
         if is_merged_player(row):
@@ -223,6 +251,7 @@ def _fetch_player_names(supabase: Any, *, club_id: str) -> dict[int, str]:
     return names
 
 
+@measured_phase("badge_calculation")
 def _badge_counts(player_badges: list[dict[str, Any]], *, public_player_ids: set[int]) -> dict[str, int]:
     unique: set[tuple[str, int]] = set()
     for row in player_badges:
@@ -243,6 +272,7 @@ def _sort_earner_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(rows, key=key, reverse=True)
 
 
+@measured_phase("badge_calculation")
 def _recent_earners_for_badge(
     player_badges: list[dict[str, Any]],
     *,
@@ -319,6 +349,7 @@ def _catalog_buckets(badges: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+@measured_phase("badge_calculation")
 def _trophy_room(
     player_badges: list[dict[str, Any]],
     *,
@@ -385,6 +416,9 @@ def build_public_badge_codex(supabase: Any, *, club_id: str, recent_earners_limi
     player_badges = _fetch_player_badge_rows(supabase, club_id=str(club_id))
     player_names = _fetch_player_names(supabase, club_id=str(club_id))
     counts = _badge_counts(player_badges, public_player_ids=set(player_names))
+    awards_by_badge: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for award in player_badges:
+        awards_by_badge[str(award.get("badge_id") or "").strip()].append(award)
 
     badges: list[dict[str, Any]] = []
     for row in badge_rows:
@@ -393,7 +427,7 @@ def build_public_badge_codex(supabase: Any, *, club_id: str, recent_earners_limi
         if not _badge_should_be_public(row, earners_count):
             continue
         recent, _total = _recent_earners_for_badge(
-            player_badges,
+            awards_by_badge.get(badge_id, []),
             badge_id=badge_id,
             player_names=player_names,
             limit=recent_earners_limit,
@@ -458,15 +492,18 @@ def get_public_badge_earners(
     clean_badge_id = str(badge_id or "").strip()
     if not clean_badge_id:
         raise ValueError("badge_id is required")
-    badge_rows = _fetch_badge_rows(supabase)
-    player_badges = _fetch_player_badge_rows(supabase, club_id=str(club_id))
-    player_names = _fetch_player_names(supabase, club_id=str(club_id))
+    badge_rows = _fetch_badge_rows(supabase, badge_id=clean_badge_id)
     matching_row = next(
         (row for row in badge_rows if str(row.get("badge_id") or "").strip() == clean_badge_id),
         None,
     )
     if matching_row is None:
         raise ValueError("badge not found")
+    player_badges = _fetch_player_badge_rows(supabase, club_id=str(club_id), badge_id=clean_badge_id)
+    player_ids = {_safe_int(row.get("player_id")) for row in player_badges}
+    player_names = _fetch_player_names(
+        supabase, club_id=str(club_id), player_ids={pid for pid in player_ids if pid is not None},
+    )
     public_count = _badge_counts(player_badges, public_player_ids=set(player_names)).get(clean_badge_id, 0)
     if not _badge_should_be_public(matching_row, public_count):
         raise ValueError("badge not found")

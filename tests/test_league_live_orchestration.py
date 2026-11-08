@@ -327,6 +327,34 @@ def test_attendance_preserves_people_who_sit_out_and_accepts_their_return() -> N
     assert [row["player_id"] for row in suggestion["roster"]] == list(range(1, 9))
 
 
+@pytest.mark.parametrize("substitute", [False, True])
+def test_attendance_keeps_ten_five_player_courts_when_every_seat_is_filled(substitute: bool) -> None:
+    suggestion = build_league_live_roster_suggestion(_roster(50), court_sizes=[5] * 10)
+    matches = [
+        {"court": number, "t1_p1": first, "t1_p2": first + 1,
+         "t2_p1": first + 2, "t2_p2": first + 3, "score_t1": 11, "score_t2": 7}
+        for number, first in enumerate(range(1, 51, 5), start=1)
+    ]
+    active_ids = list(range(2, 52)) if substitute else list(range(1, 51))
+    common = dict(
+        session_id="fifty-player-day", round_number=1, total_rounds=2, session_updated_at="v1",
+        roster=suggestion["roster"], courts=suggestion["courts"], matches=matches,
+    )
+    attendance = {"action": "attendance", "active_player_ids": active_ids,
+                  "players": _roster(51)[-1:] if substitute else []}
+    plan = build_league_live_round_plan(**common, roster_change=attendance)
+    assert plan["roster_change"]["court_sizes"] == [5] * 10
+    assert [len(court["players_json"]) for court in plan["next_courts"]] == [5] * 10
+    assert {row["player_id"] for court in plan["next_courts"] for row in court["players_json"]} == set(active_ids)
+    assert [len(court["players_json"]) for court in suggestion["courts"]] == [5] * 10
+
+    # Operators may still deliberately request a different valid arrangement.
+    resized = build_league_live_round_plan(
+        **common, roster_change={**attendance, "court_sizes": [4] * 10 + [5] * 2},
+    )
+    assert [len(court["players_json"]) for court in resized["next_courts"]] == [4] * 10 + [5] * 2
+
+
 def test_attendance_can_add_multiple_new_players_and_preserve_exact_board_order() -> None:
     suggestion = build_league_live_roster_suggestion(_roster())
     common = dict(

@@ -18,7 +18,7 @@ class PublicReadCache:
         self._pending: dict[Any, Future] = {}
         self._lock = Lock()
 
-    def get(self, key: Any, loader: Callable[[], Any]) -> Any:
+    def get(self, key: Any, loader: Callable[[], Any], *, cache_if: Callable[[Any], bool] | None = None) -> Any:
         with self._lock:
             now = self.clock()
             for expired in [k for k, (until, _) in self._values.items() if until <= now]:
@@ -39,11 +39,12 @@ class PublicReadCache:
         try:
             value = loader()
             snapshot = deepcopy(value)
-            with self._lock:
-                self._values[key] = (self.clock() + self.ttl, snapshot)
-                self._values.move_to_end(key)
-                while len(self._values) > self.capacity:
-                    self._values.popitem(last=False)
+            if cache_if is None or cache_if(value):
+                with self._lock:
+                    self._values[key] = (self.clock() + self.ttl, snapshot)
+                    self._values.move_to_end(key)
+                    while len(self._values) > self.capacity:
+                        self._values.popitem(last=False)
             if pending is not None:
                 pending.set_result(snapshot)
             return value
