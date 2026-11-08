@@ -30,6 +30,25 @@ PLAYER_KEYS = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
 SESSION_ID = "flexible-hot-weather-day"
 
 
+def test_manual_setup_keeps_ten_five_player_courts_and_changed_bench() -> None:
+    from jupr_app.services.admin_league_live_service import _normalize_roster_and_courts
+
+    roster = [{"player_id": pid, "player_name": f"Player {pid}", "rating": 1600 - pid}
+              for pid in range(1, 54)]
+    benched = [1, 17, 53]
+    ordered = [pid for pid in reversed(range(1, 54)) if pid not in benched]
+    courts = [{"court_number": index + 1, "format_type": "5-Player",
+               "player_names": [f"Player {pid}" for pid in ordered[index * 5:(index + 1) * 5]]}
+              for index in range(10)]
+    original = deepcopy(courts)
+    result = _normalize_roster_and_courts(roster=roster, courts=courts, round_number=1,
+                                        bench_player_ids=benched, bench_override_reason=None)
+    assert [row["player_names"] for row in result["courts"]] == [row["player_names"] for row in original]
+    assert set(result["bench_player_ids"]) == set(benched)
+    assert len(result["roster"]) == 53
+    assert courts == original
+
+
 def _check_in() -> dict[str, Any]:
     # IDs 1-35 and staff 37 were originally on court. Missed check-in 36
     # replaces staff before the first game, preserving staff in the session pool.
