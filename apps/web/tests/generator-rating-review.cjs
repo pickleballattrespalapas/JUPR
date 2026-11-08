@@ -69,6 +69,12 @@ const button = (tree,text)=>tree.root.findAllByType('button').find(n=>label(n)==
   assert(invalidated>0,'Import invalidates prior matchup/expectation previews');
   await act(async()=>button(tree,'Confirm doubles').props.onClick());
   assert.equal(setupReady.at(-1),true);
+  imported={playerIds:[2,3,4,900],requestedRatings:{'900':'3.25'},additionalPlayers:[{id:900,name:'Javier Gonzalez-Bringas',rating:1300}]};
+  await act(async()=>button(tree,'Import CourtReserve roster').props.onClick());
+  await act(async()=>button(tree,'Use test import').props.onClick());
+  assert.equal(names,'Player 2\nPlayer 3\nPlayer 4\nJavier Gonzalez-Bringas','Created import profiles join the lineup without a directory reload');
+  assert.equal(links['javier gonzalez-bringas'],900);
+  assert.equal(setupReady.at(-1),false);
   await act(async()=>tree.unmount());
   console.log('PASS generator review: mixed formats, roster/request invalidation, CourtReserve profile selection, requested levels and preview invalidation.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
