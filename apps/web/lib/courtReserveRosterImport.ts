@@ -1,3 +1,5 @@
+import type { PublicPlayer } from "@/lib/api";
+
 export type CourtReservePlayer = { id: number; name: string };
 export type CourtReserveReportRow = {
   rowNumber: number;
@@ -12,7 +14,14 @@ export type CourtReserveMatchedRow = CourtReserveReportRow & {
 export type CourtReserveRosterSelection = {
   playerIds: number[];
   requestedRatings: Record<string, string>;
+  additionalPlayers?: PublicPlayer[];
 };
+
+/** Ranges and missing/invalid values require an explicit estimate, never a guess. */
+export function courtReserveStartingLevel(value: string): string {
+  const clean = value.trim();
+  return /^\d+(?:\.\d+)?$/.test(clean) && Number(clean) >= 1 && Number(clean) <= 7 ? clean : "";
+}
 
 export const MAX_COURTRESERVE_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_REPORT_ROWS = 500;
@@ -129,7 +138,7 @@ export function buildCourtReserveSelection(rows: CourtReserveReportRow[], choice
   for (const row of rows) {
     if (skipped.has(row.rowNumber)) continue;
     const id = choices[row.rowNumber];
-    if (!Number.isSafeInteger(id) || Number(id) <= 0) throw new Error(`Choose a PCS profile for ${row.name}, or skip that row.`);
+    if (!Number.isSafeInteger(id) || Number(id) <= 0) throw new Error(`Choose a PCS profile for ${row.name}, create a new player, or uncheck Include on that row.`);
     if (playerIds.includes(Number(id))) throw new Error("One PCS player is selected more than once. Choose the correct profiles or skip the duplicate row.");
     playerIds.push(Number(id));
     if (row.requestedRating) requestedRatings[String(id)] = row.requestedRating;
