@@ -52,16 +52,24 @@ const button=(tree,text)=>tree.root.findAllByType('button').find(node=>label(nod
 const control=(tree,name)=>tree.root.findAll(node=>typeof node.type==='string'&&node.props['aria-label']===name)[0];
 async function click(tree,text){const b=button(tree,text);assert(b,`Missing ${text}`);assert(!b.props.disabled,`${text} disabled`);await act(async()=>b.props.onClick());}
 async function change(node,value){assert(!node.props.disabled);await act(async()=>node.props.onChange({target:{value}}));}
+async function arrangeCourt(tree, number, names) {
+ await change(control(tree,`Players, one per line for Court ${number}`),names.join('\n'));
+ const details=control(tree,`Players, one per line for Court ${number}`).parent.parent;
+ await act(async()=>details.findByType('button').props.onClick());
+}
 const league='Sunday Ladder', base='/admin/clubs/club/league-manager';
 const detail={ok:true,league:{league_name:league,league_type:'Individual',match_format:'doubles',rules_config:{operation:{participation_mode:'set'}},status:'active'},roster:players.map(p=>({player_id:p.id,player_name:p.name,in_league:p.id<8,rating:p.rating,matches_played:8})),standings:[],capabilities:{roster_mutable:true}};
 const response=payload=>({ok:true,status:200,json:async()=>structuredClone(payload)});
-let calls=[], created=[], operation, scenario, detailFailed=false;
+let calls=[], created=[], operation, scenario, detailFailed=false, previewGate=null;
 global.fetch=async(url,options={})=>{
  const pathname=new URL(url).pathname,body=options.body?JSON.parse(options.body):null;
  calls.push({pathname,body,method:options.method});
  if(pathname===`${base}/leagues`)return response({leagues:[detail.league]});
  if(pathname===`${base}/leagues/${encodeURIComponent(league)}`)return response(detail);
- if(pathname===`${base}/live-sessions`)return response({sessions:[]});
+ if(pathname===`${base}/live-sessions`){
+   if(options.method==='POST')return response({ok:true,session:{id:'saved-session',league_name:league,status:'active',current_round:1,total_rounds:5,updated_at:'2026-11-08T21:00:00Z',roster_json:body.roster,current_court_state_json:body.courts},courts:body.courts});
+   return response({sessions:[]});
+ }
  if(pathname===`${base}/live/roster-suggestion`){
    const roster=body.roster.map((p,i)=>({...p,status:'active',court_number:i<3?1:2,slot:i<3?i+1:i-2}));
    return response({ok:true,roster,active_roster:roster,bench:[],bench_player_ids:[],default_bench_player_ids:[],court_sizes:[3,4],fingerprint:'reviewed',courts:[1,2].map(n=>({round_number:1,court_number:n,format_type:'4-Player',player_names:roster.filter(p=>p.court_number===n).map(p=>p.player_name)}))});
@@ -82,7 +90,7 @@ global.fetch=async(url,options={})=>{
    if(scenario==='detail-lost'&&!detailFailed){detailFailed=true;throw new TypeError('Detail failed');}
    return response({player:[...players,...created].find(p=>p.id===Number(pathname.split('/').at(-1)))});
  }
- if(pathname.endsWith('/round-robin/preview'))return response({ok:true,match_count:1,courts:body.courts.map(c=>({...c,matches:[]}))});
+ if(pathname.endsWith('/round-robin/preview')){if(previewGate)await previewGate;return response({ok:true,match_count:1,courts:body.courts.map(c=>({...c,matches:[]}))});}
  throw Error(`Unexpected ${pathname}`);
 };
 const props={apiBase:'https://staging.test',clubId:'club',selectedLeagueName:league,leagueStatus:{enabled:true,warnings:[]},liveDomainStatus:{enabled:true,submit_enabled:true,player_create_enabled:true,round_robin_format_options:['4-Player','5-Player']},players};
@@ -135,6 +143,42 @@ async function main(){
    assert.equal(storage.size,0,'Completed creation recovery is cleared');
    await act(async()=>tree.unmount());tree=await mount();
    assert.equal(control(tree,'Players, one per line for Court 1').props.value,desired,'Added players and positions survive a refresh');
+   if(scenario==='success'){
+     const suggestionCount=calls.filter(c=>c.pathname.endsWith('/roster-suggestion')).length;
+     const bench=tree.root.findAllByType('label').find(n=>label(n).startsWith('Bench Katri Ulmonen')).findByType('input');
+     await act(async()=>bench.props.onChange({target:{checked:true}}));
+     const arranged=[['Kathy Shipley','Carrie Brand','Richard Harley','Kathy Meyer'],['Tricia Newbanks','John Schaeffer','Gail Shea','Rosie Watson']];
+     await arrangeCourt(tree,1,['Kathy Meyer','Kathy Shipley','Carrie Brand']);
+     await arrangeCourt(tree,2,['Gail Shea','Rosie Watson','Tricia Newbanks']);
+     await arrangeCourt(tree,1,arranged[0]);await arrangeCourt(tree,2,arranged[1]);
+     assert(control(tree,'Select Richard Harley on Court 1, position 3'));
+     assert(control(tree,'Select John Schaeffer on Court 2, position 2'));
+     // Restore the user's already edited draft, whose original suggestion still has no bench.
+     await act(async()=>tree.unmount());tree=await mount();
+     await click(tree,'Confirm test starting estimates');
+     await click(tree,'Back to Players');await click(tree,'Confirm test starting estimates');
+     await click(tree,'Continue with current courts');
+     assert.deepEqual([1,2].map(n=>control(tree,`Players, one per line for Court ${n}`).props.value.split('\n')),arranged,'Returning from Players must retain the edited setup');
+     const benchAgain=tree.root.findAllByType('label').find(n=>label(n).startsWith('Bench Katri Ulmonen')).findByType('input');
+     await act(async()=>benchAgain.props.onChange({target:{checked:false}}));
+     const before=calls.filter(c=>c.pathname.endsWith('/round-robin/preview')).length;
+     await click(tree,'Validate courts and generate preview');
+     assert.equal(calls.filter(c=>c.pathname.endsWith('/round-robin/preview')).length,before,'An unassigned active player must still block preview');
+     assert.match(label(control(tree,'Court preview validation')),/Katri Ulmonen is active for this round but is not assigned/,'Show validation beside the preview button');
+     await act(async()=>benchAgain.props.onChange({target:{checked:true}}));
+     let release;previewGate=new Promise(resolve=>{release=resolve;});
+     await click(tree,'Validate courts and generate preview');
+     assert.equal(button(tree,'Generating preview…').props.disabled,true,'Show the pending request beside the action');
+     await act(async()=>{release();});previewGate=null;
+     assert.equal(calls.filter(c=>c.pathname.endsWith('/round-robin/preview')).length,before+1,'Changed bench must not require rebuilding the arranged courts');
+     assert.deepEqual(calls.filter(c=>c.pathname.endsWith('/round-robin/preview')).at(-1).body.courts.map(c=>c.player_names),arranged);
+     assert.equal(calls.filter(c=>c.pathname.endsWith('/roster-suggestion')).length,suggestionCount,'Preview must not reseed the courts');
+     await click(tree,'Create session and continue');
+     const saved=calls.find(c=>c.pathname===`${base}/live-sessions`&&c.method==='POST').body;
+     assert.deepEqual(saved.courts.map(c=>c.player_names),arranged,'Persist the exact manually arranged positions');
+     assert.deepEqual(saved.bench_player_ids,[1]);
+     assert.equal(saved.roster.length,9,'Keep the two added profiles and the benched player');
+   }
    await act(async()=>tree.unmount());
  }
  // Existing profile selection uses the same court placement without creating a new profile.

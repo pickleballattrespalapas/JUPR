@@ -648,6 +648,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [ratingReview, setRatingReview] = useState<LeagueLiveRatingReview | null>(null);
   const [courts, setCourts] = useState<CourtDraft[]>([{ court: "1", formatType: "4-player", playerNames: "" }]);
   const [preview, setPreview] = useState<AdminMatchUploaderRoundRobinPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [scoreEntryCourt, setScoreEntryCourt] = useState("");
   const [scores, setScores] = useState<Record<string, ScoreDraft>>({});
   const [gameEdits, setGameEdits] = useState<LeagueLiveGameEdits>({});
@@ -944,6 +945,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   ) || null;
   const hasEnteredRoundScores = Object.values(scores).some(scoreHasValue) || Object.keys(gameEdits).length > 0;
   const courtEditingLocked = busy || hasEnteredRoundScores || scoresPublished || roundPublished || (sessionIsCurrentLeague && sessionStatus !== "active");
+  const canKeepCurrentCourts = sessionRoster.length >= 4 && sameNumberSet(attendeePlayerIds, sessionRoster.map(row => Number(row.player_id))) && courts.some(court => splitNames(court.playerNames).length);
   const hasUnsubmittedRoundWork = Boolean(!scoresPublished && sessionIsCurrentLeague && preview && (hasEnteredRoundScores || scoresReviewed || movementPlan));
 
   useEffect(() => {
@@ -1165,6 +1167,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   function clearRoundDerivedState() {
+    setPreviewLoading(false);
     setDetail(null);
     setMatchStructure(DEFAULT_MATCH_STRUCTURE);
     setLoadedLeagueName("");
@@ -1805,35 +1808,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     loadInitialWorkspace
   );
 
-  async function refreshRosterSuggestion() {
-    if (!detail || detail.league.league_name !== leagueName) {
-      setMessage("Load a league roster before requesting another roster suggestion.");
-      return;
-    }
-    if (participationModeFromDetail(detail) === "flex" && !attendeePlayerIds.length) {
-      setMessage("Select at least one attendee before building Flex courts.");
-      return;
-    }
-    if (!sessionIsCurrentLeague && !startingRatingsReady) {
-      setWorkflowStep(2);
-      setMessage("Review the selected players' starting estimates before building courts.");
-      return;
-    }
-    const generation = leagueDetailRequest.begin();
-    setBusy(true);
-    setMessage(null);
-    try {
-      const suggestion = await fetchRosterSuggestion(detail, benchOverrideIds, benchOverrideReason, attendeePlayerIds);
-      if (!leagueDetailRequest.isCurrent(generation)) return;
-      applyRosterSuggestion(suggestion);
-      setMessage(`${participationModeFromDetail(detail) === "flex" ? "Fresh attendee" : "Persistent roster"} plan built ${suggestion.courts.length} court(s); ${suggestion.bench.length} player(s) are benched.`);
-    } catch (error) {
-      if (leagueDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to refresh the roster suggestion.");
-    } finally {
-      if (leagueDetailRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
   async function buildPlayerPlanAndContinue() {
     const setupError = setupContextError();
     if (setupError) {
@@ -1869,9 +1843,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setMessage("Select at least four session players before building courts.");
       return;
     }
-    if (sessionIsCurrentLeague && sessionRoster.length >= 4 && courts.some((court) => splitNames(court.playerNames).length)) {
+    if (canKeepCurrentCourts) {
       setWorkflowStep(3);
-      setMessage("Saved session players and courts retained. Validate the assignments and generate this round's exact preview.");
+      setMessage("Your players, bench choices, and court positions are retained. Validate the current courts to continue.");
       return;
     }
     if (!startingRatingsReady) {
@@ -2576,8 +2550,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         .filter((row) => !benchedPlayerIds.has(Number(row.player_id)))
         .map((row) => [playerNameKey(row.player_name), row.player_name])
     );
-    if (rosterSuggestion && !sameNumberSet(benchOverrideIds, rosterSuggestion.bench_player_ids || [])) {
-      errors.push("Bench selection changed. Refresh the roster suggestion before previewing courts.");
+    const rosterIds = new Set(sessionRoster.map(row => Number(row.player_id)));
+    if ([...benchedPlayerIds].some(id => !rosterIds.has(id))) {
+      errors.push("A benched player is no longer in this session roster. Review the bench choices.");
     }
     courts.forEach((court, index) => {
       const label = `Court ${court.court || index + 1}`;
@@ -2666,6 +2641,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       return;
     }
     const generation = actionRequest.begin();
+    setPreviewLoading(true);
     setBusy(true);
     setMessage(null);
     try {
@@ -2689,7 +2665,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate round preview.");
     } finally {
-      if (actionRequest.isCurrent(generation)) setBusy(false);
+      if (actionRequest.isCurrent(generation)) {
+        setPreviewLoading(false);
+        setBusy(false);
+      }
     }
   }
 
@@ -3197,6 +3176,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const setupReady = Boolean(detail && loadedLeagueName === leagueName && roundContextValid && matchDateValid && persistedSessionPlayable);
   const playersReady = setupReady && attendeePlayerIds.length >= 4 && pasteResolutionCurrent && !pasteDuplicateNames.length && !unresolvedPastedPlayers && !playerCreateRecovery && Boolean(rosterSuggestion || (sessionIsCurrentLeague && sessionRoster.length >= 4));
   const courtsReady = playersReady && Boolean(preview?.courts?.length) && sessionIsCurrentLeague;
+  const assignedCourtByName = new Map(courts.flatMap(court => splitNames(court.playerNames).map(name => [playerNameKey(name), court.court] as const)));
   const maxReachableStep: WorkflowStep = roundPublished
     ? 6
     : scoresPublished
@@ -3301,7 +3281,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         })}
       </nav>
 
-      {message ? (
+      {message && workflowStep !== 3 ? (
         <p role="status" aria-live="polite" style={{ margin: 0, padding: "0.75rem 1rem", borderRadius: "10px", background: "#f8fafc", color: /unable|missing|duplicate|required|error|failed|stop/i.test(message) ? "#b91c1c" : "#166534" }}>
           {message}
         </p>
@@ -3448,7 +3428,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           /> : null}
           <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
             <button type="button" onClick={() => setWorkflowStep(1)} disabled={busy} style={ghostButtonStyle}>Back to Setup</button>
-            <button type="button" onClick={() => void buildPlayerPlanAndContinue()} disabled={busy || (!sessionIsCurrentLeague && !startingRatingsReady) || creatingMissingPlayers || Boolean(playerCreateRecovery) || attendeePlayerIds.length < 4 || !pasteResolutionCurrent || Boolean(pasteDuplicateNames.length) || Boolean(unresolvedPastedPlayers)} style={buttonStyle}>{sessionIsCurrentLeague && sessionRoster.length ? "Continue with saved courts" : `Build courts from ${attendeePlayerIds.length} attendee${attendeePlayerIds.length === 1 ? "" : "s"}`}</button>
+            <button type="button" onClick={() => void buildPlayerPlanAndContinue()} disabled={busy || (!sessionIsCurrentLeague && !startingRatingsReady) || creatingMissingPlayers || Boolean(playerCreateRecovery) || attendeePlayerIds.length < 4 || !pasteResolutionCurrent || Boolean(pasteDuplicateNames.length) || Boolean(unresolvedPastedPlayers)} style={buttonStyle}>{canKeepCurrentCourts ? sessionIsCurrentLeague ? "Continue with saved courts" : "Continue with current courts" : `Build courts from ${attendeePlayerIds.length} attendee${attendeePlayerIds.length === 1 ? "" : "s"}`}</button>
           </p>
         </article>
       ) : null}
@@ -3457,7 +3437,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         <article style={cardStyle} aria-labelledby="league-live-courts-heading">
           <h2 id="league-live-courts-heading" style={{ marginTop: 0 }}>3. Courts and Preview</h2>
           <p style={{ color: "#475569" }}>Review the rating-seeded roster and bench, validate each court, then preview the exact teams and match slots before creating or updating the persisted session.</p>
-          {!sessionIsCurrentLeague && !startingRatingsReady && apiBase ? <StartingRatingReview
+          {!sessionIsCurrentLeague && !startingRatingsReady && apiBase ? <div id="league-live-starting-rating-review"><StartingRatingReview
             key={startingReviewKey}
             apiBase={apiBase} clubId={clubId} accessToken={accessToken || ""}
             playerIds={attendeePlayerIds} requestedRatings={requestedStartingRatings} matchFormat="doubles"
@@ -3465,24 +3445,22 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
             onReady={(ready) => setStartingReviewState({ key: startingReviewKey, ready })}
             onConfirmed={applyStartingRatingConfirmations}
             title="Review replacement players before rated play"
-          /> : null}
+          /></div> : null}
           {rosterSuggestion ? (
             <section style={{ padding: "0.75rem", border: "1px solid #dbeafe", borderRadius: "12px", background: "#eff6ff" }}>
-              <h3 style={{ marginTop: 0 }}>Roster and bench suggestion</h3>
-              <p style={{ color: "#475569" }}>{participationMode === "flex" ? "Fresh Flex courts are rating-seeded from this session's attendees." : "Set participation keeps saved pods and positions when a persisted session is resumed."} Select exactly the required bench count and explain any non-default choice.</p>
+              <h3 style={{ marginTop: 0 }}>Roster and bench</h3>
+              <p style={{ color: "#475569" }}>Select the players sitting out this round. Place every other player on one four- or five-player court. Validation keeps your edited court positions.</p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.35rem" }}>
                 {rosterSuggestion.roster.map((row) => (
                   <label key={row.player_id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
                     <input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} disabled={courtEditingLocked} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); setPreview(null); markPlanStale(); }} />
-                    Bench {row.player_name} · {playerJuprLabel({ id: row.player_id, name: row.player_name, rating: row.rating })}{row.court_number ? ` (currently Court ${row.court_number})` : ""}
+                    Bench {row.player_name} · {playerJuprLabel({ id: row.player_id, name: row.player_name, rating: row.rating })}{assignedCourtByName.has(playerNameKey(row.player_name)) ? ` (currently Court ${assignedCourtByName.get(playerNameKey(row.player_name))})` : benchOverrideIds.includes(Number(row.player_id)) ? " (sitting out)" : " (unassigned)"}
                   </label>
                 ))}
               </div>
               <div data-responsive-bench-controls style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
-                <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); setPreview(null); markPlanStale(); }} disabled={courtEditingLocked} placeholder="Required when changing the default bench" style={inputStyle} /></label>
-                <button type="button" onClick={refreshRosterSuggestion} disabled={courtEditingLocked} style={ghostButtonStyle}>Refresh roster suggestion</button>
+                <label>Bench note (optional)<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); setPreview(null); markPlanStale(); }} disabled={courtEditingLocked} placeholder="Optional note about who is sitting out" style={inputStyle} /></label>
               </div>
-              <small style={{ color: "#64748b" }}>Roster fingerprint: {rosterSuggestion.fingerprint.slice(0, 16)}…</small>
             </section>
           ) : sessionIsCurrentLeague ? <p style={{ color: "#475569" }}><strong>Saved session roster loaded.</strong> Its persisted player order, bench, and courts are shown below; generate the current-round preview to continue.</p> : <p role="alert" style={{ color: "#b91c1c" }}>Return to Players and build a roster plan first.</p>}
 
@@ -3530,7 +3508,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               onEditRoster={() => navigateWorkflow(2)}
             />
             {editingRatingPlayerId != null ? <LeagueLiveRatingEditor key={`${clubId}:${leagueName}:${editingRatingPlayerId}:${accessToken ? "signed-in" : "signed-out"}`} playerId={editingRatingPlayerId} clubId={clubId} leagueName={leagueName} request={requestJson} onSaved={applyEditedRating} onClose={() => setEditingRatingPlayerId(null)} /> : null}
-            <p><button type="button" onClick={() => void generatePreview()} disabled={courtEditingLocked || (!sessionIsCurrentLeague && !startingRatingsReady) || (!rosterSuggestion && !sessionIsCurrentLeague)} style={buttonStyle}>Validate courts and generate preview</button></p>
+            <div aria-label="Court preview validation">
+              <p><button type="button" onClick={() => void generatePreview()} disabled={courtEditingLocked || (!sessionIsCurrentLeague && !startingRatingsReady) || (!rosterSuggestion && !sessionIsCurrentLeague)} aria-busy={previewLoading} style={buttonStyle}>{previewLoading ? "Generating preview…" : "Validate courts and generate preview"}</button></p>
+              {!sessionIsCurrentLeague && !startingRatingsReady ? <p role="status">Confirm the pending <a href="#league-live-starting-rating-review">starting ratings</a> before previewing. Your court positions are kept.</p> : null}
+              {message ? <p role="status" aria-live="polite" style={{ padding: "0.75rem", borderRadius: "10px", background: "#f8fafc" }}>{message}</p> : null}
+            </div>
           </section>
 
           {preview?.courts?.length ? (
