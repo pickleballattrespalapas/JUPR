@@ -111,9 +111,10 @@ async function main() {
     await clickRequest(page,page.getByRole('button',{name:/^Confirm starting rating/}),'/starting-rating-review/confirm');
     await page.getByRole('button',{name:'Use imported roster (4)',exact:true}).click();
     await expectBrowser(page.getByRole('textbox',{name:/^Players \(/})).toHaveValue('Player 1\nPlayer 2\nPlayer 3\nJavier Gonzalez-Bringas');
-    const preview=await clickRequest(page,page.getByRole('button',{name:'Preview matchups',exact:true}),'/preview');
+    const preview=await clickRequest(page,page.getByRole('button',{name:'Preview matchups',exact:true}),'/clubs/test/play-generators/preview');
     assert.equal(preview.request.participant_player_ids['Javier Gonzalez-Bringas'],playerId);
     assert.equal(preview.request.participant_names.length,4);
+    await expectBrowser(page.getByRole('button',{name:'Start rated session',exact:true})).toBeVisible();
     await page.setViewportSize({width:1280,height:900});
     await screenshot(page,'courtreserve-imported-desktop.png');
     assert.deepEqual(errors,[]);
