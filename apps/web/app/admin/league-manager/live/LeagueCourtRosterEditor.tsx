@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useId, useState, type CSSProperties } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { DragDropContext, Draggable, Droppable, type DropResult } from "@hello-pangea/dnd";
+import GeneratorPlayerCreate from "@/app/admin/play-generators/submissions/GeneratorPlayerCreate";
 
 export type LeagueCourtRosterDraft = { court: string; formatType: string; playerNames: string };
 
@@ -16,6 +17,14 @@ type Props = {
   onEditPlayerRating?: (name: string) => void;
   onReplacePlayer?: (name: string, replacementId: number) => void;
   replacementPlayers?: Array<{ id: number; name: string; rating?: number | null }>;
+  playerCreation?: {
+    apiBase: string; clubId: string; accessToken: string; sessionKey: string;
+    players: Array<{ id: number; name: string }>;
+    disabled: boolean; pendingCourt: string | null;
+    onPendingChange: (court: string, pending: boolean) => void;
+    onBusyChange: (busy: boolean) => void;
+    onCreated: (courtIndex: number, playerId: number, desiredOrder: string[]) => Promise<void>;
+  };
 };
 
 type PlayerPosition = { courtIndex: number; playerIndex: number; name: string };
@@ -38,13 +47,14 @@ function courtIndexFor(value: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames, playerRatings, onChange, onEditRoster, onEditPlayerRating, onReplacePlayer, replacementPlayers = [] }: Props) {
+export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames, playerRatings, onChange, onEditRoster, onEditPlayerRating, onReplacePlayer, replacementPlayers = [], playerCreation }: Props) {
   const instructionsId = useId();
   const [selected, setSelected] = useState<PlayerPosition | null>(null);
   const [replacingName, setReplacingName] = useState<string | null>(null);
   const [draggingFrom, setDraggingFrom] = useState<string | null>(null);
   const [undo, setUndo] = useState<UndoDraft | null>(null);
   const [bulkDrafts, setBulkDrafts] = useState<Record<number, string>>({});
+  const retainedBulkDrafts = useRef<Record<number, string> | null>(null);
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const fingerprint = JSON.stringify(courts);
   const namesByCourt = courts.map((court) => splitNames(court.playerNames));
@@ -65,7 +75,8 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
   useEffect(() => {
     setSelected(null);
     setReplacingName(null);
-    setBulkDrafts({});
+    setBulkDrafts(retainedBulkDrafts.current ?? {});
+    retainedBulkDrafts.current = null;
   }, [fingerprint]);
 
   function withNames(court: LeagueCourtRosterDraft, names: string[]): LeagueCourtRosterDraft {
@@ -79,6 +90,7 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
     if (disabled || JSON.stringify(next) === fingerprint) return;
     setUndo({ before: courts.map((court) => ({ ...court })), after: JSON.stringify(next) });
     setSelected(null);
+    retainedBulkDrafts.current = null;
     setBulkDrafts({});
     setNotice({ text: message });
     onChange(next);
@@ -137,12 +149,32 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
         return;
       }
       if (playerNames && !allowedNames.has(key)) {
-        setNotice({ text: `${name} is not in the active session roster. Use Edit session roster to add them first.`, error: true });
+        setNotice({ text: `${name} is not in the active session roster. ${playerCreation ? "Use Add player on this court to select or create their profile, then apply this list." : "Use Edit session roster to add them first."}`, error: true });
         return;
       }
       usedNames.add(key);
     }
     commit(courts.map((court, index) => index === courtIndex ? withNames(court, names) : court), `Updated Court ${courts[courtIndex].court}.`);
+  }
+
+  async function addPlayer(courtIndex: number, playerId: number) {
+    if (!playerCreation) return;
+    retainedBulkDrafts.current = { ...bulkDrafts };
+    try {
+      await playerCreation.onCreated(courtIndex, playerId, splitNames(bulkDrafts[courtIndex] ?? courts[courtIndex].playerNames));
+      setNotice({ text: `Player added to Court ${courts[courtIndex].court}. Review starting estimates before previewing.` });
+    } catch (error) {
+      retainedBulkDrafts.current = null;
+      throw error;
+    }
+  }
+
+  async function selectExisting(courtIndex: number, playerId: number) {
+    if (!playerCreation || disabled) return;
+    playerCreation.onBusyChange(true);
+    try { await addPlayer(courtIndex, playerId); }
+    catch (error) { setNotice({ text: error instanceof Error ? error.message : "Could not add this player.", error: true }); }
+    finally { playerCreation.onBusyChange(false); }
   }
 
   function handleDragEnd({ source, destination, combine, draggableId, reason }: DropResult) {
@@ -229,6 +261,8 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
           const names = namesByCourt[courtIndex];
           const validCount = [4, 5].includes(names.length);
           const courtFormats = [court.formatType, ...availableFormats.filter((format) => format.toLowerCase() !== court.formatType.toLowerCase())];
+          const missingNames = [...new Set(splitNames(bulkDrafts[courtIndex] ?? court.playerNames).filter(name => !allowedNames.has(nameKey(name))))];
+          const creationPendingHere = playerCreation?.pendingCourt === court.court;
           return (
             <article key={courtIndex} aria-label={`Court ${court.court} roster`} style={{ minWidth: 0, padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: 12, background: "#f8fafc" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "0.5rem", marginBottom: "0.7rem" }}><h3 style={{ margin: 0 }}>Court {court.court || courtIndex + 1}</h3><span style={{ color: validCount ? "#475569" : "#b45309", fontWeight: 700 }}>{names.length} players</span></div>
@@ -289,6 +323,22 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
                 <label style={{ display: "block", marginTop: "0.5rem" }}>Players, one per line<textarea aria-label={`Players, one per line for Court ${court.court}`} rows={5} value={bulkDrafts[courtIndex] ?? court.playerNames} onChange={(event) => setBulkDrafts((current) => ({ ...current, [courtIndex]: event.target.value }))} disabled={disabled} style={inputStyle} /></label>
                 <button type="button" onClick={() => applyBulk(courtIndex)} disabled={disabled || (bulkDrafts[courtIndex] ?? court.playerNames) === court.playerNames} style={buttonStyle}>Apply player list</button>
               </details>
+              {playerCreation ? <details open={creationPendingHere || missingNames.length > 0 ? true : undefined} style={{ marginTop: "0.8rem" }}>
+                <summary style={{ cursor: "pointer", fontWeight: 700 }}>Add player to Court {court.court}</summary>
+                <div style={{ display: "grid", gap: "0.6rem", marginTop: "0.6rem" }}>
+                  {missingNames.length ? <p style={{ margin: 0 }}>Not in this session: {missingNames.join(", ")}. Select an existing profile or create a new player below.</p> : null}
+                  <label>Choose existing player<select aria-label={`Add existing player to Court ${court.court}`} value="" disabled={disabled || names.length >= 5} style={inputStyle} onChange={event => { if (event.target.value) void selectExisting(courtIndex, Number(event.target.value)); }}>
+                    <option value="">Choose player…</option>
+                    {replacementPlayers.map(player => <option key={player.id} value={player.id}>{player.name}</option>)}
+                  </select></label>
+                  <GeneratorPlayerCreate context="league" clubId={playerCreation.clubId} sessionKey={playerCreation.sessionKey}
+                    participantId={court.court} participantName={`Court ${court.court}`} lineupNames={missingNames.length ? missingNames : undefined}
+                    apiBase={playerCreation.apiBase} accessToken={playerCreation.accessToken} players={playerCreation.players}
+                    disabled={playerCreation.disabled || (playerCreation.pendingCourt != null && !creationPendingHere) || (names.length >= 5 && !creationPendingHere)} matched={false}
+                    onPendingChange={playerCreation.onPendingChange} onBusyChange={playerCreation.onBusyChange} onCreated={playerId => addPlayer(courtIndex, playerId)} />
+                  {names.length >= 5 ? <small>This court has five players. Move a player to another court before adding someone else.</small> : null}
+                </div>
+              </details> : null}
               <button type="button" onClick={() => commit(courts.filter((_, index) => index !== courtIndex).map((row, index) => ({ ...row, court: String(index + 1) })), `Removed Court ${court.court}. Its players are now unassigned.`)} disabled={disabled || courts.length === 1} style={{ ...buttonStyle, marginTop: "0.75rem", fontSize: "0.85rem" }}>Remove court</button>
             </article>
           );

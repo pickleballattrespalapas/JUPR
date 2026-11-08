@@ -31,7 +31,10 @@ const dndMock = {
   Droppable: ({ children, ...props }) => React.createElement("mock-droppable", props, children({ innerRef() {}, droppableProps: {}, placeholder: null }, { isDraggingOver: false })),
   Draggable: ({ children, ...props }) => React.createElement("mock-draggable", props, children({ innerRef() {}, draggableProps: { style: {} }, dragHandleProps: {} }, { isDragging: false }))
 };
-const editorModule = load("app/admin/league-manager/live/LeagueCourtRosterEditor.tsx", { "@hello-pangea/dnd": dndMock });
+const editorModule = load("app/admin/league-manager/live/LeagueCourtRosterEditor.tsx", {
+  "@hello-pangea/dnd": dndMock,
+  "@/app/admin/play-generators/submissions/GeneratorPlayerCreate": { __esModule: true, default: () => null },
+});
 const CourtRosterEditor = editorModule.LeagueCourtRosterEditor;
 const gameEditsModule = load("app/admin/league-manager/live/leagueLiveGameEdits.ts");
 const playerSelectMock = { __esModule: true, default: props => React.createElement("select", props) };
