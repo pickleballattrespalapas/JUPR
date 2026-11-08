@@ -15,7 +15,8 @@ const cache = new Map();
 const players = ['Alex','Blair','Casey','Devon','Late arrival'].map((name,i) => ({id:i+1,name,rating:i===0?1200:1400,rating_jupr:i===0?3:3.5}));
 const reviewRows = players.slice(0,4).map(p => ({player_id:p.id,name:p.name,has_rated_history:p.id!==1,rating_jupr:p.id===1?3.75:p.rating_jupr,starting_jupr:p.id===1?3.75:p.rating_jupr,review_required:false}));
 const Review = props => React.createElement('button', {onClick:() => {props.onReady(true,reviewRows); props.onConfirmed?.(reviewRows);}}, 'Confirm test starting estimates');
-const Import = props => React.createElement('button', {onClick:() => props.onImport({playerIds:[1,2,3,4],requestedRatings:{'1':'3.75','2':'4.0'}})}, 'Import test registrants');
+let imported={playerIds:[1,2,3,4],requestedRatings:{'1':'3.75','2':'4.0'}};
+const Import = props => React.createElement('button', {onClick:() => props.onImport(imported)}, 'Import test registrants');
 const mocks = {
   'next/link': {__esModule:true,default:({children,...props}) => React.createElement('a',props,children)},
   'next/dynamic': {__esModule:true,default:factory => String(factory).includes('StartingRatingReview') ? Review : String(factory).includes('CourtReserveRosterImport') ? Import : () => null},
@@ -79,13 +80,27 @@ async function main(){
   assert.equal(button(tree,'Build courts from 5 attendees').props.disabled,true,'A late selected player invalidates previous review readiness');
   await act(async()=>tree.unmount());
 
+  calls=[]; storage.clear();
+  imported={playerIds:[1,2,3,900],requestedRatings:{'900':'3.25'},additionalPlayers:[{id:900,name:'Javier Gonzalez-Bringas',rating:1300,rating_jupr:3.25}]};
+  await act(async()=>{tree=create(React.createElement(Live,{apiBase:'https://staging.test',clubId:'club',selectedLeagueName:league,leagueStatus:{enabled:true,warnings:[]},liveDomainStatus:{enabled:true,submit_enabled:true,player_create_enabled:true,round_robin_format_options:['4-Player']},players}));});
+  await click(tree,'Continue to Players');
+  await click(tree,'Import CourtReserve registrants');
+  await click(tree,'Import test registrants');
+  await click(tree,'Confirm test starting estimates');
+  await click(tree,'Build courts from 4 attendees');
+  const newPlayer=calls.find(c=>c.pathname.endsWith('/roster-suggestion')).body.roster.find(p=>p.player_id===900);
+  assert.equal(newPlayer.player_name,'Javier Gonzalez-Bringas','Inline-created player survives import and reaches court planning');
+  assert.equal(newPlayer.rating,1300);
+  await act(async()=>tree.unmount());
+
   calls=[];
+  imported={playerIds:[1,2,3,900],requestedRatings:{'900':'3.25'},additionalPlayers:[{id:900,name:'Javier Gonzalez-Bringas',rating:1300}]};
   detail.roster=detail.roster.map(row=>({...row,in_league:row.player_id<=2}));
   await act(async()=>{tree=create(React.createElement(Roster,{apiBase:'https://staging.test',clubId:'club',initialLeague:league,status:{enabled:true}}));});
   await click(tree,'Import CourtReserve roster');
   await click(tree,'Import test registrants');
   const saved=calls.find(c=>c.pathname.endsWith('/roster/batch'));
-  assert.deepEqual(saved.body.player_ids,[3,4],'Import adds only missing members and never removes the season roster');
+  assert.deepEqual(saved.body.player_ids,[3,900],'Import adds created profiles and missing members without removing the season roster');
   assert.equal(saved.body.action,'activate');
   assert.equal(saved.body.starting_rating,null,'Imported requested values cannot replace calculated JUPR through roster writes');
   assert.equal(saved.body.confirmation_text,'SAVE LEAGUE ROSTER BATCH');

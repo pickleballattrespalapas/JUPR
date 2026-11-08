@@ -6,7 +6,8 @@ import { playerSearchKey } from "@/lib/playerSearch";
 type Player = { id: number; name: string };
 type Creation = { version: 1; key: string; name: string; level?: number; playerId?: number; estimateRequest?: { participant_id: string; player_ids: Record<string, number>; expected_version: number } };
 type Props = {
-  context?: "setup" | "submission";
+  context?: "setup" | "submission" | "courtreserve";
+  initialStartingLevel?: string;
   lineupNames?: string[];
   playerIds?: Record<string, number>; expectedVersion?: number; ratingMode?: "rated" | "unrated";
   clubId: string; sessionKey: string; participantId: string; participantName: string;
@@ -20,17 +21,17 @@ class CreationError extends Error {
   constructor(message: string, public status: number, public uncertain: boolean, public definitelyNotCreated = false) { super(message); }
 }
 
-export default function GeneratorPlayerCreate({ context = "submission", lineupNames, playerIds = {}, expectedVersion, ratingMode = "unrated", clubId, sessionKey, participantId, participantName, apiBase, accessToken, players, disabled, matched, onPendingChange, onBusyChange, onCreated }: Props) {
+export default function GeneratorPlayerCreate({ context = "submission", initialStartingLevel = "", lineupNames, playerIds = {}, expectedVersion, ratingMode = "unrated", clubId, sessionKey, participantId, participantName, apiBase, accessToken, players, disabled, matched, onPendingChange, onBusyChange, onCreated }: Props) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(context === "setup" ? "" : participantName);
-  const [level, setLevel] = useState("");
+  const [level, setLevel] = useState(initialStartingLevel);
   const [operation, setOperation] = useState<Creation | null>(null);
   const [message, setMessage] = useState("");
   const [found, setFound] = useState<Player[]>([]);
   const running = useRef(false);
   const mounted = useRef(false);
   const operationRef = useRef<Creation | null>(null);
-  const source = context === "setup" ? "generator_roster_setup" : "generator_submission_review";
+  const source = context === "courtreserve" ? "courtreserve_roster_import" : context === "setup" ? "generator_roster_setup" : "generator_submission_review";
   const storageKey = `jupr-generator-player-create:v1:${clubId}:${sessionKey}:${participantId}`;
 
   useEffect(() => {
@@ -131,7 +132,7 @@ export default function GeneratorPlayerCreate({ context = "submission", lineupNa
     try {
       if (operationRef.current) { await recover(operationRef.current); return; }
       // Recheck current club profiles immediately before a new creation request.
-      const latest = await request(context === "setup" ? "players/editor/players" : "play-generators/submissions?status=pending");
+      const latest = await request(context === "submission" ? "play-generators/submissions?status=pending" : "players/editor/players");
       if (!mounted.current) return;
       const existing = (latest.players as Player[]).filter(player => playerSearchKey(player.name) === playerSearchKey(name));
       if (existing.length) { setFound(existing); setMessage("A matching club profile already exists. Select it below."); return; }
@@ -155,7 +156,7 @@ export default function GeneratorPlayerCreate({ context = "submission", lineupNa
   }
 
   if (matched && !operation) return null;
-  if (!open) return <button type="button" disabled={disabled} style={field} aria-label={`Create new player for ${participantName}`} onClick={() => { if (lineupNames?.length) setName(lineupNames[0]); else if (context === "submission") setName(participantName); setOpen(true); }}>Create new player</button>;
+  if (!open) return <button type="button" disabled={disabled} style={field} aria-label={`Create new player for ${participantName}`} onClick={() => { if (lineupNames?.length) setName(lineupNames[0]); else if (context !== "setup") setName(participantName); setOpen(true); }}>Create new player</button>;
   return <form aria-label={`New club player for ${participantName}`} onSubmit={event => { event.preventDefault(); void create(); }} style={{ display: "grid", gap: "0.6rem", minWidth: 0 }}>
     {lineupNames?.length && !operation ? <label style={{ display: "grid", gap: 4 }}>Player already in your lineup
       <select aria-label={`Player already in lineup for ${participantName}`} value={name} disabled={disabled} style={field}
@@ -167,14 +168,14 @@ export default function GeneratorPlayerCreate({ context = "submission", lineupNa
       <input aria-label={`New player name for ${participantName}`} value={name} readOnly={Boolean(lineupNames)} required maxLength={160} disabled={disabled || Boolean(operation)} style={field}
         onChange={event => { setName(event.target.value); setFound([]); setMessage(""); }} />
     </label>
-    {context === "setup" ? <label style={{ display: "grid", gap: 4 }}>Doubles starting level
+    {context !== "submission" ? <label style={{ display: "grid", gap: 4 }}>Doubles starting level
       <input aria-label={`New player starting level for ${participantName}`} type="number" inputMode="decimal" min={1} max={7} step="any" required placeholder="e.g. 3.50" value={level}
         disabled={disabled || Boolean(operation)} onChange={event => setLevel(event.target.value)} style={field} />
     </label> : null}
     {!operation && matching.length ? <div role="status">A matching club profile exists.
       {matching.map(player => <button key={player.id} type="button" disabled={disabled} style={{ ...field, display: "block", width: "100%", marginTop: 4 }} onClick={() => void selectExisting(player.id)}>Use {player.name}</button>)}
     </div> : null}
-    <small>{context === "setup" ? "Creates a club profile and adds it to your lineup. Moneyball uses this starting level to set expectations." : ratingMode === "unrated" ? "We’ll estimate a provisional rating from the group’s ratings, partners, opponents, and saved scores. Unrated games keep this rating provisional." : "We’ll estimate a starting rating from the group’s ratings, partners, opponents, and saved scores. Rated results are applied when approved."}</small>
+    <small>{context === "courtreserve" ? "Creates a PCS profile and selects it for this report. A single CourtReserve skill level is filled in as the starting estimate; confirm or edit it before creating." : context === "setup" ? "Creates a club profile and adds it to your lineup. Moneyball uses this starting level to set expectations." : ratingMode === "unrated" ? "We’ll estimate a provisional rating from the group’s ratings, partners, opponents, and saved scores. Unrated games keep this rating provisional." : "We’ll estimate a starting rating from the group’s ratings, partners, opponents, and saved scores. Rated results are applied when approved."}</small>
     {message ? <p role="status" style={{ margin: 0 }}>{message}</p> : null}
     <button type="submit" style={field} disabled={disabled || (!operation && (!valid || matching.length > 0))}>
       {operation?.playerId ? "Use created player" : operation ? "Check player creation" : "Create and select player"}
