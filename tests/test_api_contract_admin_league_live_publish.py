@@ -119,13 +119,13 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     events = []
     async def observe_response(scope, receive, send):
         async def capture(message):
-            await send(message)
             if scope["path"].endswith("/submit") and message["type"] == "http.response.body" and not message.get("more_body"):
                 events.append("sent")
+            await send(message)
         await app(scope, receive, capture)
 
     def run_badges(db, club, result):
-        assert db is supabase and club == "club"
+        assert db.tables is supabase.tables and club == "club"
         assert result["publish_operation"]["status"] == "completed"
         events.append("badges")
 

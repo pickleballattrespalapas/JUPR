@@ -9,8 +9,10 @@ import uuid
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.routing import Match
 
 from scripts.staging_write_waves import wave_allows_request
+from jupr_app.observability.request_timing import RequestTiming, current_timing
 
 logger = logging.getLogger("jupr.api.request")
 
@@ -20,36 +22,53 @@ class StructuredRequestLoggingMiddleware(BaseHTTPMiddleware):
         supplied_id = request.headers.get("x-request-id", "")
         request_id = supplied_id if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", supplied_id) else str(uuid.uuid4())
         start = time.perf_counter()
+        timing = RequestTiming(request_id)
+        token = current_timing.set(timing)
         try:
             response = await call_next(request)
         except Exception as exc:
-            logger.info(
-                "request.failed",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status_code": 500,
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000, 2),
-                    "request_id": request_id,
-                    # Exception messages can embed user input; retain only the type.
-                    "exception_type": type(exc).__name__,
-                },
-            )
+            _log_request("request.failed", request, timing, start, 500, type(exc).__name__)
             raise
-        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+        finally:
+            current_timing.reset(token)
         response.headers.setdefault("x-request-id", request_id)
-
-        logger.info(
-            "request.complete",
-            extra={
-                "method": request.method,
-                "path": request.url.path,
-                "status_code": response.status_code,
-                "elapsed_ms": elapsed_ms,
-                "request_id": request_id,
-            },
-        )
+        _log_request("request.complete", request, timing, start, response.status_code)
         return response
+
+
+def _request_route_template(request):
+    matched = getattr(request.scope.get("route"), "path", None)
+    if matched:
+        return matched
+    # Guards can reject a request before the router has populated scope.route.
+    # Match only registered route metadata; never call the endpoint or echo a
+    # raw URL (which could contain an unknown capability or private value).
+    for route in getattr(request.app, "routes", ()):
+        match, _ = route.matches(request.scope)
+        if match == Match.FULL:
+            return getattr(route, "path", None) or "<unmatched>"
+    return "<unmatched>"
+
+
+def _log_request(event, request, timing, start, status_code, exception_type=None):
+    try:
+        # Matched route templates exclude player IDs, capability paths and names.
+        # Unmatched/early-denied paths are not echoed back into the logs.
+        route = _request_route_template(request)
+        machine = os.getenv("FLY_MACHINE_ID", "")
+        logger.info(event, extra={
+            "method": request.method,
+            "path": route,
+            "status_code": status_code,
+            "elapsed_ms": round((time.perf_counter() - start) * 1000, 2),
+            "request_id": timing.request_id,
+            "exception_type": exception_type,
+            "machine_id": machine if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", machine) else None,
+            **timing.snapshot(),
+        })
+    except Exception:
+        # An unavailable log sink must never fail the application request.
+        pass
 
 
 class StagingWriteWaveMiddleware(BaseHTTPMiddleware):

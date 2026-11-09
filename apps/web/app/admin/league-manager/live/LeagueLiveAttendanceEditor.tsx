@@ -33,7 +33,7 @@ export function LeagueLiveAttendanceEditor({ roster, availablePlayers, activePla
       <label>Add a late arrival or returning club player<SearchablePlayerSelect aria-label="Add next-round player" value={incomingId} onValueChange={setIncomingId} disabled={disabled} style={inputStyle}><option value="">Select player…</option>{addable.map(player => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</SearchablePlayerSelect></label>
       <button type="button" disabled={disabled || !addable.some(player => player.id === Number(incomingId))} onClick={() => { onActivePlayersChange([...activePlayerIds, Number(incomingId)]); setIncomingId(""); }}>Add player</button>
     </div>
-    <label>Next-round court sizes<input aria-label="Next-round court sizes" value={courtSizes} disabled={disabled} onChange={event => onCourtSizesChange(event.target.value)} placeholder="Automatic — or enter 4,4,4 for three courts" style={inputStyle} /></label>
+    <label>Next-round court sizes<input aria-label="Next-round court sizes" value={courtSizes} disabled={disabled} onChange={event => onCourtSizesChange(event.target.value)} placeholder="Keep current sizes when they fit, or enter 4,4,4" style={inputStyle} /></label>
     <small>Leave blank to fit the selected players automatically. Enter one 4 or 5 per court to choose the layout. With 32 players, eight 4-player courts; with 28, seven. Refresh the court board to review placement and make any swaps.</small>
   </section>;
 }
