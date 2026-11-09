@@ -215,18 +215,21 @@ def test_session_approval_can_defer_email_until_all_batches_commit(monkeypatch):
     assert result["operation"]["match_ids"] == ["101"]
 
 
-def test_direct_email_carries_receipt_ids_and_blocks_unrecoverable_award_failure(monkeypatch):
+def test_direct_email_carries_receipt_ids_without_retired_award_dependency(monkeypatch):
     from jupr_app.services import direct_match_entry_service as direct
     monkeypatch.setattr(direct, "run_badge_side_effects", lambda **kwargs: {"mode": "inline_error"})
-    def unavailable(**kwargs):
-        assert kwargs["match_ids"] == ["101"]
-        raise RuntimeError("Exact award job unavailable")
-    monkeypatch.setattr(direct, "ensure_notification_badge_job", unavailable)
-    monkeypatch.setattr(direct, "queue_player_updates", lambda **kwargs: pytest.fail("Do not queue an email without award readiness"))
+    monkeypatch.setattr(direct, "ensure_notification_badge_job",
+        lambda **kwargs: pytest.fail("Retired badges cannot block or recover during email queueing"))
+    calls = []
+    monkeypatch.setattr(direct, "queue_player_updates", lambda **kwargs: calls.append(kwargs) or {"mode": "queued"})
     result = _submit(monkeypatch, RpcSupabase(_receipt()))
     assert result["match_write_committed"]
-    assert result["result"]["player_update_queue"]["mode"] == "error"
-    assert result["warnings"]
+    assert result["result"]["player_update_queue"]["mode"] == "queued"
+    assert len(calls) == 1
+    assert calls[0]["match_ids"] == ["101"]
+    assert calls[0]["session_evidence"]["player_updates"] == PLAYER_UPDATES
+    assert calls[0]["badge_refs"] == []
+    assert result["warnings"] == []
 
 
 def test_exact_retry_returns_stored_result_without_postprocessors(monkeypatch):

@@ -2,7 +2,8 @@ const assert = require("node:assert/strict");
 const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, tournamentPoolsReady, tournamentCombinedDivisionsReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
 const ready = { ok: true, club_website_settings_available: true, interclub_seasons_available: true, environment: "production", fly_app_name: "juprleagues-api",
   supabase_project_ref: "dnoockbwfenunhcibwfn", production_business_write_policy: "enabled",
-  staging_write_wave: "none", feature_flags: Object.fromEntries(REQUIRED_FLAGS.map((flag) => [flag, true])) };
+  staging_write_wave: "none", badges_enabled: false, badge_worker_mode: "disabled", badge_queue_leases_enabled: false,
+  feature_flags: { ...Object.fromEntries(REQUIRED_FLAGS.map((flag) => [flag, true])), JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS: false } };
 const contract = { components: { schemas: { AdminWeeklyRecapGenerateRequest: { properties: {
   preserve_edits: { type: "boolean", default: true }, edits_json: { type: "object" },
 } } } } };
@@ -86,6 +87,14 @@ contract.components.schemas.AdminTournamentDrawCombineRequest = {
 
 (async () => {
   assert.equal(operationsReady(ready), true);
+  assert(!REQUIRED_FLAGS.includes("JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS"));
+  for (const [field, active] of [["badges_enabled", true], ["badge_worker_mode", "embedded"], ["badge_queue_leases_enabled", true]]) {
+    assert.equal(operationsReady({ ...ready, [field]: active }), false);
+    assert.equal(operationsReady({ ...ready, [field]: undefined }), false);
+  }
+  for (const value of [true, undefined]) {
+    assert.equal(operationsReady({ ...ready, feature_flags: { ...ready.feature_flags, JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS: value } }), false);
+  }
   assert.equal(operationsReady({ ...ready, club_website_settings_available: undefined }), false);
   assert.equal(operationsReady({ ...ready, interclub_seasons_available: undefined }), false);
   for (const flag of REQUIRED_FLAGS) {
@@ -228,6 +237,15 @@ contract.components.schemas.AdminTournamentDrawCombineRequest = {
     pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
       json: async () => url.endsWith('/openapi.json') ? contract : (++calls === 1 ? { ...ready, feature_flags: {} } : ready) }) });
   assert.equal(calls, 2);
+  clock = 0;
+  calls = 0;
+  await waitForProductionApi({ environment: "production", now: () => clock,
+    pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+      json: async () => url.endsWith('/openapi.json') ? contract : (++calls === 1
+        ? { ...ready, badges_enabled: true, badge_worker_mode: "embedded",
+            feature_flags: { ...ready.feature_flags, JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS: true } }
+        : ready) }) });
+  assert.equal(calls, 2, "The website waits for the retired API before building the public badge removal");
   clock = 0;
   let contracts = 0;
   await waitForProductionApi({ environment: "production", now: () => clock,

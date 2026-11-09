@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 from jupr_app.domain.gamification.program_badge_service import process_pending_program_badges
 from jupr_app.services.production_feature_policy import production_feature_enabled
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue_until_empty
@@ -11,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 def check_pending_badges(db):
+    if not badges_enabled():
+        return
     process_pending_program_badges(db)
     if production_feature_enabled("badges", "tres_palapas"):
         process_badge_eval_queue_until_empty(db, "tres_palapas", max_total_jobs=10, max_wall_clock_seconds=5)
@@ -19,6 +22,8 @@ def check_pending_badges(db):
 def install_program_badge_worker(app, *, get_supabase_client):
     @app.on_event("startup")
     async def start_program_badge_worker():
+        if not badges_enabled():
+            return
         if not production_feature_enabled("badges") and (os.getenv("JUPR_ENV") != "staging" or os.getenv("FLY_APP_NAME") != "juprleagues-api-staging"):
             return
 

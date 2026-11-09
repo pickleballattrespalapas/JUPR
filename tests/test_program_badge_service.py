@@ -172,3 +172,8 @@ def test_production_retry_preserves_requested_club_scope(monkeypatch):
     with pytest.raises(PermissionError, match='paused'):
         service.reconcile_program_badges(other, 'club')
     assert not any(name == 'apply_program_badges_v1' for name, _ in other.calls)
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

@@ -13,6 +13,9 @@ FLAGS = {
 
 def production_feature_enabled(feature: str, club_id: str = "tres_palapas") -> bool:
     """A staging flag or another club can never activate production writes."""
+    if feature == "badges":
+        # Badge retirement is product policy, not a runtime activation flag.
+        return False
     return bool(
         feature in FLAGS
         and str(club_id) == "tres_palapas"

@@ -1,3 +1,4 @@
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 import streamlit as st
 import pandas as pd
 import time
@@ -805,6 +806,10 @@ def render(ctx):
 
 
     st.divider()
+
+    if not badges_enabled():
+        _render_club_social_review(ctx)
+        return
 
     # -------------------------
     # Badge Backfill

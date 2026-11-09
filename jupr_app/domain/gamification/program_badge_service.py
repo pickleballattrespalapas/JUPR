@@ -1,6 +1,8 @@
 """Durable program evaluation, shared by the API worker and historical previews."""
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import logging
 import os
 from datetime import datetime, timezone
@@ -25,6 +27,8 @@ def program_badge_preview(supabase: Any, club_id: str) -> dict:
 
 
 def reconcile_program_badges(supabase: Any, club_id: str, *, dry_run: bool = False) -> dict:
+    if not badges_enabled():
+        raise PermissionError("Badges are retired.")
     preview = program_badge_preview(supabase, club_id)
     if dry_run:
         return preview
@@ -52,12 +56,16 @@ def reconcile_program_badges(supabase: Any, club_id: str, *, dry_run: bool = Fal
 
 
 def program_badge_writes_enabled(club_id: str = "tres_palapas") -> bool:
+    if not badges_enabled():
+        return False
     return production_feature_enabled("badges", club_id) or (
         os.getenv("JUPR_ENV", "").lower() == "staging" and staging_write_wave_allows("badge-diagnostics")
     )
 
 
 def process_pending_program_badges(supabase: Any, *, limit: int = 5) -> dict:
+    if not badges_enabled():
+        return {"processed": 0, "errors": 0}
     if not program_badge_writes_enabled():
         return {"processed": 0, "errors": 0}
     if production_feature_enabled("badges"):

@@ -32,3 +32,11 @@ def require_api_dependency(module_name: str):
                 "Install root and services/api requirements before running API contract tests."
             ) from exc
         pytest.skip(f"optional API dependency '{module_name}' is not installed", allow_module_level=True)
+
+
+@pytest.fixture
+def legacy_badges_enabled(monkeypatch):
+    """Opt in only archived badge-contract tests; normal tests keep retirement on."""
+    from jupr_app.domain.gamification import badge_policy
+
+    monkeypatch.setattr(badge_policy, "BADGES_ENABLED", True)

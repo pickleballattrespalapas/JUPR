@@ -3,7 +3,6 @@ const REQUIRED_FLAGS = [
   "JUPR_ENABLE_TEAM_LEAGUES",
   "JUPR_ENABLE_NEXT_ADMIN_SHELL",
   "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
-  "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
   "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
   "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
   "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
@@ -19,6 +18,10 @@ function operationsReady(health) {
     && health.supabase_project_ref === "dnoockbwfenunhcibwfn"
     && health.production_business_write_policy === "enabled"
     && health.staging_write_wave === "none"
+    && health.badges_enabled === false
+    && health.badge_worker_mode === "disabled"
+    && health.badge_queue_leases_enabled === false
+    && health.feature_flags?.JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS === false
     && REQUIRED_FLAGS.every((flag) => health.feature_flags?.[flag] === true);
 }
 

@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from jupr_app.config import get_next_web_base_url
 from jupr_app.data.client import make_supabase
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 from jupr_app.domain.notifications.player_update_sender import send_pending_player_update_emails
 from jupr_app.services.context import ServiceContext
 
@@ -62,7 +63,7 @@ def run_player_update_email_worker(
                 selected["should_stop"] = should_stop
             summary = send_pending_player_update_emails(ctx, limit=max(1, int(limit)), public_base_url=public_base_url, **selected)
             badge_summary = {"processed": 0, "errored": 0}
-            if (advance_waiting_awards and int(summary.get("waiting_for_awards") or 0)
+            if (badges_enabled() and advance_waiting_awards and int(summary.get("waiting_for_awards") or 0)
                     and not (should_stop is not None and should_stop())):
                 # A publisher may have stopped after queuing its award job.
                 # Advance bounded work off the request thread, then let the next

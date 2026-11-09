@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import html
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 
 def _s(value) -> str:
     return str(value or "").strip()
@@ -60,7 +62,7 @@ def build_player_update_email_subject(digest_json: dict) -> str:
 def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> str:
     digest = digest_json or {}
     summary = digest.get("summary") or {}
-    badges = digest.get("badges_grouped") or digest.get("badges_earned") or []
+    badges = (digest.get("badges_grouped") or digest.get("badges_earned") or []) if badges_enabled() else []
     trophies = digest.get("trophies_earned") or []
     matches = digest.get("matches_played_rows") or []
     links = digest.get("links") or {}
@@ -170,7 +172,7 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
 def build_player_update_email_text(digest_json: dict) -> str:
     digest = digest_json or {}
     summary = digest.get("summary") or {}
-    badges = digest.get("badges_grouped") or digest.get("badges_earned") or []
+    badges = (digest.get("badges_grouped") or digest.get("badges_earned") or []) if badges_enabled() else []
     trophies = digest.get("trophies_earned") or []
     matches = digest.get("matches_played_rows") or []
     links = digest.get("links") or {}

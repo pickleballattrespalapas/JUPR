@@ -208,6 +208,10 @@ def _season_races(ctx, start_date, end_date):
 
 
 def _achievements(ctx, matches):
+    from jupr_app.domain.gamification.badge_policy import badges_enabled
+
+    if not badges_enabled():
+        return []
     from jupr_app.domain.recaps.player_weekly_digest import _award_trigger
     from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 

@@ -5,8 +5,7 @@ import PublicPlayerSearch from "@/components/PublicPlayerSearch";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
 import { getClubLeaderboard } from "@/lib/api";
-import type { LeaderboardBadge, LeaderboardEntry } from "@/lib/api";
-import { publicBadgeRarityLabel } from "@/lib/badgeApi";
+import type { LeaderboardEntry } from "@/lib/api";
 import {
   DEFAULT_LEADERBOARD_CARDS, LEADERBOARD_CARD_LABELS, LEADERBOARD_CARD_DETAILS, leaderboardSettings,
   type LeaderboardCard,
@@ -153,32 +152,6 @@ function matchesPlayed(entry: LeaderboardEntry): number {
   return Number(entry.matches_played ?? (entry.wins ?? 0) + (entry.losses ?? 0));
 }
 
-function badgeHref(clubSlug: string, badge: LeaderboardBadge): string {
-  const id = encodeURIComponent(String(badge.badge_id));
-  return `/clubs/${encodeURIComponent(clubSlug)}/badge-codex?badge=${id}&limit=all#badge-${id}`;
-}
-
-function BadgeStrip({ clubSlug, entry }: { clubSlug: string; entry: LeaderboardEntry }) {
-  const badges = entry.badges ?? [];
-  if (!badges.length) return <span style={{ color: "#64748b" }}>—</span>;
-  const overflow = Math.max(0, Number(entry.badge_count ?? badges.length) - badges.length);
-  return (
-    <span data-testid="leaderboard-badges" style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
-      {badges.map((badge) => (
-        <Link
-          key={badge.badge_id}
-          href={badgeHref(clubSlug, badge)}
-          title={`${badge.name}${badge.rarity ? ` · ${publicBadgeRarityLabel(badge.rarity)}` : ""}`}
-          style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.15rem 0.45rem", textDecoration: "none", whiteSpace: "nowrap" }}
-        >
-          🏆 {badge.name}
-        </Link>
-      ))}
-      {overflow > 0 ? <span style={{ color: "#475569" }}>+{overflow}</span> : null}
-    </span>
-  );
-}
-
 function BarList({
   title,
   href,
@@ -302,16 +275,11 @@ export default async function ClubLeaderboardPage(props: LeaderboardPageProps) {
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Leaderboards</p>
       <h1 style={{ marginTop: 0 }}>{clubName} leaderboards</h1>
-      {data.badges_available === false ? (
-        <Display field="badges">
-          <p role="status" style={{ color: "#475569" }}>Badges are temporarily unavailable. Rankings are still shown.</p>
-        </Display>
-      ) : null}
       <PublicControls navigation resetKey={JSON.stringify(state)} context={[overall ? "Overall" : selectedLeague, state.leagueView === "past" ? "Past leagues" : "", overall ? selectedPeriod?.name || "All time" : "", state.status === "all" ? "All players" : state.status === "inactive" ? "Inactive players" : "Active players", `Sort: ${state.sort === "win_pct" ? "Win %" : state.sort}`, state.search ? `Search: ${state.search}` : ""].filter(Boolean).join(" · ")}>
 <p style={{ color: "#475569", maxWidth: "780px" }}>
         {state.leagueView === "past"
           ? "See final standings for finished leagues. Active players are shown by default."
-          : "See overall and league standings, qualification progress, and earned badges. Active players are shown by default."}
+          : "See overall and league standings and qualification progress. Active players are shown by default."}
       </p>
       <p style={{ color: "#475569" }}><Link href={`/clubs/${encodeURIComponent(clubSlug)}/players`}>Browse all player profiles</Link></p>
 
@@ -454,7 +422,6 @@ export default async function ClubLeaderboardPage(props: LeaderboardPageProps) {
             <div><strong>Win %</strong><br />{percentLabel(data.snapshot.win_pct)}</div>
             <div><strong>Qualification</strong><br />{qualificationLabel(data.snapshot, overall)}</div>
           </div>
-          <div style={{ marginTop: "0.8rem" }}><BadgeStrip clubSlug={clubSlug} entry={data.snapshot} /></div>
         </article>
       ) : null}
 
@@ -487,7 +454,7 @@ export default async function ClubLeaderboardPage(props: LeaderboardPageProps) {
             <caption style={{ position: "absolute", width: "1px", height: "1px", padding: 0, margin: "-1px", overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}>
               {selectedLeague === "OVERALL" ? "Overall" : selectedLeague} leaderboard standings
             </caption>
-            <thead><tr><th style={thStyle}>Rank</th><th style={thStyle}>Player</th><Display field="ratings"><th style={thStyle}>Rating</th></Display><Display field="rating_changes"><th style={thStyle}>Gain</th></Display><Display field="rating_changes"><th style={thStyle}>Gap</th></Display><Display field="match_counts"><th style={thStyle}>Games</th></Display><Display field="records"><th style={thStyle}>W-L</th></Display><Display field="win_percentage"><th style={thStyle}>Win %</th></Display><Display field="qualification"><th style={thStyle}>Qualification</th></Display><Display field="badges"><th style={thStyle}>Badges</th></Display><Display field="player_status"><th style={thStyle}>Status</th></Display></tr></thead>
+            <thead><tr><th style={thStyle}>Rank</th><th style={thStyle}>Player</th><Display field="ratings"><th style={thStyle}>Rating</th></Display><Display field="rating_changes"><th style={thStyle}>Gain</th></Display><Display field="rating_changes"><th style={thStyle}>Gap</th></Display><Display field="match_counts"><th style={thStyle}>Games</th></Display><Display field="records"><th style={thStyle}>W-L</th></Display><Display field="win_percentage"><th style={thStyle}>Win %</th></Display><Display field="qualification"><th style={thStyle}>Qualification</th></Display><Display field="player_status"><th style={thStyle}>Status</th></Display></tr></thead>
             <tbody>
               {entries.map((entry, index) => {
                 const snapshotPlayerId = data.snapshot?.player_id;
@@ -508,7 +475,6 @@ export default async function ClubLeaderboardPage(props: LeaderboardPageProps) {
                     <Display field="records"><td style={tdStyle}>{entry.wins ?? 0}-{entry.losses ?? 0}</td></Display>
                     <Display field="win_percentage"><td style={tdStyle}>{percentLabel(entry.win_pct)}</td></Display>
                     <Display field="qualification"><td style={tdStyle}>{qualificationLabel(entry, overall)}</td></Display>
-                    <Display field="badges"><td style={tdStyle}><BadgeStrip clubSlug={clubSlug} entry={entry} /></td></Display>
                     <Display field="player_status"><td style={tdStyle}>{entry.is_active === false ? "Inactive" : "Active"}</td></Display>
                   </tr>
                 );

@@ -576,3 +576,8 @@ def test_worker_drain_stops_on_max_wall_clock(monkeypatch):
     assert result["stopped_reason"] == "max_wall_clock"
     assert result["loops"] == 1
     assert budgets == [0.9]
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

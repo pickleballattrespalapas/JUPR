@@ -19,8 +19,8 @@ def production(monkeypatch):
         monkeypatch.setenv(key, value)
 
 
-@pytest.mark.parametrize("feature", ["badges", "generators"])
-def test_reviewed_production_club_is_required(production, feature):
+def test_reviewed_production_club_is_required(production):
+    feature = "generators"
     assert production_feature_enabled(feature, "tres_palapas")
     assert not production_feature_enabled(feature, "another_club")
     assert not production_feature_enabled("interclub", "tres_palapas")
@@ -71,3 +71,8 @@ def test_generator_route_gate_opens_only_the_reviewed_club(production):
     with pytest.raises(HTTPException) as error:
         _require_write_gate("another_club")
     assert error.value.status_code == 403
+
+
+def test_retired_badges_cannot_be_reactivated_by_production_flags(production):
+    assert not production_feature_enabled("badges", "tres_palapas")
+    assert production_feature_enabled("generators", "tres_palapas")

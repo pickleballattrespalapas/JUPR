@@ -463,3 +463,8 @@ def test_recompute_append_only_uses_hybrid_safe_legacy_rows():
     badge_pairs = {(row["player_id"], row["badge_id"]) for row in storage.get("player_badges", [])}
     assert (1, "participant") in badge_pairs
     assert (1, "first_win") in badge_pairs
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

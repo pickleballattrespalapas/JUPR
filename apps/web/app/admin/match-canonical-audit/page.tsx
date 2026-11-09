@@ -32,7 +32,7 @@ export default async function MatchCanonicalAuditPage() {
       <p style={{ color: "#334155", maxWidth: "880px" }}>Compare profile-visible matches against canonical player-match facts without writes. Applying normalization requires <code>manage_matches</code>, the current dry-run fingerprint, the exact proposed IDs, a durable operation key, and one atomic FastAPI/Postgres write with readback and recovery links.</p>
       {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>Match Canonical Audit status unavailable. {error}</article> : null}
       <MatchCanonicalAuditPanel apiBase={apiBase()} clubId={clubId} status={status} />
-      <p style={{ marginTop: "1rem" }}><Link href="/admin/badges">Badge Diagnostics</Link> · <Link href="/admin/match-log">Match Log</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin">Operations cockpit</Link></p>
+      <p style={{ marginTop: "1rem" }}><Link href="/admin/match-log">Match Log</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin">Operations cockpit</Link></p>
     </section>
   );
 }

@@ -43,7 +43,7 @@ export default function PrivacyPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Public information</h2>
           <p style={{ color: "#475569" }}>
-            Public pages may display player names, ratings, match history, badges, league results, tournament divisions, public roster entries, partner-board entries, challenge-ladder status, weekly recaps, and event results. Tournament rosters and partner listings do not show phone numbers or email addresses.
+            Public pages may display player names, ratings, match history, league results, tournament divisions, public roster entries, partner-board entries, challenge-ladder status, weekly recaps, and event results. Tournament rosters and partner listings do not show phone numbers or email addresses.
           </p>
         </article>
         <article style={cardStyle}>

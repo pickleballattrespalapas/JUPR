@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from datetime import date, datetime, timedelta, timezone
 import os
 from typing import Any, Callable
@@ -47,7 +49,9 @@ class SessionAwardsRecoveryRequiredError(RuntimeError):
 
 
 def _session_awards_ready(supabase, club_id: str, snapshot: dict[str, Any]) -> bool:
-    """Wait only for the badge jobs belonging to these committed games."""
+    """Retired badges never delay a ratings and match-history update."""
+    if not badges_enabled():
+        return True
     refs = snapshot.get("badge_refs") or []
     if not isinstance(refs, list) or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
         return False
@@ -156,7 +160,7 @@ def _is_send_only_if_changed_and_unchanged(subscription: dict, digest: dict) -> 
 
     summary = digest.get("summary") or {}
     matches_played = int(summary.get("matches_played") or 0)
-    badges = digest.get("badges_earned") or []
+    badges = (digest.get("badges_earned") or []) if badges_enabled() else []
     trophies = digest.get("trophies_earned") or []
     return matches_played == 0 and len(badges) == 0 and len(trophies) == 0
 

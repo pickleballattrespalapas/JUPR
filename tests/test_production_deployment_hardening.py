@@ -106,8 +106,8 @@ def _health_payload(*, feature_profile: str = "release") -> dict:
             "worker_run_log_required": True,
             "email_mode": verifier.expected_production_email_mode(profile=feature_profile),
             "live_player_update_email_enabled": features["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"],
-            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "release"},
-            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "release"},
+            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "pre_badge_retirement", "release"},
+            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "pre_badge_retirement", "release"},
         },
     }
 
@@ -274,7 +274,6 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
         "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
-        "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
         "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
         "JUPR_ENABLE_NEXT_ADMIN_SHELL",
@@ -310,7 +309,6 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
         "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
-        "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
         "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
         "JUPR_ENABLE_NEXT_ADMIN_SHELL",
@@ -1691,7 +1689,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "/database/query\"" not in workflow
     assert workflow.count(
         "${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}"
-    ) == 9
+    ) == 8
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow
@@ -1802,7 +1800,7 @@ def test_production_workflow_verifies_database_runtime_cors_and_final_write_poli
     assert 'sha256sum "$PREDEPLOY_CONFIG"' not in workflow
     assert '&& [ "$DEPLOY_OUTCOME" != "skipped" ]; then' in workflow
     assert workflow.index("--no-pending-only") < workflow.index("flyctl secrets set")
-    assert workflow.count('flyctl ssh console --machine "$FLY_SSH_MACHINE_ID"') == 6
+    assert workflow.count('flyctl ssh console --machine "$FLY_SSH_MACHINE_ID"') == 5
     assert workflow.index("select_fly_verification_machine.py") < workflow.index("production_email_probe.py")
     assert 'expected_production_feature_flags(profile="release")' in workflow
     assert 'PRODUCTION_FEATURE_PROFILE="$live_feature_profile"' in workflow
@@ -1903,7 +1901,7 @@ def test_email_release_cannot_attest_missing_sender_or_worker():
 def test_smtp_authentication_probe_runs_before_any_production_mutation():
     workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
     assert workflow.index("production_email_probe.py") < workflow.index("flyctl secrets set")
-    assert "baseline|pre_email|pre_awards|pre_operations|pre_team_leagues|pre_player_editor|pre_match_correction|release" in workflow
+    assert "baseline|pre_email|pre_awards|pre_operations|pre_team_leagues|pre_player_editor|pre_match_correction|pre_badge_retirement|release" in workflow
     assert "JUPR_EMAIL_MODE=dry_run" not in workflow
     assert "expected_production_email_mode(profile=" in workflow
 
@@ -1924,10 +1922,25 @@ def test_awards_release_preserves_live_email_and_exact_previous_profile():
 
 def test_match_correction_release_preserves_previous_profile_and_no_destructive_writes():
     baseline = verifier.expected_production_feature_flags(profile="pre_match_correction")
-    release = verifier.expected_production_feature_flags()
+    release = verifier.expected_production_feature_flags(profile="pre_badge_retirement")
     assert {k for k in release if release[k] != baseline[k]} == {
         "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT", "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
     }
     assert not release["JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE"]
     assert verifier.production_feature_profile_from_health(_health_payload(feature_profile="pre_match_correction")) == "pre_match_correction"
+
+
+def test_badge_retirement_preserves_previous_profile_and_live_email():
+    previous = _health_payload(feature_profile="pre_badge_retirement")
+    released = _health_payload(feature_profile="release")
+    assert verifier.production_feature_profile_from_health(previous) == "pre_badge_retirement"
+    assert verifier.production_feature_profile_from_health(released) == "release"
+    assert verifier.expected_production_email_mode(profile="pre_badge_retirement") == "live"
+    assert {key for key in previous["feature_flags"]
+            if previous["feature_flags"][key] != released["feature_flags"][key]} == {
+        "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS"
+    }
+    assert not released["feature_flags"]["JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS"]
+    workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
+    assert "activate_operations_badges --apply" not in workflow

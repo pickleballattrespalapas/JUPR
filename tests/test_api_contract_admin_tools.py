@@ -331,7 +331,7 @@ def test_admin_tools_overview_and_role_update(monkeypatch):
     assert supabase.storage["admin_activity_log"]
 
 
-def test_admin_tools_badge_recompute_permission_is_mode_specific(monkeypatch):
+def test_admin_tools_badge_recompute_permission_is_mode_specific(monkeypatch, legacy_badges_enabled):
     supabase = FakeSupabase()
     install_env(monkeypatch, supabase)
     monkeypatch.setattr(

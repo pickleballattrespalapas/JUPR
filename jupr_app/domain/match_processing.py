@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from datetime import datetime, timezone
 import logging
 from typing import Any, Callable
@@ -614,7 +616,7 @@ def process_matches(
     notification_badge_refs: list[str] = []
     if db_matches:
         committed_match_ids = insert_match_chunks_with_rating_scope_fallback(db_matches=db_matches, supabase=supabase, sb_retry=sb_retry)
-        if supabase is not None and has_badge_eligible_match:
+        if badges_enabled() and supabase is not None and has_badge_eligible_match:
             enqueue_result = enqueue_badge_eval(
                 supabase,
                 club_id=str(club_id),

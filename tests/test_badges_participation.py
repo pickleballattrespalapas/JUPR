@@ -150,7 +150,7 @@ def test_compute_lifetime_games_filters_popups_and_invalid_scores():
     assert counts == {1: 1, 2: 1}
 
 
-def test_participation_badges_awarded_via_engine_idempotent():
+def test_participation_badges_awarded_via_engine_idempotent(legacy_badges_enabled):
     rows = [{"player_id": 1, "score_t1": 11, "score_t2": 9, "club_id": "club"} for _ in range(210)]
     rows.append({"player_id": 2, "score_t1": 11, "score_t2": 9, "club_id": "club"})
     df_matches = pd.DataFrame(rows)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.data.public_read_cache import public_read_cache, public_source_key
 from jupr_app.domain.player_search import matches_player_search
@@ -365,6 +367,8 @@ def _scope_options(
 
 
 def _badge_map(supabase: Any, *, club_id: str, player_ids: tuple[str, ...]) -> dict[str, list[dict[str, Any]]]:
+    if not badges_enabled():
+        return {}
     if not player_ids:
         return {}
     return public_read_cache.get(
@@ -773,7 +777,7 @@ def build_public_leaderboard(
             "filters": {"league_view": clean_league_view, "status": clean_status, "search": clean_search, "sort": clean_sort},
             "summary": {"ranked_players": len(base_rows), "active_players": active_count,
                         "inactive_players": len(base_rows) - active_count, "leaderboard_scopes": len(scopes), "filtered_players": total},
-            "leaderboard": [], "snapshot": None, "highlights": {}, "badges_available": True,
+            "leaderboard": [], "snapshot": None, "highlights": {}, "badges_available": badges_enabled(),
             "pagination": pagination,
             "stat_ranking": {"key": stat, "entries": entries, "total_qualified": total_qualified,
                              "minimum": minimum, "minimum_metric": minimum_metric,
@@ -820,7 +824,7 @@ def build_public_leaderboard(
     visible_rows = [*page_rows, *([snapshot] if snapshot else []),
                     *(row for entries in highlights.values() for row in entries if "badges" in row)]
     visible_ids = tuple(sorted({str(row["player_id"]) for row in visible_rows}))
-    badges_available = True
+    badges_available = badges_enabled()
     try:
         badges = _badge_map(supabase, club_id=cid, player_ids=visible_ids) if cid else {}
     except LeaderboardDataUnavailable:

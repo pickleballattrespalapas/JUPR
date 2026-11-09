@@ -1,4 +1,5 @@
 from __future__ import annotations
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 
 import logging
 import os
@@ -415,6 +416,10 @@ def _render_earners_section(badge_id: str, earners_count, df_player_badges, df_p
 
 
 def render(ctx) -> None:
+    if not badges_enabled():
+        st.info("This page is no longer available.")
+        return
+
     st.header("Badge Codex")
     st.caption("A full ledger of badges, with reels for the ones already on tape.")
 

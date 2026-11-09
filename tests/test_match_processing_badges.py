@@ -232,3 +232,8 @@ def test_popup_matches_do_not_trigger_live_awards():
     )
     assert result["badge_summary"]["mode"] == "skipped"
     assert sb.tables["player_badges"] == []
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

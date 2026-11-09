@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import os
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
@@ -125,7 +127,10 @@ def _load_ctx(supabase: Any, *, club_id: str, match_limit: int = 5000) -> Simple
 
 
 def build_admin_badge_diagnostics_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
-    if not is_admin_badge_diagnostics_enabled():
+    if not badges_enabled():
+        return {"enabled": False, "status": "retired", "options_endpoint": None,
+                "warnings": [], "badge_count": 0, "player_badge_count": 0}
+    if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
         return {
             "enabled": False,
             "status": "guarded_off",
@@ -172,7 +177,7 @@ def build_admin_badge_diagnostics_status(supabase: Any | None, *, club_id: str) 
 
 
 def list_admin_badge_diagnostic_options(supabase: Any, *, club_id: str) -> dict[str, Any]:
-    if not is_admin_badge_diagnostics_enabled():
+    if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
         raise PermissionError("Next Badge Diagnostics is disabled.")
     try:
         player_rows = _safe_rows(
@@ -249,7 +254,7 @@ def update_admin_badge_definition_state(
     operation_key: str,
     source: str = "next_badge_definition_state",
 ) -> dict[str, Any]:
-    if not is_admin_badge_diagnostics_enabled():
+    if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
         raise PermissionError("Next Badge Diagnostics is disabled.")
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_BADGE_STATE:
         raise ValueError(f"Type {CONFIRM_BADGE_STATE} to update badge state.")
@@ -468,7 +473,7 @@ def build_admin_badge_debug(
     league_id: str | None = None,
     match_limit: int = 5000,
 ) -> dict[str, Any]:
-    if not is_admin_badge_diagnostics_enabled():
+    if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
         raise PermissionError("Next Badge Diagnostics is disabled.")
     ctx = _load_ctx(supabase, club_id=str(club_id), match_limit=int(match_limit))
     report = build_badge_debug_report(
@@ -496,7 +501,7 @@ def build_admin_badge_audit(
     include_revoked: bool = False,
     match_limit: int = 5000,
 ) -> dict[str, Any]:
-    if not is_admin_badge_diagnostics_enabled():
+    if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
         raise PermissionError("Next Badge Diagnostics is disabled.")
     report = build_badge_audit_report(
         supabase,
@@ -534,7 +539,7 @@ def run_admin_badge_recompute(
     revoke_reason: str | None = None,
     source: str = "next_badge_recompute",
 ) -> dict[str, Any]:
-    if not is_admin_badge_diagnostics_enabled():
+    if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
         raise PermissionError("Next Badge Diagnostics is disabled.")
     clean_mode = _clean_text(mode or "dry-run", limit=40).lower()
     if clean_mode not in {"dry-run", "append-only", "strict"}:
@@ -685,7 +690,7 @@ def revoke_admin_player_badge(
     revoke_reason: str | None = None,
     source: str = "next_badge_revoke",
 ) -> dict[str, Any]:
-    if not is_admin_badge_diagnostics_enabled():
+    if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
         raise PermissionError("Next Badge Diagnostics is disabled.")
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_REVOKE:
         raise ValueError(f"Type {CONFIRM_REVOKE} to revoke a badge row.")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from datetime import datetime, timezone
 import logging
 from typing import Any, Iterable
@@ -25,6 +27,8 @@ def enqueue_badge_eval(
     match_id: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if not badges_enabled():
+        return {"queued": False, "reason": "badges_retired"}
     if supabase is None or not club_id or not event_type:
         return {"queued": False, "reason": "invalid_input"}
     payload_json = dict(payload or {})
@@ -68,6 +72,8 @@ def enqueue_badge_eval(
 
 
 def dequeue_badge_eval(supabase: Any, *, club_id: str) -> dict[str, Any] | None:
+    if not badges_enabled():
+        return None
     clean_club_id = str(club_id or "").strip()
     if supabase is None:
         return None

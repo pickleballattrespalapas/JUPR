@@ -24,7 +24,7 @@ export default function RecapEdition({
   return (
     <div className="recap-edition" data-testid="recap-edition">
       {scope ? <p>{scope}</p> : null}
-      {blocks.map((block, blockIndex) => (
+      {blocks.map((block, blockIndex) => block.key === "achievements" ? null : (
         <section
           key={block.key}
           data-section={block.key}

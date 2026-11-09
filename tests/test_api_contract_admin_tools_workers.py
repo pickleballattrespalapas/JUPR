@@ -98,12 +98,13 @@ def install_write_env(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
 
 
-def test_admin_worker_status_counts_queue(monkeypatch):
+def test_admin_worker_status_reports_retired_without_badge_queries(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
     payload = build_admin_worker_status(FakeSupabase(), club_id="club")
-    assert payload["queue_counts"]["pending"]["count"] == 1
-    assert payload["queue_counts"]["error"]["count"] == 1
-    assert payload["badge_recompute_run_count"]["count"] == 1
+    assert payload["status"] == "retired"
+    assert payload["queue_counts"] == {}
+    assert payload["queue_modes"] == []
+    assert payload["badge_recompute_modes"] == []
 
 
 def test_admin_rating_reports_are_club_scoped_read_only_and_match_streamlit_calculations(monkeypatch):
@@ -330,7 +331,7 @@ def test_tournament_match_backfill_apply_rejects_before_stale_preview_read(monke
     assert supabase.storage == before
 
 
-def test_badge_queue_worker_requires_confirmation(monkeypatch):
+def test_badge_queue_worker_requires_confirmation(monkeypatch, legacy_badges_enabled):
     install_write_env(monkeypatch)
     try:
         run_admin_badge_queue_worker(
@@ -350,7 +351,7 @@ def test_badge_queue_worker_requires_confirmation(monkeypatch):
         raise AssertionError("expected confirmation error")
 
 
-def test_badge_queue_worker_writes_audit(monkeypatch):
+def test_badge_queue_worker_writes_audit(monkeypatch, legacy_badges_enabled):
     install_write_env(monkeypatch)
     captured = {}
 
@@ -379,7 +380,7 @@ def test_badge_queue_worker_writes_audit(monkeypatch):
     assert supabase.storage["admin_activity_log"]
 
 
-def test_badge_recompute_apply_requires_confirmation(monkeypatch):
+def test_badge_recompute_apply_requires_confirmation(monkeypatch, legacy_badges_enabled):
     install_write_env(monkeypatch)
     try:
         run_admin_badge_recompute_job(
@@ -406,7 +407,7 @@ def test_badge_recompute_apply_requires_confirmation(monkeypatch):
         raise AssertionError("expected confirmation error")
 
 
-def test_badge_recompute_invokes_python_domain(monkeypatch):
+def test_badge_recompute_invokes_python_domain(monkeypatch, legacy_badges_enabled):
     install_write_env(monkeypatch)
     monkeypatch.setattr(
         "jupr_app.services.admin_tools_service.run_badge_recompute",

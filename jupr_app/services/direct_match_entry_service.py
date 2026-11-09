@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import hashlib
 import json
 import logging
@@ -332,7 +334,7 @@ def _post_commit_side_effects(
 
     try:
         badge_refs = list(badge_summary.get("notification_badge_refs") or [])
-        if side_effect_context.get("has_badge_eligible_match") and badge_summary.get("mode") in {"error", "inline_error"}:
+        if badges_enabled() and side_effect_context.get("has_badge_eligible_match") and badge_summary.get("mode") in {"error", "inline_error"}:
             badge_refs = [ensure_notification_badge_job(supabase=supabase, club_id=str(club_id),
                 match_ids=match_ids, player_ids=sorted(affected_players))]
         player_update_queue = queue_player_updates(

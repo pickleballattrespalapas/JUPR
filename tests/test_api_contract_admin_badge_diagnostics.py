@@ -140,3 +140,8 @@ def test_badge_definition_state_requires_run_replay(monkeypatch):
     assert response.json()["detail"] == "insufficient permission"
     assert tables["badges"][0]["state"] == "live"
     assert tables["admin_activity_log"][-1]["after_json"]["required_permission"] == "run_replay"
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")
