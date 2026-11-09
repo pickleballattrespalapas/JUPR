@@ -36,6 +36,15 @@ pending claim order, one unexpired lease per club, wrong-token rejection, expiry
 fenced completion, untouched legacy jobs, no expired-job replay and RPC grants.
 This isolated check does not replace hosted migration-history and RLS checks.
 
+The candidate's production migration contract includes the new SQL fingerprint
+and requires the logical ledger name `badge_queue_worker_leases`. This describes
+what a future reviewed production candidate must have; it does not attest that
+production has the migration. Production has not received this migration and
+must fail the deployment ledger check while the name is absent. The staging
+ledger timestamp `20261109000605` is not a production expected-head value. Leave
+production head configuration unchanged until the exact production application
+is separately authorized and its resulting ledger is verified.
+
 ## Release sequence
 
 1. Apply the new queue-lease migration to staging and verify the SQL behavior
