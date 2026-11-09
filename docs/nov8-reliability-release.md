@@ -1,6 +1,6 @@
 # November 8 PCS reliability repair
 
-Status: implementation and verification; production release and capacity change have not been performed.
+Status: implementation and verification; production release has not been performed. Joe selected calculation improvements plus a separate worker, followed by measurement before any API capacity upgrade.
 
 ## Core candidate
 
@@ -12,11 +12,13 @@ Status: implementation and verification; production release and capacity change 
 - Log request duration, database call wall/CPU observations and calculation phases, with route templates and no player or credential values. These measurements do not partition all network, queue and CPU wait.
 - Remove the historical badge-activation command from routine production deployment. Core changes require no schema migration.
 
-## Proposed capacity mitigation
+## Selected performance approach
 
-Keep two existing DFW API machines and change each from shared-cpu-1x / 1 GB to performance-1x / 2 GB. The checked-in candidate fly.toml records this proposal; it has not been deployed. Dallas pricing checked November 8 at https://fly.io/pricing/ estimates $82.50/month for the pair, about $65.77/month above the current $16.73 compute estimate. Excludes storage, network, taxes and any future worker. Exact production authorization is still required.
+Keep the two existing DFW API machines at shared-cpu-1x / 1 GB. The checked-in candidate `fly.toml` now preserves that size; the earlier performance-1x / 2 GB proposal is deferred. This candidate contains calculation/read optimizations and request timing, but does not provision or activate a worker.
 
-The basis is exhausted shared CPU burst credit, approximately 90% quota throttling and one observed 1 GB OOM exit. It is not a promise of a particular response time. A third, dedicated badge worker requires a separately priced and verified rollout.
+Complete the separate worker candidate's staging validation and deploy one worker with its own CPU and memory in a reviewed rollout. Establish its concrete region, machine size and recurring cost before the production release. Compare representative request latency/errors, API CPU throttling and memory, and worker queue progress before deciding whether the API machines still need upgrading.
+
+The incident evidence remains exhausted shared CPU burst credit, approximately 90% quota throttling and one observed 1 GB OOM exit. Neither the optimizations nor worker isolation has yet demonstrated production recovery. Production promotion, migration and worker activation remain separate release actions; selection of this approach does not attest that those actions have occurred.
 
 ## Retained incident measurements
 
@@ -45,5 +47,5 @@ Vercel runtime logs also showed timeout, socket/connection failures, 503s and re
 - Stage core changes through a reviewed PR into staging. Require the exact merge SHA's successful Fly deployment and handoff artifact attesting matching Vercel identity and ready_for_manual_testing.
 - Production promotion uses only selected fixes on rollback-feb8, never a wholesale staging merge. The existing API image is e5d832fee3803a33f8c040ec7458955e67978aa1; the web/production base is ed899b6baf519f0f86418bfad9a354b8538d475a. Their intervening diff contains no API implementation changes.
 - The production migration contract remains unchanged and must pass against the actual ledger. Do not alter its expected head merely to bypass a check.
-- Exact approval must cover the production branch merge (website deploy), API release and proposed capacity cost. Existing runtime workers resume normal activity on restart; there is no historical backfill or explicit email-send step in this candidate.
+- Exact approval must cover the production branch merge (website deploy) and API release. This candidate preserves API machine sizing and includes no worker provisioning. A worker production release must separately cover its migration, coordinated activation and concrete recurring cost. Existing runtime workers resume normal activity on restart; there is no historical backfill or explicit email-send step in this candidate.
 - Capture the prior immutable API image, configuration and live feature profile before release. API rollback does not roll back the website, schema or business records.

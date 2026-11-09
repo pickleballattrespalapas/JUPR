@@ -84,8 +84,8 @@ kill_timeout = 300
     path = "/health"
 
 [[vm]]
-  # Sustained CPU and memory headroom for the observed Nov 8 workload.
-  # Keep this in source so later deploys preserve the reviewed capacity.
-  memory = "2gb"
-  cpu_kind = "performance"
+  # Preserve API capacity while calculation improvements and worker isolation
+  # are measured. API resizing is a separate decision after those results.
+  memory = "1gb"
+  cpu_kind = "shared"
   cpus = 1
