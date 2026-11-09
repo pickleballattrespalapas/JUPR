@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from jupr_app.data.client import make_supabase
 from jupr_app.domain.gamification.badge_lease import WORKER_ID, external_worker_club_id, isolated_worker_context, leases_enabled
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue_until_empty
-from jupr_app.domain.gamification.program_badge_service import process_pending_program_badges
+from jupr_app.domain.gamification.program_badge_service import process_pending_program_badges, program_badge_writes_enabled
 from jupr_app.workers.badge_queue_worker import _resolve_supabase_config
 
 logger = logging.getLogger("jupr.badge.worker")
@@ -49,6 +49,11 @@ def run_cycle(db, club_id: str, *, stop: threading.Event | None = None) -> dict:
     program = {"processed": 0, "errors": 0}
     queue = {"total_processed": 0, "total_errored": 0, "stopped_reason": "shutdown"}
     if stop is not None and stop.is_set():
+        return {"program": program, "queue": queue}
+    if os.getenv("JUPR_ENV") == "staging" and not program_badge_writes_enabled():
+        # The staging stop switch applies to both processors. A queue drain
+        # can enqueue completed seasons and claim/write jobs even when empty.
+        queue["stopped_reason"] = "writes_disabled"
         return {"program": program, "queue": queue}
     with isolated_worker_context():
         program = process_pending_program_badges(db, limit=1, club_id=club_id)

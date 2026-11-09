@@ -340,7 +340,9 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
-          python scripts/check_staging_badge_prerequisites.py
+          if [ "$JUPR_STAGING_WRITE_WAVE" != "none" ]; then
+            python scripts/check_staging_badge_prerequisites.py
+          fi
           flyctl machines list -a "$FLY_APP_NAME" --json > staging-machines-before.json
           python scripts/staging_badge_topology.py --inventory staging-machines-before.json --phase before > staging-topology-before.json
           mapfile -t worker_ids < <(python -c 'import json; print("\n".join(json.load(open("staging-topology-before.json"))["worker_ids"]))')
@@ -439,7 +441,9 @@ jobs:
           set -euo pipefail
           flyctl machines list -a "$FLY_APP_NAME" --json > staging-machines-api.json
           python scripts/staging_badge_topology.py --inventory staging-machines-api.json --phase api > staging-topology-api.json
-          python scripts/check_staging_badge_prerequisites.py
+          if [ "$JUPR_STAGING_WRITE_WAVE" != "none" ]; then
+            python scripts/check_staging_badge_prerequisites.py
+          fi
           image_ref="$(python -c 'import json; print(json.load(open("staging-topology-api.json"))["image"])')"
           flyctl deploy --remote-only --ha=false --process-groups badge_worker \
             -a "$FLY_APP_NAME" --config fly.staging.toml --image "$image_ref"

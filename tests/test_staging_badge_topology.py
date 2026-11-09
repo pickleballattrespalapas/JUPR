@@ -80,3 +80,9 @@ def test_rechecks_processing_after_all_apis_are_upgraded():
     phase_api = workflow.index("--phase api")
     gate = workflow.index("python scripts/check_staging_badge_prerequisites.py", phase_api)
     assert phase_api < gate < workflow.index("--process-groups badge_worker")
+
+
+def test_emergency_none_wave_can_pause_even_with_an_unresolved_claim():
+    workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text()
+    guarded = 'if [ "$JUPR_STAGING_WRITE_WAVE" != "none" ]; then\n            python scripts/check_staging_badge_prerequisites.py\n          fi'
+    assert workflow.count(guarded) == 2

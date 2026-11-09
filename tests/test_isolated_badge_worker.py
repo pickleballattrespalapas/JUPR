@@ -105,6 +105,27 @@ def test_shutdown_during_program_phase_does_not_claim_queue_job(enabled, monkeyp
     assert worker.run_cycle(None, "tres_palapas", stop=stop)["program"]["processed"] == 0
 
 
+@pytest.mark.parametrize("wave", ["none", "communications", "league-live-submit", ""])
+def test_staging_write_stop_prevents_all_worker_database_processing(enabled, monkeypatch, wave):
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", wave)
+    monkeypatch.setattr(worker, "process_pending_program_badges", lambda *a, **k: pytest.fail("Program processing while writes disabled"))
+    monkeypatch.setattr(worker, "process_badge_eval_queue_until_empty", lambda *a, **k: pytest.fail("Queue processing while writes disabled"))
+    assert worker.run_cycle(object(), "tres_palapas") == {
+        "program": {"processed": 0, "errors": 0},
+        "queue": {"total_processed": 0, "total_errored": 0, "stopped_reason": "writes_disabled"},
+    }
+
+
+@pytest.mark.parametrize("wave", ["open", "badge-diagnostics"])
+def test_authorized_staging_wave_allows_both_worker_processors(enabled, monkeypatch, wave):
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", wave)
+    calls = []
+    monkeypatch.setattr(worker, "process_pending_program_badges", lambda *a, **k: calls.append("program") or {"processed": 0, "errors": 0})
+    monkeypatch.setattr(worker, "process_badge_eval_queue_until_empty", lambda *a, **k: calls.append("queue") or {"total_processed": 0, "total_errored": 0})
+    worker.run_cycle(object(), "tres_palapas")
+    assert calls == ["program", "queue"]
+
+
 def test_shutdown_keeps_inflight_queue_heartbeat_until_fenced_completion(enabled, monkeypatch):
     stop, heartbeat = threading.Event(), threading.Event()
     calls = []
