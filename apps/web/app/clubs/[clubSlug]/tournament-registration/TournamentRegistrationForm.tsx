@@ -503,6 +503,12 @@ export default function TournamentRegistrationForm({
         setError(response.error || "We couldn’t continue your registration. Please try again.");
         return;
       }
+      if ("mode" in response.data) {
+        setRecoveryEmail(contact.email.trim());
+        setRecovery(response.data);
+        setMode("recovery");
+        return;
+      }
       if (!response.data.can_start_new) {
         setRecoveryEmail(contact.email.trim());
         setMode("edit");
@@ -902,7 +908,7 @@ export default function TournamentRegistrationForm({
         <h2 style={{ margin: 0 }}>{recovery.edit_link_status === "sent" ? "Check your email" : "You’re already registered"}</h2>
         <p style={{ color: "#475569", margin: 0 }}>{recovery.message}</p>
         {recovery.edit_link_status !== "locked" ? <>
-          <p style={{ color: "#475569", margin: 0 }}>Use the edit link to add events or change your registration. The event choices from this form haven’t been saved.</p>
+          <p style={{ color: "#475569", margin: 0 }}>Use the edit link to add events or change your registration.{step > 1 ? " The event choices from this form haven’t been saved." : ""}</p>
           <p style={{ color: "#475569", margin: 0 }}>A partner may have registered you already. Your existing events and partnerships are still in place.</p>
           <button type="button" onClick={() => setMode("edit")} style={secondaryButtonStyle}>Request another edit link</button>
         </> : null}

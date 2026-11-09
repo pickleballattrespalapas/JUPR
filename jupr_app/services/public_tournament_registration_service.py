@@ -882,9 +882,9 @@ def resolve_public_tournament_registration_profile(
 ) -> dict[str, Any]:
     """Preflight the first registration step without trusting browser identity.
 
-    The endpoint intentionally returns only exact-match, public-safe profile
-    suggestions. A suggestion can prefill the browser wizard, but a new public
-    registration remains unlinked until staff verify the player relationship.
+    Existing tournament emails enter verified edit recovery before profile or
+    event selection. New entrants receive public-safe profile suggestions and
+    remain unlinked until staff verify the player relationship.
     """
 
     if _clean_text(payload.get("website")):
@@ -896,13 +896,6 @@ def resolve_public_tournament_registration_profile(
     last_name = _clean_text(payload.get("last_name"), limit=80)
     if not first_name or not last_name:
         raise ValueError("First and last name are required.")
-    age = _validated_age(payload.get("age"), label="Age")
-    if age is None:
-        raise ValueError("Age is required.")
-    gender = _clean_text(payload.get("gender"), limit=40)
-    if not gender:
-        raise ValueError("Gender is required.")
-
     page = build_public_tournament_registration_page(
         supabase,
         club_id=str(club_id),
@@ -916,8 +909,21 @@ def resolve_public_tournament_registration_profile(
     if not tournament_id:
         raise ValueError("Tournament registration was not found.")
 
-    # Let returning registrants complete the same form. Submission hands them
-    # into email-verified editing without exposing or overwriting their entry.
+    # Age, gender, rating and event choices are editable details, not identity.
+    # The normalized email is the tournament registration key; a name/profile
+    # match alone must never redirect recovery to a different email address.
+    if get_registration_by_email(supabase, tournament_id, email):
+        raise DuplicateTournamentRegistrationError(
+            "You’re already registered with this email. Request an edit link to make changes."
+        )
+
+    age = _validated_age(payload.get("age"), label="Age")
+    if age is None:
+        raise ValueError("Age is required.")
+    gender = _clean_text(payload.get("gender"), limit=40)
+    if not gender:
+        raise ValueError("Gender is required.")
+
     if not page.get("registration_open"):
         return {
             "ok": True,

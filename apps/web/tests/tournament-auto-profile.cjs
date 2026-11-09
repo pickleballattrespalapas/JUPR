@@ -82,10 +82,10 @@ async function mount(Component, patch = {}) {
     createNodeMock: node => node.type === "form" ? {} : node.type === "fieldset" ? { querySelectorAll: () => [] } : null
   }); });
 }
-async function startNew() {
+async function startNew(age = "70") {
   await mount(NewForm);
   await act(async () => button("Start a registration").props.onClick());
-  for (const [label, value] of [["First name", "Fixture"], ["Last name", "Player"], ["Email", "fixture@example.invalid"], ["Age", "70"], ["Gender", "Men"]]) await change(label, value);
+  for (const [label, value] of [["First name", "Fixture"], ["Last name", "Player"], ["Email", "fixture@example.invalid"], ["Age", age], ["Gender", "Men"]]) await change(label, value);
   await act(async () => button("Continue").props.onClick());
 }
 async function testNew() {
@@ -308,6 +308,26 @@ async function testExistingRegistrationHandoff() {
   }
   submitResponse = async () => ({ error: "Test stops before writing" });
 }
+async function testExistingRegistrationAtFirstContinue() {
+  for (const status of ["sent", "unavailable", "locked", "dry_run"]) {
+    const message = status === "sent" ? "We’ve sent an email with your edit link." : "Please check the recovery instructions.";
+    resolveResponse = async () => ({ data: { ok: true, mode: "existing_registration", edit_link_status: status, message } });
+    await startNew("39");
+    const notice = renderer.root.findByProps({ "data-testid": "registration-existing-handoff" });
+    assert.ok(text(notice).includes(message));
+    assert.equal(text(notice).includes("Check your email"), status === "sent");
+    assert.equal(text(notice).includes("haven’t been saved"), false, "No event choices were requested yet");
+    assert.equal(renderer.root.findAllByProps({ "data-testid": "registration-new-wizard" }).length, 0);
+    assert.equal(submissions.length, 0, "A returning player never needs to submit a new registration");
+    assert.equal(requests.at(-1).age, 39, "The check still runs after the player changes their age");
+    assert.equal(global.window.location.href, undefined);
+    if (status !== "locked") {
+      await act(async () => button("Request another edit link").props.onClick());
+      assert.ok(renderer.root.findByProps({ initialEmail: "fixture@example.invalid" }));
+    }
+  }
+  resolveResponse = async () => result();
+}
 async function main() {
   const originalWindow = global.window;
   const originalFormData = global.FormData;
@@ -316,7 +336,7 @@ async function main() {
     const input = renderer.root.findAll(node => ["input", "select", "textarea"].includes(node.type) && node.props.name === name)[0];
     return input?.props.value ?? input?.props.defaultValue ?? null;
   } };
-  try { await testNew(); await testExistingRegistrationHandoff(); await testEdit(); await testMissingProfileRatings(); await testStaleEditLookup(); await testNameSuggestionsBeforeContactDetails(); console.log("Automatic profiles: new/edit typeahead, selection, save payloads, duplicates, opt out, existing links, stale responses and manual fallback passed."); }
+  try { await testNew(); await testExistingRegistrationHandoff(); await testExistingRegistrationAtFirstContinue(); await testEdit(); await testMissingProfileRatings(); await testStaleEditLookup(); await testNameSuggestionsBeforeContactDetails(); console.log("Automatic profiles: new/edit typeahead, selection, save payloads, duplicates, opt out, existing links, stale responses and manual fallback passed."); }
   finally { if (renderer) await act(async () => renderer.unmount()); global.window = originalWindow; global.FormData = originalFormData; }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

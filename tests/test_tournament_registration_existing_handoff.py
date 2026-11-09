@@ -50,14 +50,20 @@ PATH = "/clubs/tres-palapas/tournament-registration"
 DOMAIN_TABLES = ("tournament_registrations", "tournament_registration_selections", "tournament_registration_team_links", "players")
 
 
-def test_partner_can_finish_form_then_use_emailed_link_to_add_event(partner_handoff):
+@pytest.mark.parametrize("age", [61, 62, 39])
+def test_partner_is_recognized_on_first_continue_regardless_of_age(partner_handoff, age):
     api, _, storage, payload, deliveries = partner_handoff
+    payload = {**payload, "age": age}
     before = {key: deepcopy(storage[key]) for key in DOMAIN_TABLES}
     preflight = api.post(PATH + "/profile-resolution", json=payload)
     assert preflight.status_code == 200
-    assert preflight.json()["can_start_new"] is True
-    assert deliveries == []
+    assert preflight.json()["mode"] == "existing_registration"
+    assert preflight.json()["edit_link_status"] == "sent"
+    assert preflight.headers["cache-control"] == "no-store, private"
+    assert len(deliveries) == 1
+    assert {key: storage[key] for key in DOMAIN_TABLES} == before
 
+    # Keep the final-submit fallback for older tabs and concurrent registrations.
     response = api.post(PATH, json=payload)
     assert response.status_code == 200
     outcome = response.json()
@@ -87,10 +93,11 @@ def test_partner_can_finish_form_then_use_emailed_link_to_add_event(partner_hand
     assert {row["event_option_id"] for row in storage["tournament_registration_selections"] if row["registration_id"] == "reg-partner"} == {"event1", "singles"}
 
 
-def test_repeat_submissions_and_manual_request_send_only_one_link(partner_handoff):
+@pytest.mark.parametrize("path", [PATH, PATH + "/profile-resolution"])
+def test_repeat_submissions_and_manual_request_send_only_one_link(partner_handoff, path):
     api, _, _, payload, deliveries = partner_handoff
-    first = api.post(PATH, json=payload).json()
-    second = api.post(PATH, json={**payload, "attempt_id": "different-browser-attempt"}).json()
+    first = api.post(path, json=payload).json()
+    second = api.post(path, json={**payload, "age": 40, "attempt_id": "different-browser-attempt"}).json()
     assert first == second
     manual = api.post(PATH + "/edit-link/request", json={
         "registration_slug": "tres-open", "email": payload["email"], "idempotency_key": "another-request-key",
@@ -100,7 +107,8 @@ def test_repeat_submissions_and_manual_request_send_only_one_link(partner_handof
     assert len(deliveries) == 1
 
 
-def test_email_failure_is_honest_preserves_registration_and_does_not_retry_send(partner_handoff, monkeypatch):
+@pytest.mark.parametrize("path", [PATH, PATH + "/profile-resolution"])
+def test_email_failure_is_honest_preserves_registration_and_does_not_retry_send(partner_handoff, monkeypatch, path):
     api, _, storage, payload, deliveries = partner_handoff
     before = {key: deepcopy(storage[key]) for key in DOMAIN_TABLES}
 
@@ -110,7 +118,7 @@ def test_email_failure_is_honest_preserves_registration_and_does_not_retry_send(
 
     monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", failed)
     for _ in range(2):
-        response = api.post(PATH, json=payload)
+        response = api.post(path, json=payload)
         assert response.status_code == 200
         assert response.json()["edit_link_status"] == "unavailable"
         assert "couldn’t confirm" in response.json()["message"]
@@ -118,19 +126,41 @@ def test_email_failure_is_honest_preserves_registration_and_does_not_retry_send(
     assert {key: storage[key] for key in DOMAIN_TABLES} == before
 
 
-def test_imported_registration_explains_organizer_help_without_claiming_email(partner_handoff, monkeypatch):
+@pytest.mark.parametrize("path", [PATH, PATH + "/profile-resolution"])
+def test_imported_registration_explains_organizer_help_without_claiming_email(partner_handoff, monkeypatch, path):
     api, _, _, payload, deliveries = partner_handoff
     monkeypatch.setattr(edit_service, "registration_has_imported_draw_selection", lambda *_args, **_kwargs: True)
-    response = api.post(PATH, json=payload)
+    response = api.post(path, json=payload)
     assert response.json()["edit_link_status"] == "locked"
     assert "contact the organizer" in response.json()["message"]
     assert deliveries == []
 
 
-def test_honeypot_never_triggers_duplicate_recovery_email(partner_handoff):
+@pytest.mark.parametrize("path", [PATH, PATH + "/profile-resolution"])
+def test_honeypot_never_triggers_duplicate_recovery_email(partner_handoff, path):
     api, _, _, payload, deliveries = partner_handoff
-    response = api.post(PATH, json={**payload, "website": "spam"})
+    response = api.post(path, json={**payload, "website": "spam"})
     assert response.status_code == 400
+    assert deliveries == []
+
+
+def test_same_name_with_different_email_does_not_claim_registration(partner_handoff):
+    api, _, storage, payload, deliveries = partner_handoff
+    before = {key: deepcopy(storage[key]) for key in DOMAIN_TABLES}
+    response = api.post(PATH + "/profile-resolution", json={**payload, "email": "other@example.com"})
+    assert response.status_code == 200
+    assert response.json()["can_start_new"] is True
+    assert deliveries == []
+    assert {key: storage[key] for key in DOMAIN_TABLES} == before
+
+
+def test_email_match_is_scoped_to_current_tournament(partner_handoff):
+    api, _, storage, payload, deliveries = partner_handoff
+    for row in storage["tournament_registrations"]:
+        row["tournament_id"] = "other-tournament"
+    response = api.post(PATH + "/profile-resolution", json=payload)
+    assert response.status_code == 200
+    assert response.json()["can_start_new"] is True
     assert deliveries == []
 
 
