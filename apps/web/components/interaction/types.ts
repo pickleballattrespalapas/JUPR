@@ -19,6 +19,7 @@ export type ActionUncertain = {
   operationKey: string;
   showOperationReference?: boolean;
   recoveryLabel: string;
+  returnLabel?: string; // The owning page can safely retain and recover this operation.
   onRecover: () => Promise<ActionCompletion>;
 };
 

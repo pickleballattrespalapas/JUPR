@@ -5,6 +5,8 @@ and tournament games and retains legacy ties without inventing a win or loss.
 """
 from __future__ import annotations
 
+from jupr_app.observability.request_timing import measured_phase
+
 from collections import defaultdict
 from datetime import datetime
 from math import isclose, isfinite
@@ -50,6 +52,7 @@ def _rating(value: Any) -> float | None:
         return None
 
 
+@measured_phase("leaderboard_calculation")
 def compute_overall_metrics(
     matches: list[dict[str, Any]], *, names: dict[str, str], timezone: str,
     partnership_minimum: int = 0,
@@ -160,6 +163,7 @@ def _display(kind: str, value: float, stats: dict[str, Any]) -> str:
     return f"{value:.0f} {kind}"
 
 
+@measured_phase("leaderboard_calculation")
 def team_upset_highlights(
     matches: list[dict[str, Any]], *, players: list[dict[str, Any]],
     status: str, search: str, min_games: int, options: dict[str, int],
@@ -231,6 +235,7 @@ def team_upset_highlights(
     return ranked if full else ranked[:depth]
 
 
+@measured_phase("leaderboard_calculation")
 def team_partnership_highlights(
     matches: list[dict[str, Any]], *, players: list[dict[str, Any]],
     status: str, search: str, min_games: int, options: dict[str, int],
@@ -284,6 +289,7 @@ def team_partnership_highlights(
     return ranked if full else ranked[:depth]
 
 
+@measured_phase("leaderboard_calculation")
 def overall_highlights(
     rows: list[dict[str, Any]], *, metrics: dict[str, dict[str, Any]],
     min_games: int, card_options: dict[str, dict[str, int]],

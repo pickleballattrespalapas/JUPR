@@ -482,6 +482,7 @@ def test_submit_match_uploader_batch(monkeypatch) -> None:
     assert calls[0]["matches"][0]["league"] == "Open"
     assert calls[0]["idempotency_key"] == "test:batch-1"
     assert calls[0]["match_format"] == "singles"
+    assert calls[0]["defer_badge_evaluation"] is False
 
 
 def test_submit_match_uploader_popup_context_name_creates_event(monkeypatch) -> None:

@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
+from jupr_app.observability.request_timing import instrument_supabase_client
 
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
@@ -312,7 +313,10 @@ def _get_supabase_credentials() -> tuple[str, str]:
 
 def get_supabase_client() -> Client:
     url, key = _get_supabase_credentials()
-    return create_client(url, key)
+    client = create_client(url, key)
+    # Compatibility adapters supplied by local tools/tests retain their identity
+    # and capability surface. Production uses the real synchronous SDK client.
+    return instrument_supabase_client(client) if isinstance(client, Client) else client
 
 
 def _supabase_host_for_diagnostics() -> str:

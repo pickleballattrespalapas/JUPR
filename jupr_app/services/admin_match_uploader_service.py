@@ -1217,6 +1217,7 @@ def submit_admin_match_uploader_batch(
         df_players_all=df_players_all,
         df_leagues=df_leagues,
         df_meta=df_meta,
+        defer_badge_evaluation=allow_league_live_context,
     )
     return {
         **result,

@@ -5,7 +5,7 @@ from typing import Any
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid5
 
-from fastapi import HTTPException, Query
+from fastapi import BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_MATCHES, has_permission, resolve_admin_role
@@ -45,6 +45,7 @@ from jupr_app.services.admin_league_live_submit_service import (
     compensate_admin_league_live_round_publish,
     create_admin_league_live_guest,
     list_admin_league_live_publish_operations,
+    process_published_round_badges,
     reconcile_admin_league_live_round_publish,
     retry_admin_league_live_round_publish,
     submit_admin_league_live_round_publish,
@@ -981,6 +982,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         session_id: str,
         round_number: int,
         payload: AdminLeagueLiveRoundPublishRequest,
+        background_tasks: BackgroundTasks,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_league_live_service_role_or_503()
@@ -992,7 +994,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             source=payload.source,
         )
         try:
-            return submit_admin_league_live_round_publish(
+            result = submit_admin_league_live_round_publish(
                 supabase,
                 club_id=str(club_id),
                 session_id=str(session_id),
@@ -1018,6 +1020,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
             )
+            background_tasks.add_task(process_published_round_badges, supabase, str(club_id), result)
+            return result
         except Exception as exc:
             _handle_common(exc)
 
@@ -1065,6 +1069,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         session_id: str,
         round_number: int,
         payload: AdminLeagueLiveRoundReconcileRequest,
+        background_tasks: BackgroundTasks,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_league_live_service_role_or_503()
@@ -1076,7 +1081,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             source=payload.source,
         )
         try:
-            return reconcile_admin_league_live_round_publish(
+            result = reconcile_admin_league_live_round_publish(
                 supabase,
                 club_id=str(club_id),
                 session_id=str(session_id),
@@ -1086,6 +1091,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
             )
+            background_tasks.add_task(process_published_round_badges, supabase, str(club_id), result)
+            return result
         except Exception as exc:
             _handle_common(exc)
 
@@ -1095,6 +1102,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         session_id: str,
         round_number: int,
         payload: AdminLeagueLiveRoundRetryRequest,
+        background_tasks: BackgroundTasks,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_league_live_service_role_or_503()
@@ -1106,7 +1114,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             source=payload.source,
         )
         try:
-            return retry_admin_league_live_round_publish(
+            result = retry_admin_league_live_round_publish(
                 supabase,
                 club_id=str(club_id),
                 session_id=str(session_id),
@@ -1116,6 +1124,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
             )
+            background_tasks.add_task(process_published_round_badges, supabase, str(club_id), result)
+            return result
         except Exception as exc:
             _handle_common(exc)
 

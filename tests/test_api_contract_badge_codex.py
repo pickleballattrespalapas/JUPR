@@ -18,6 +18,7 @@ class FakeQuery:
     def __init__(self, rows):
         self._rows = list(rows)
         self._filters: dict[str, object] = {}
+        self._in_filters: dict[str, list] = {}
         self._limit: int | None = None
 
     def select(self, *_args, **_kwargs):
@@ -29,6 +30,10 @@ class FakeQuery:
 
     def limit(self, value):
         self._limit = int(value)
+        return self
+
+    def in_(self, key, values):
+        self._in_filters[key] = list(values)
         return self
 
     def range(self, start, end):
@@ -44,6 +49,8 @@ class FakeQuery:
             rows = [row for row in rows if row.get(key) == expected]
         if self._limit is not None:
             rows = rows[: self._limit]
+        for key, values in self._in_filters.items():
+            rows = [row for row in rows if row.get(key) in values]
         if hasattr(self, "page_bounds"):
             rows = rows[self.page_bounds[0]:self.page_bounds[1] + 1]
         return SimpleNamespace(data=rows)

@@ -114,7 +114,21 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
         "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
         _publisher(tables, calls=calls, batch_calls=batch_calls),
     )
-    client = TestClient(app)
+    events = []
+    async def observe_response(scope, receive, send):
+        async def capture(message):
+            if scope["path"].endswith("/submit") and message["type"] == "http.response.body" and not message.get("more_body"):
+                events.append("sent")
+            await send(message)
+        await app(scope, receive, capture)
+
+    def run_badges(db, club, result):
+        assert db.tables is supabase.tables and club == "club"
+        assert result["publish_operation"]["status"] == "completed"
+        events.append("badges")
+
+    monkeypatch.setattr("services.api.admin_league_manager_routes.process_published_round_badges", run_badges)
+    client = TestClient(observe_response)
     status = client.get("/admin/clubs/club/league-manager/live/status")
     assert status.status_code == 200
     assert status.json()["round_retry_endpoint"] == (
@@ -133,6 +147,7 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     assert first.status_code == 200, first.text
     payload = first.json()
     assert payload["publish_operation"]["status"] == "completed"
+    assert events == ["sent", "badges"]
     assert payload["rating_review"]["status"] == "verified_readback"
     assert len(payload["published_match_ids"]) == 1
     assert len(tables["matches"]) == 1
@@ -163,6 +178,7 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
         json=request,
     )
     assert replay.status_code == 200, replay.text
+    assert events == ["sent", "badges", "sent", "badges"]
     assert replay.json()["idempotent_replay"] is True
     assert len(tables["matches"]) == 1
     assert calls == [1]
@@ -1080,3 +1096,34 @@ def test_guest_completion_audit_failure_reports_existing_player_uncertainty_and_
     assert add_calls == ["Guest Morgan"]
     guest_audits = [row for row in tables["admin_activity_log"] if "league_live_guest" in row["action_type"]]
     assert {row["entity_id"] for row in guest_audits} == {tables["league_live_guest_players"][0]["id"]}
+
+
+def test_deferred_league_badges_recover_the_exact_job_and_preserve_claims(monkeypatch):
+    from jupr_app.services import admin_league_live_submit_service as live
+    from tests.test_badge_worker import FakeSupabase as BadgeDB
+
+    game = {"id": 123, "club_id": "club", "context_type": "league_live_session", "context_id": "context-a",
+            "deleted_at": None, "match_format": "doubles", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4}
+    db = BadgeDB({"matches": [game]})
+    result = {"published_match_ids": [123], "round": {"matches_json": [{"context_id": "context-a"}]}}
+    processed = []
+
+    def process(client, club_id, **kwargs):
+        processed.append((club_id, kwargs["max_jobs"]))
+        client.storage["badge_eval_queue"][0]["status"] = "done"
+
+    monkeypatch.setattr(live, "process_badge_eval_queue", process)
+    for field, wrong_value in [("context_id", "another-round"), ("match_format", "singles"), ("rating_scope", "unrated")]:
+        previous = game.get(field)
+        game[field] = wrong_value
+        live.process_published_round_badges(db, "club", result)
+        assert not processed
+        game[field] = previous
+    live.process_published_round_badges(db, "club", result)
+    job, = db.storage["badge_eval_queue"]
+    assert job["match_id"] == "123" and job["player_ids"] == [1, 2, 3, 4]
+    for status in ("done", "processing", "error"):
+        job["status"] = status
+        live.process_published_round_badges(db, "club", result)
+        assert job["status"] == status
+    assert processed == [("club", 1)]

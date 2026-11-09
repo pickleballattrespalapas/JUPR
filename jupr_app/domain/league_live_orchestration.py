@@ -523,7 +523,14 @@ def _apply_round_attendance(
         raise LeagueLiveDomainError("At least four playing participants are required for the next round.")
     sizes = _validate_court_sizes(change.get("court_sizes"), roster_count=len(selected))
     if not sizes:
-        sizes = list(suggest_court_sizes(len(selected)).get("sizes") or [])
+        # Attendance and drag-and-drop board edits do not imply a request to
+        # resize the courts. Keep the saved capacities when they still fit,
+        # including one-for-one substitutions and returning players.
+        current_sizes = [
+            sum(int(row["court_number"]) == number for row in current_by_id.values())
+            for number in sorted({int(row["court_number"]) for row in current_by_id.values()})
+        ]
+        sizes = current_sizes if sum(current_sizes) == len(selected) else list(suggest_court_sizes(len(selected)).get("sizes") or [])
     if sum(sizes) != len(selected):
         raise LeagueLiveDomainError("Next-round courts must fit every selected player; choose four/five-player courts or select players to sit out.")
 
