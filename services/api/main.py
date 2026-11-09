@@ -906,6 +906,9 @@ def health() -> dict[str, Any]:
         payload.update(
             {
                 "environment": environment,
+                "badge_worker_mode": os.getenv("JUPR_BADGE_WORKER_MODE", "embedded"),
+                "badge_worker_club_id": os.getenv("JUPR_BADGE_WORKER_CLUB_ID", ""),
+                "badge_queue_leases_enabled": os.getenv("JUPR_BADGE_QUEUE_LEASES", "0").strip() == "1",
                 "git_commit_sha": (
                     os.getenv("JUPR_IMAGE_BUILD_GIT_SHA", "").strip().lower()
                     or os.getenv("JUPR_DEPLOYMENT_GIT_SHA", "").strip().lower()

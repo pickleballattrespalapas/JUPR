@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "eb1b947b9e8c7c6cefc7254b4683d9c6879d270c00a9a5f09fab6bafbb89f5b8",
+  "repository_migration_content_sha256": "9781aeffe51c0b27658ef73476f2aeb3b8899248ca5a618c99f9cd00a5158da7",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -21,6 +21,7 @@
     "badge_conflicts_are_not_serialization_failures",
     "badge_eval_queue_atomic_club_claim",
     "badge_plain_requirements",
+    "badge_queue_worker_leases",
     "badge_reactivation_and_admin_seasons",
     "baseline_worker_run_log",
     "canonicalize_server_only_tables",

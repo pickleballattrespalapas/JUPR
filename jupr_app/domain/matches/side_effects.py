@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.gamification.badge_lease import deferred_badge_summary
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.gamification.live_awards import run_live_badge_awards
 from jupr_app.domain.notifications.player_profile_update_repo import queue_player_updates_for_affected_subscribers
@@ -51,6 +52,9 @@ def run_badge_side_effects(
         match_id=str(dedupe_match_id) if dedupe_match_id else None,
         payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
     )
+    deferred = deferred_badge_summary(enqueue_result, club_id=str(club_id), match_ref=dedupe_match_id)
+    if deferred is not None:
+        return deferred
     should_fallback = not bool(enqueue_result.get("queued"))
     if not should_fallback:
         try:

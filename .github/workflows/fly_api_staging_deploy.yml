@@ -293,6 +293,9 @@ jobs:
           test -n "$FLY_API_TOKEN"
           secret_args=(
             "JUPR_ENV=staging"
+            "JUPR_BADGE_WORKER_MODE=external"
+            "JUPR_BADGE_WORKER_CLUB_ID=tres_palapas"
+            "JUPR_BADGE_QUEUE_LEASES=0"
             "JUPR_EMAIL_MODE=dry_run"
             "JUPR_REQUIRE_API_AUDIT_LOG=1"
             "JUPR_REQUIRE_WORKER_RUN_LOG=1"
@@ -329,6 +332,24 @@ jobs:
           fi
           flyctl secrets set --stage -a "$FLY_APP_NAME" "${secret_args[@]}"
 
+      - name: Verify worker migration and quiesce previous staging worker
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          python scripts/check_staging_badge_prerequisites.py
+          flyctl machines list -a "$FLY_APP_NAME" --json > staging-machines-before.json
+          python scripts/staging_badge_topology.py --inventory staging-machines-before.json --phase before > staging-topology-before.json
+          mapfile -t worker_ids < <(python -c 'import json; print("\n".join(json.load(open("staging-topology-before.json"))["worker_ids"]))')
+          for machine_id in "${worker_ids[@]}"; do
+            if [ -n "$machine_id" ]; then
+              flyctl machine stop "$machine_id" -a "$FLY_APP_NAME" --signal SIGTERM --timeout 300 --wait-timeout 330s
+            fi
+          done
+
       - name: Validate and deploy staging API
         shell: bash
         env:
@@ -337,6 +358,8 @@ jobs:
           set -euo pipefail
           flyctl config validate --config fly.staging.toml -a "$FLY_APP_NAME"
           flyctl deploy \
+            --process-groups app \
+            --ha=false \
             --remote-only \
             -a "$FLY_APP_NAME" \
             --config fly.staging.toml \
@@ -368,6 +391,9 @@ jobs:
           expected = {
               "ok": True,
               "environment": "staging",
+              "badge_worker_mode": "external",
+              "badge_worker_club_id": "tres_palapas",
+              "badge_queue_leases_enabled": False,
               "git_commit_sha": os.environ["GITHUB_SHA"],
               "image_build_git_sha": os.environ["GITHUB_SHA"],
               "fly_app_name": "juprleagues-api-staging",
@@ -402,6 +428,36 @@ jobs:
           done
           cat fly-health.json 2>/dev/null || true
           exit 1
+
+      - name: Verify all APIs defer before starting one isolated worker
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          flyctl machines list -a "$FLY_APP_NAME" --json > staging-machines-api.json
+          python scripts/staging_badge_topology.py --inventory staging-machines-api.json --phase api > staging-topology-api.json
+          python scripts/check_staging_badge_prerequisites.py
+          image_ref="$(python -c 'import json; print(json.load(open("staging-topology-api.json"))["image"])')"
+          flyctl deploy --remote-only --ha=false --process-groups badge_worker \
+            -a "$FLY_APP_NAME" --config fly.staging.toml --image "$image_ref"
+          flyctl machines list -a "$FLY_APP_NAME" --json > staging-machines-final.json
+          python scripts/staging_badge_topology.py --inventory staging-machines-final.json --phase final > staging-topology-final.json
+          cat staging-topology-final.json
+          worker_id="$(python -c 'import json; print(json.load(open("staging-topology-final.json"))["worker_ids"][0])')"
+          verified=0
+          for attempt in $(seq 1 12); do
+            flyctl logs -a "$FLY_APP_NAME" --instance "$worker_id" --no-tail --json > staging-worker-logs.jsonl
+            if python scripts/check_badge_worker_progress.py --logs staging-worker-logs.jsonl --sha "$GITHUB_SHA" --machine-id "$worker_id"; then
+              verified=1
+              break
+            fi
+            sleep 10
+          done
+          rm -f staging-worker-logs.jsonl
+          test "$verified" = 1
 
       - name: Verify full staging feature surface
         shell: bash

@@ -7,6 +7,7 @@ import logging
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.gamification.badge_lease import deferred_badge_summary
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.gamification.live_awards import run_live_badge_awards
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -374,6 +375,7 @@ def apply_bulk_match_edits(
         warnings.append("Unable to recompute last_game_at for players automatically. (Non-fatal)")
 
     badge_summary: Dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
+    deferred_failures: list[dict[str, Any]] = []
     if updated_ids and supabase is not None and badge_eligible_players:
         for match_id in updated_ids:
             enqueue_result = enqueue_badge_eval(
@@ -384,6 +386,12 @@ def apply_bulk_match_edits(
                 match_id=str(match_id),
                 payload={"updated_ids": updated_ids[:50]},
             )
+            deferred = deferred_badge_summary(enqueue_result, club_id=str(club_id), match_ref=str(match_id))
+            if deferred is not None:
+                badge_summary = deferred
+                if deferred.get("recovery_required"):
+                    deferred_failures.append(deferred)
+                continue
             should_fallback = not bool(enqueue_result.get("queued"))
             worker_result = None
             if not should_fallback:
@@ -412,6 +420,12 @@ def apply_bulk_match_edits(
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Inline live badge fallback failed during bulk edit: %s", exc)
                     badge_summary = {"mode": "inline_error", "error": str(exc)}
+
+    if deferred_failures:
+        badge_summary = {**deferred_failures[0],
+            "recovery_match_refs": [ref for item in deferred_failures for ref in item["recovery_match_refs"]],
+            "errored": len(deferred_failures)}
+        warnings.append("Match edits are saved, but some award evaluations could not be queued. Review the saved match IDs before retrying awards.")
 
     return {
         "updated_count": len(updated_ids),

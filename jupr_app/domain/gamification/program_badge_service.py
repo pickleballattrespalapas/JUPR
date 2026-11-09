@@ -3,15 +3,17 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from postgrest.exceptions import APIError
 
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.gamification.badge_lease import processing_deferred
 from jupr_app.domain.gamification.program_badges import evaluate_program_badges
 from jupr_app.services.staging_write_guard import staging_write_wave_allows
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("jupr.badge.worker")
 STALE_PROGRAM_REVISION_MESSAGE = "Program results changed. Read a fresh snapshot."
 
 
@@ -55,21 +57,51 @@ def program_badge_writes_enabled() -> bool:
     return os.getenv("JUPR_ENV", "").lower() == "staging" and staging_write_wave_allows("badge-diagnostics")
 
 
-def process_pending_program_badges(supabase: Any, *, limit: int = 5) -> dict:
+def process_pending_program_badges(supabase: Any, *, limit: int = 5, club_id: str | None = None) -> dict:
+    if processing_deferred(club_id):
+        return {"processed": 0, "errors": 0}
     if not program_badge_writes_enabled():
         return {"processed": 0, "errors": 0}
-    rows = supabase.rpc("pending_program_badge_clubs_v1", {"p_limit": limit}).execute().data
+    if club_id is None:
+        # The pilot can occupy the first pending row. Read one extra candidate
+        # before excluding it, so limit=1 still advances another club.
+        effective_limit = max(1, min(int(limit), 20))
+        pilot_deferred = processing_deferred("tres_palapas")
+        query_limit = min(effective_limit + int(pilot_deferred), 20)
+        rows = supabase.rpc("pending_program_badge_clubs_v1", {"p_limit": query_limit}).execute().data
+    else:
+        # Scope before limiting. Filtering the existing global RPC's result can
+        # starve this club behind another club's pending revision indefinitely.
+        club_id = str(club_id).strip()
+        if not club_id:
+            raise ValueError("club_id is required for scoped program processing")
+        rows = (supabase.table("badge_program_state")
+                .select("club_id,revision,applied_revision,retry_after")
+                .eq("club_id", club_id)
+                .lte("retry_after", datetime.now(timezone.utc).isoformat())
+                .limit(1).execute().data)
     if not isinstance(rows, list):
         raise RuntimeError("Unable to read pending program badge clubs.")
+    if club_id is not None:
+        for row in rows:
+            if (not isinstance(row, dict) or row.get("club_id") != club_id
+                    or type(row.get("revision")) is not int
+                    or type(row.get("applied_revision")) is not int):
+                raise RuntimeError("Scoped program badge state could not be read completely.")
+        rows = [row for row in rows if row["applied_revision"] < row["revision"]]
+    else:
+        rows = [row for row in rows if not processing_deferred(str(row["club_id"]))][:effective_limit]
     counts = {"processed": 0, "errors": 0}
     for row in rows:
         club = str(row["club_id"])
         try:
             reconcile_program_badges(supabase, club)
             counts["processed"] += 1
-        except Exception:
+        except Exception as exc:
             counts["errors"] += 1
-            logger.exception("Program badge evaluation failed for club %s", club)
+            # Provider exception messages/tracebacks may contain submitted
+            # values or credentials; retain only identity and exception type.
+            logger.error("badge.program.failed", extra={"club_id": club, "exception_type": type(exc).__name__})
             # Errors remain durable and retryable. Do not acknowledge the revision.
             supabase.rpc("program_badge_failure_v1", {"p_club_id": club}).execute()
     return counts
