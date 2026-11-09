@@ -1,0 +1,38 @@
+name: Owner-approved Week 4 date correction
+on:
+  push:
+    branches: [codex/repair-week4-date-20261109]
+    paths: [.github/owner-approved-week4-date.trigger]
+permissions:
+  contents: read
+concurrency:
+  group: owner-approved-week4-date-20261109
+  cancel-in-progress: false
+jobs:
+  correct:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt -r services/api/requirements.txt
+      - name: Apply exact owner-approved correction and refresh draft
+        env:
+          OWNER_APPROVAL: CORRECT WEEK 4 TO 2026-11-08
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JUPR_ENV: production
+          JUPR_PRODUCTION_WRITE_POLICY: enabled
+          JUPR_STAGING_WRITE_WAVE: none
+          JUPR_ENABLE_NEXT_ADMIN_REPLAY: '1'
+          JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP: '1'
+          JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS: '1'
+          JUPR_API_AUDIT_LOG_REQUIRED: '1'
+          JUPR_EMAIL_MODE: dry_run
+        run: python -m scripts.maintenance.correct_week4_20261108
