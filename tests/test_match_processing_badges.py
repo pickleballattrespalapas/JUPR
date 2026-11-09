@@ -3,11 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from postgrest.exceptions import APIError
 
 from jupr_app.domain.bulk_match_editor import apply_bulk_match_edits
 from jupr_app.domain.gamification.live_awards import run_live_badge_awards
 from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.gamification.badge_lease import BadgeLeaseLost
 
 
 class _Query:
@@ -124,11 +126,13 @@ class _Supabase:
 
         if q._op == "insert":
             payload = q._payload if isinstance(q._payload, list) else [q._payload]
+            inserted = []
             for row in payload:
                 row = dict(row)
                 row.setdefault("id", len(rows) + 1)
                 rows.append(row)
-            return SimpleNamespace(data=payload)
+                inserted.append(dict(row))
+            return SimpleNamespace(data=inserted)
 
         if q._op == "update":
             for row in data:
@@ -231,4 +235,75 @@ def test_popup_matches_do_not_trigger_live_awards():
         df_meta=pd.DataFrame(),
     )
     assert result["badge_summary"]["mode"] == "skipped"
+    assert sb.tables["player_badges"] == []
+
+
+def _isolated_mode(monkeypatch, mode):
+    monkeypatch.setenv("JUPR_BADGE_WORKER_MODE", "external" if mode == "external" else "embedded")
+    monkeypatch.setenv("JUPR_BADGE_QUEUE_LEASES", "1" if mode == "leased" else "0")
+
+
+def _forbid_inline(monkeypatch, module):
+    def lost(*args, **kwargs):
+        raise BadgeLeaseLost("Worker no longer owns the job")
+    monkeypatch.setattr(f"{module}.process_badge_eval_queue", lost)
+    monkeypatch.setattr(f"{module}.run_live_badge_awards", lambda *a, **k: pytest.fail("Unfenced inline fallback executed"))
+
+
+@pytest.mark.parametrize("mode", ["external", "leased"])
+@pytest.mark.parametrize("queue_missing", [False, True])
+def test_match_save_keeps_scores_and_never_falls_back_when_isolated(monkeypatch, mode, queue_missing):
+    _isolated_mode(monkeypatch, mode)
+    _forbid_inline(monkeypatch, "jupr_app.domain.match_processing")
+    sb = _Supabase(queue_missing=queue_missing)
+    result = process_matches(
+        [{"league": "Main", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "s1": 11, "s2": 5}],
+        supabase=sb, club_id="club", name_to_id={}, df_players_all=_players_df(),
+        df_leagues=pd.DataFrame(), df_meta=pd.DataFrame(),
+    )
+    assert len(sb.tables["matches"]) == 1
+    assert sb.tables["matches"][0]["score_t1"] == 11
+    assert sb.tables["player_badges"] == []
+    summary = result["badge_summary"]
+    assert summary["mode"] == ("queue_error" if queue_missing else "queue")
+    if queue_missing:
+        assert summary["recovery_required"]
+        assert summary["recovery_match_refs"] == ["1"]
+        assert result["player_update_queue"]["mode"] == "error"
+    else:
+        assert summary["deferred"] and summary["notification_badge_refs"] == ["1"]
+
+
+@pytest.mark.parametrize("mode", ["external", "leased"])
+@pytest.mark.parametrize("queued", [False, True])
+def test_shared_side_effects_never_fallback_on_enqueue_or_lease_failure(monkeypatch, mode, queued):
+    from jupr_app.domain.matches import side_effects
+    _isolated_mode(monkeypatch, mode)
+    _forbid_inline(monkeypatch, "jupr_app.domain.matches.side_effects")
+    monkeypatch.setattr(side_effects, "enqueue_badge_eval", lambda *a, **k: {"queued": queued})
+    result = side_effects.run_badge_side_effects(supabase=object(), club_id="club",
+        has_badge_eligible_match=True, affected_players={1, 2, 3, 4}, db_matches=[{}],
+        match_payloads=[{}], dedupe_match_id="saved-operation")
+    assert result["mode"] == ("queue" if queued else "queue_error")
+    assert result.get("recovery_required", False) is (not queued)
+
+
+@pytest.mark.parametrize("mode", ["external", "leased"])
+def test_bulk_edit_keeps_earlier_enqueue_failure_visible(monkeypatch, mode):
+    _isolated_mode(monkeypatch, mode)
+    _forbid_inline(monkeypatch, "jupr_app.domain.bulk_match_editor")
+    monkeypatch.setattr("jupr_app.domain.bulk_match_editor.enqueue_badge_eval",
+        lambda *a, **k: {"queued": k["match_id"] != "10"})
+    sb = _Supabase()
+    sb.tables["players"] = _players_df().to_dict("records")
+    sb.tables["matches"] = [
+        {"id": mid, "club_id": "club", "league": "Main", "date": "2024-01-01T00:00:00Z",
+         "week_tag": None, "match_type": "League", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3,
+         "t2_p2": 4, "score_t1": 11, "score_t2": 5} for mid in [10, 11]]
+    result = apply_bulk_match_edits(sb, "club", [{"id": mid, "notes": "edited"} for mid in [10, 11]], actor="admin")
+    assert result["updated_count"] == 2
+    assert result["badge_summary"]["mode"] == "queue_error"
+    assert result["badge_summary"]["recovery_match_refs"] == ["10"]
+    assert result["badge_summary"]["recovery_required"]
+    assert any("award evaluations could not be queued" in warning for warning in result["warnings"])
     assert sb.tables["player_badges"] == []

@@ -17,6 +17,7 @@ from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 from jupr_app.domain.gamification.badge_queue import ack_badge_eval, dequeue_badge_eval
+from jupr_app.domain.gamification.badge_lease import BadgeJobLease, BadgeLeaseLost, assert_job_owned, processing_deferred
 from jupr_app.domain.player_activity import add_activity_columns
 
 
@@ -32,6 +33,10 @@ def process_badge_eval_queue(
     clean_club_id = str(club_id or "").strip()
     if not clean_club_id:
         raise ValueError("club_id is required to process the badge evaluation queue")
+    if processing_deferred():
+        # Match-save callers keep the durable queue record and do not start
+        # CPU-heavy work (or trigger their error fallback) in the API process.
+        return {"processed": 0, "errored": 0}
     deadline = time.monotonic() + float(time_budget_seconds)
     processed = 0
     errored = 0
@@ -42,10 +47,18 @@ def process_badge_eval_queue(
         job = dequeue_badge_eval(supabase, club_id=clean_club_id)
         if not job:
             break
+        ownership = {"claim_token": str(job["claim_token"])} if job.get("claim_token") else {}
         try:
-            _process_job_with_retry(supabase, job, ctx=ctx, match_limit=match_limit)
-            ack_badge_eval(supabase, job_id=str(job.get("id")), status="done")
+            with BadgeJobLease(supabase, job) as lease:
+                _process_job_with_retry(supabase, job, ctx=ctx, match_limit=match_limit)
+                lease.stop_heartbeat()
+                assert_job_owned(job)
+                ack_badge_eval(supabase, job_id=str(job.get("id")), status="done", **ownership)
             processed += 1
+        except BadgeLeaseLost:
+            # Retain the processing record for review. Neither completion nor
+            # automatic retry is safe after ownership becomes uncertain.
+            errored += 1
         except Exception as exc:  # noqa: BLE001 - worker should record failures
             error = f"{type(exc).__name__}: {exc}"
             details = f"{error}\n{traceback.format_exc()}".strip()
@@ -54,6 +67,7 @@ def process_badge_eval_queue(
                 job_id=str(job.get("id")),
                 status="error",
                 error=details[:2000],
+                **ownership,
             )
             errored += 1
         if time.monotonic() >= deadline:
@@ -73,6 +87,9 @@ def process_badge_eval_queue_until_empty(
     max_errors: int = 10,
     progress_cb: Callable[[dict[str, int | float | str]], None] | None = None,
 ) -> dict[str, int | float | str]:
+    if processing_deferred():
+        return {"total_processed": 0, "total_errored": 0, "loops": 0,
+                "stopped_reason": "external_worker_required", "duration_seconds": 0.0}
     started = time.monotonic()
     # Both staff checks and the CLI must notice seasons that ended without a new result.
     supabase.rpc("enqueue_completed_badge_seasons_v1", {"p_club_id": club_id}).execute()
@@ -173,6 +190,7 @@ def _process_job(
     ctx: Any | None,
     match_limit: int,
 ) -> None:
+    assert_job_owned(job)
     job_club_id = str(job.get("club_id") or "")
     context = _resolve_context(ctx, supabase, job_club_id, match_limit)
     event_type = str(job.get("event_type") or "")
@@ -181,6 +199,7 @@ def _process_job(
 
     badge_ids = _badge_ids_for_trigger(context, event_type)
     if badge_ids and player_ids:
+        assert_job_owned(job)
         _update_incremental_facts(supabase, job, player_ids, context_id)
         # Evaluate once per club. Completed week/month winners can be players
         # outside the triggering match, and must not wait for their next game.
@@ -189,6 +208,7 @@ def _process_job(
                       if str(c.badge_id) in badge_ids
                       and (int(c.player_id) in player_ids or c.badge_id in period_badges)]
         if candidates:
+            assert_job_owned(job)
             upsert_player_badges(
                 supabase,
                 job_club_id,

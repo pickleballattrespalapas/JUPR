@@ -8,6 +8,7 @@ from typing import Any
 from postgrest.exceptions import APIError
 
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.gamification.badge_lease import processing_deferred
 from jupr_app.domain.gamification.program_badges import evaluate_program_badges
 from jupr_app.services.staging_write_guard import staging_write_wave_allows
 
@@ -56,6 +57,8 @@ def program_badge_writes_enabled() -> bool:
 
 
 def process_pending_program_badges(supabase: Any, *, limit: int = 5) -> dict:
+    if processing_deferred():
+        return {"processed": 0, "errors": 0}
     if not program_badge_writes_enabled():
         return {"processed": 0, "errors": 0}
     rows = supabase.rpc("pending_program_badge_clubs_v1", {"p_limit": limit}).execute().data

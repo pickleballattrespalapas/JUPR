@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 def install_program_badge_worker(app, *, get_supabase_client):
     @app.on_event("startup")
     async def start_program_badge_worker():
+        # Enable only after a separately supervised worker is deployed and
+        # verified. The default retains the current processing topology.
+        if os.getenv("JUPR_BADGE_WORKER_MODE", "embedded") == "external":
+            return
         if os.getenv("JUPR_ENV") != "staging" or os.getenv("FLY_APP_NAME") != "juprleagues-api-staging":
             return
 

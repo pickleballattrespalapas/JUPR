@@ -15,6 +15,7 @@ from jupr_app.domain.player_activity import (
 )
 from jupr_app.domain.player_ratings_source import build_seed_rating_maps, current_seed_rating
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.gamification.badge_lease import deferred_badge_summary
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.gamification.live_awards import run_live_badge_awards
 from jupr_app.domain.notifications.player_profile_update_repo import queue_player_updates_for_affected_subscribers
@@ -631,9 +632,13 @@ def process_matches(
             )
             if enqueue_result.get("queued") and committed_match_ids:
                 notification_badge_refs = [str(committed_match_ids[0])]
+            deferred = deferred_badge_summary(enqueue_result, club_id=str(club_id),
+                match_ref=str(committed_match_ids[0]) if committed_match_ids else None)
+            if deferred is not None:
+                badge_summary = deferred
             worker_result = None
-            should_fallback = not bool(enqueue_result.get("queued"))
-            if not should_fallback:
+            should_fallback = not bool(enqueue_result.get("queued")) and deferred is None
+            if not should_fallback and deferred is None:
                 try:
                     worker_result = process_badge_eval_queue(
                         supabase,
@@ -646,7 +651,7 @@ def process_matches(
                 except Exception as exc:  # noqa: BLE001
                     should_fallback = True
                     logger.warning("Badge queue worker failed during match processing: %s", exc)
-            else:
+            elif should_fallback:
                 logger.warning("Badge queue enqueue unavailable during match processing; falling back inline. reason=%s", enqueue_result.get("reason"))
             if should_fallback:
                 try:
