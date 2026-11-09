@@ -515,7 +515,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
                   <fieldset key={key} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.75rem" }}>
                     <legend style={{ fontWeight: 800 }}>{award.category_label || award.category_key} #{award.rank || 1}{award.is_co_winner ? " · co-winner" : ""}</legend>
                     <p style={{ color: "#475569" }}>Computed: {award.recipient_name || award.team_name || award.player_name || (award.player_id ? `Player ${award.player_id}` : "—")} · {award.metric_display || "—"} · Minimum sample {award.min_games ?? "—"}</p>
-                    {isTeamAward ? <p style={{ color: "#64748b" }}>Team awards follow the frozen team standings and are recorded without a player-badge reassignment.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
+                    {isTeamAward ? <p style={{ color: "#64748b" }}>Team awards follow the frozen team standings and are recorded without a individual award reassignment.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
                       <label>Winner<br /><SearchablePlayerSelect aria-label="Winner" value={draft.playerId} onValueChange={playerValue => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, playerId: Number(playerValue) } }))} disabled={!writeReady || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle}>{(state?.eligible_players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} (#{player.player_id})</option>)}</SearchablePlayerSelect></label>
                       <label>Override reason {changed ? "(required)" : "(not needed)"}<br /><input value={draft.reason} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, reason: event.target.value } }))} disabled={!writeReady || !changed || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle} /></label>
                     </div>}
@@ -531,14 +531,14 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["overrides_confirmed", "minting", "mint_failed"].includes(workflowStatus) ? (
         <article style={{ ...cardStyle, borderColor: workflowStatus === "mint_failed" ? "#fecaca" : "#bfdbfe" }}>
-          <h2 style={{ marginTop: 0 }}>Publish and verify badges</h2>
-          <p style={{ color: "#334155" }}>Publishing succeeds only after every expected badge is verified. An incomplete attempt remains recoverable and can be retried safely.</p>
+          <h2 style={{ marginTop: 0 }}>Publish and verify trophies</h2>
+          <p style={{ color: "#334155" }}>Publishing succeeds only after every expected trophy is verified. An incomplete attempt remains recoverable and can be retried safely.</p>
           {wizard.mint?.last_error ? <p style={{ color: "#b91c1c" }}>Last verified failure: {wizard.mint.last_error}</p> : null}
           <p style={{ color: "#475569" }}>Attempts: {wizard.mint?.attempt_count || 0} · Expected: {wizard.mint?.expected_count ?? "—"} · Verified: {wizard.mint?.verified_count ?? "—"}</p>
           <ConfirmAction
             triggerLabel={workflowStatus === "mint_failed" || workflowStatus === "minting" ? "Retry mint and verification" : "Mint and verify"}
             title="Mint and verify these league awards?"
-            description={`The server will publish the reviewed award set and verify every expected badge record. Expected records: ${wizard.mint?.expected_count ?? previewAwards.length}.`}
+            description={`The server will publish the reviewed award set and verify every expected trophy record. Expected records: ${wizard.mint?.expected_count ?? previewAwards.length}.`}
             confirmLabel="Yes, mint and verify"
             confirmationText="MINT AWARDS"
             disabled={!mintReady}

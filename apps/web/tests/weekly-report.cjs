@@ -72,3 +72,17 @@ assert.deepEqual(briefTools.shortRecapEmail(teaserSource).paragraphs,["A <story>
 teaserSource.report.engagement.mode="review";teaserSource.report.engagement.body="";
 assert.doesNotMatch(buildWeeklyReportEmail(teaserSource,{...options,teaser:true}),/Which drill/);
 console.log("Short email preserves edits, respects approval and links once to the dated recap.");
+
+const historical = structuredClone(fixture);
+historical.report.achievements = ["Retired badge should stay hidden"];
+assert.doesNotMatch(buildWeeklyReportEmail(historical, { ...options, compact: false }), /Retired badge|NEW ACHIEVEMENTS/);
+historical.report.edition = [
+  { key: "achievements", title: "Hidden badge collection", items: [{ id: "badge", title: "Retired badge", lines: [] }] },
+  { key: "events", title: "Event results", items: [{ id: "result", title: "Tournament podium", lines: [] }] },
+];
+historical.report.email_edition = historical.report.edition;
+for (const compact of [true, false]) {
+  const content = buildWeeklyReportEmail(historical, { ...options, compact });
+  assert.doesNotMatch(content, /Hidden badge|Retired badge/);
+  assert.match(content, /Tournament podium/);
+}

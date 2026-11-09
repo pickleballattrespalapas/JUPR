@@ -23,7 +23,7 @@ export default async function DataCorrectionsPage(props: { searchParams?: Promis
       </p>
       <h1 style={{ marginTop: 0 }}>Request a data correction</h1>
       <p style={{ color: "#334155" }}>
-        Tell us about an incorrect score, player, league, tournament, badge, duplicate, or profile. Club staff will review your request before changing anything on the site.
+        Tell us about an incorrect score, player, league, tournament, duplicate, or profile. Club staff will review your request before changing anything on the site.
       </p>
 
       <div style={{ display: "grid", gap: "1rem" }}>
@@ -33,7 +33,7 @@ export default async function DataCorrectionsPage(props: { searchParams?: Promis
           <ul style={{ color: "#475569", paddingLeft: "1.25rem" }}>
             <li>Your name and email so staff can follow up.</li>
             <li>The player profile, match, league, tournament, or event involved.</li>
-            <li>The exact score, teammate, opponent, date, badge, or rating issue.</li>
+            <li>The exact score, teammate, opponent, date, or rating issue.</li>
             <li>What the corrected value should be.</li>
             <li>Any sheet, screenshot, organizer note, or other context that supports the correction.</li>
           </ul>
@@ -42,7 +42,7 @@ export default async function DataCorrectionsPage(props: { searchParams?: Promis
 <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Correction request form</h2>
           <p style={{ color: "#475569" }}>
-            Staff will review the original information and correct the relevant player, match, league, tournament, badge, or rating details.
+            Staff will review the original information and correct the relevant player, match, league, tournament, or rating details.
           </p>
           <SupportIntakeGate path="/data-corrections" searchParams={searchParams}><DataCorrectionForm clubSlug={clubSlug} /></SupportIntakeGate>
         </article>

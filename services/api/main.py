@@ -19,6 +19,7 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.leaderboard_metrics import LEADERBOARD_CARD_KEYS
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 from jupr_app.domain.tournament_registration_repo import public_registration_error_scope
 from jupr_app.services.direct_match_entry_service import (
     DirectMatchConflictError,
@@ -546,7 +547,9 @@ def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[
             {key: badge.get(key) for key in PUBLIC_LEADERBOARD_BADGE_FIELDS if key in badge}
             for badge in (row.get("badges") or [])
             if isinstance(badge, dict)
-        ][:3]
+        ][:3] if badges_enabled() else []
+        if not badges_enabled():
+            clean["badge_count"] = 0
         if clean.get("rank") is None:
             clean["rank"] = clean.get("rank_position") if clean.get("rank_position") is not None else idx
         normalized.append(clean)
@@ -624,7 +627,7 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
             "filtered_players": max(0, int(summary.get("filtered_players") or 0)),
         },
         "leaderboard": _normalize_public_leaderboard_rows(payload.get("leaderboard") or []),
-        "badges_available": payload.get("badges_available") is not False,
+        "badges_available": badges_enabled() and payload.get("badges_available") is not False,
         "snapshot": snapshot_rows[0] if snapshot_rows else None,
         "highlights": {
             key: _normalize_public_leaderboard_rows(highlights.get(key) or [])
@@ -906,9 +909,10 @@ def health() -> dict[str, Any]:
         payload.update(
             {
                 "environment": environment,
-                "badge_worker_mode": os.getenv("JUPR_BADGE_WORKER_MODE", "embedded"),
-                "badge_worker_club_id": os.getenv("JUPR_BADGE_WORKER_CLUB_ID", ""),
-                "badge_queue_leases_enabled": os.getenv("JUPR_BADGE_QUEUE_LEASES", "0").strip() == "1",
+                "badges_enabled": badges_enabled(),
+                "badge_worker_mode": os.getenv("JUPR_BADGE_WORKER_MODE", "embedded") if badges_enabled() else "disabled",
+                "badge_worker_club_id": os.getenv("JUPR_BADGE_WORKER_CLUB_ID", "") if badges_enabled() else "",
+                "badge_queue_leases_enabled": badges_enabled() and os.getenv("JUPR_BADGE_QUEUE_LEASES", "0").strip() == "1",
                 "git_commit_sha": (
                     os.getenv("JUPR_IMAGE_BUILD_GIT_SHA", "").strip().lower()
                     or os.getenv("JUPR_DEPLOYMENT_GIT_SHA", "").strip().lower()

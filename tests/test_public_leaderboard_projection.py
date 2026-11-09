@@ -180,7 +180,7 @@ def test_overall_is_a_real_active_default_projection_with_search_and_paging():
     _assert_private_fields_absent(payload)
 
 
-def test_league_projection_preserves_rank_gap_qualification_badges_and_snapshot():
+def test_league_projection_preserves_rank_gap_qualification_snapshot_and_hides_badges():
     payload = build_public_leaderboard(
         _fixture(),
         club_id="club-1",
@@ -201,8 +201,8 @@ def test_league_projection_preserves_rank_gap_qualification_badges_and_snapshot(
     assert first["qualified"] is True
     assert second["qualified"] is False
     assert third["is_active"] is False
-    assert [badge["badge_id"] for badge in first["badges"]] == ["champ", "climber", "streak"]
-    assert first["badge_count"] == 4
+    assert first["badges"] == []
+    assert first["badge_count"] == 0
     assert payload["snapshot"]["player_id"] == 3
     assert payload["highlights"]["highest_rating"][0]["player_id"] == 1
     assert {row["player_id"] for row in payload["highlights"]["highest_rating"]} == {1}

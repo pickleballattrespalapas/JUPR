@@ -150,3 +150,8 @@ def test_emergency_stop_is_rechecked_before_refreshed_apply(monkeypatch):
         service.reconcile_program_badges(db, 'club')
     assert db.snapshots == 2
     assert sum(name == 'apply_program_badges_v1' for name, _ in db.calls) == 1
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

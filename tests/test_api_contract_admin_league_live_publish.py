@@ -1104,7 +1104,7 @@ def test_guest_completion_audit_failure_reports_existing_player_uncertainty_and_
     assert {row["entity_id"] for row in guest_audits} == {tables["league_live_guest_players"][0]["id"]}
 
 
-def test_deferred_league_badges_recover_the_exact_job_and_preserve_claims(monkeypatch):
+def test_deferred_league_badges_recover_the_exact_job_and_preserve_claims(monkeypatch, legacy_badges_enabled):
     from jupr_app.services import admin_league_live_submit_service as live
     from tests.test_badge_worker import FakeSupabase as BadgeDB
 

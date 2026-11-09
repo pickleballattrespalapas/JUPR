@@ -150,3 +150,8 @@ def test_public_badge_earners_rejects_unknown_badges(client):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "badge not found"
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

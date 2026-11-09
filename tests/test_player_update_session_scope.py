@@ -9,6 +9,13 @@ import pytest
 from jupr_app.domain.notifications import player_update_sender as sender
 
 
+@pytest.fixture
+def historical_badges(monkeypatch):
+    """Exercise retained legacy badge contracts with an explicit test-only opt-in."""
+    from jupr_app.domain.gamification import badge_policy
+    monkeypatch.setattr(badge_policy, "BADGES_ENABLED", True)
+
+
 class _BadgeQuery:
     def __init__(self, db):
         self.db = db
@@ -195,15 +202,11 @@ def test_session_send_uses_exact_games_and_evidence_without_weekly_cache(sender_
     for rendered in case.calls.renders:
         assert {key: value for key, value in rendered.items() if key != "links"} == case.digest
         assert rendered["links"]["unsubscribe"].endswith("?token=test-unsubscribe-token")
-    assert db.queries
-    for query in db.queries:
-        assert ("eq", "club_id", "club-1") in query.filters
-        assert ("eq", "event_type", "match_recorded") in query.filters
-        assert ("in", "match_id", ["101", "102"]) in query.filters
+    assert not db.queries, "Retired badges cannot add database work to session delivery"
 
 
 @pytest.mark.parametrize("status", ["pending", "processing", "error", "missing", "read_error"])
-def test_session_waits_for_every_exact_badge_job_before_claim(sender_case, status):
+def test_session_waits_for_every_exact_badge_job_before_claim(historical_badges, sender_case, status):
     case = sender_case
     rows = [
         _job("101"),
@@ -226,7 +229,7 @@ def test_session_waits_for_every_exact_badge_job_before_claim(sender_case, statu
 
 
 @pytest.mark.parametrize("attempts", [1, 2])
-def test_late_badge_failure_requeues_only_exact_session_job_before_email_claim(sender_case, attempts):
+def test_late_badge_failure_requeues_only_exact_session_job_before_email_claim(historical_badges, sender_case, attempts):
     case = sender_case
     case.outbox["digest_snapshot_json"]["badge_refs"] = ["101", "102", "103"]
     failed_job = {
@@ -264,7 +267,7 @@ def test_late_badge_failure_requeues_only_exact_session_job_before_email_claim(s
     }
 
 
-def test_badge_recovery_cas_does_not_reset_job_changed_since_read(sender_case):
+def test_badge_recovery_cas_does_not_reset_job_changed_since_read(historical_badges, sender_case):
     case = sender_case
     db = _BadgeDatabase([_job("101"), _job("102", "error", attempts=1)])
 
@@ -283,7 +286,7 @@ def test_badge_recovery_cas_does_not_reset_job_changed_since_read(sender_case):
 
 
 @pytest.mark.parametrize("attempts", [3, 4])
-def test_exhausted_badge_recovery_claims_outbox_as_actionable_error_without_sending(sender_case, attempts):
+def test_exhausted_badge_recovery_claims_outbox_as_actionable_error_without_sending(historical_badges, sender_case, attempts):
     case = sender_case
     rows = [_job("101"), _job("102", "error", attempts=attempts)]
     db = _BadgeDatabase(deepcopy(rows))
@@ -304,7 +307,7 @@ def test_exhausted_badge_recovery_claims_outbox_as_actionable_error_without_send
     assert case.calls.computes == case.calls.renders == case.calls.smtp == []
 
 
-def test_session_uses_saved_badge_refs_even_when_they_are_batch_references(sender_case):
+def test_session_uses_saved_badge_refs_even_when_they_are_batch_references(historical_badges, sender_case):
     case = sender_case
     case.outbox["digest_snapshot_json"]["badge_refs"] = ["batch-approval-1"]
     db = _BadgeDatabase([_job("batch-approval-1"), _job("101", "pending")])
@@ -369,3 +372,23 @@ def test_manual_full_snapshot_is_rendered_without_session_computation_or_badge_g
     assert len(case.calls.renders) == 4
     assert all({k: v for k, v in rendered.items() if k != "links"} == manual_digest
                for rendered in case.calls.renders)
+
+
+@pytest.mark.parametrize("status", ["pending", "processing", "error", "missing", "read_error"])
+def test_retired_badges_never_block_or_retry_exact_session_email(sender_case, status):
+    rows = [] if status == "missing" else [_job("101", status, attempts=3), _job("102", status, attempts=3)]
+    db = _BadgeDatabase(deepcopy(rows), read_error=status == "read_error")
+    result = _send(sender_case, db)
+    assert result["sent"] == 1
+    assert result["waiting_for_awards"] == result["errors"] == 0
+    assert len(sender_case.calls.claims) == 1
+    assert db.queries == []
+    assert db.rows == rows
+
+
+def test_retired_badge_only_digest_is_unchanged_but_trophies_still_count():
+    subscription = {"preferences_json": {"send_only_if_changed": True}}
+    digest = {"summary": {"matches_played": 0}, "badges_earned": [{"badge_id": "retired"}]}
+    assert sender._is_send_only_if_changed_and_unchanged(subscription, digest)
+    digest["trophies_earned"] = [{"tournament_name": "Baja Classic", "placement": 1}]
+    assert not sender._is_send_only_if_changed_and_unchanged(subscription, digest)

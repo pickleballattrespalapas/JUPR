@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -14,6 +16,8 @@ from jupr_app.services.staging_write_guard import staging_write_wave_allows
 
 
 def badge_management_options(supabase: Any, club_id: str) -> dict:
+    if not badges_enabled():
+        raise PermissionError("Badges are retired.")
     players = read_all_rows(lambda: supabase.table("players").select("id,name").eq("club_id", club_id), order="id")
     seasons = read_all_rows(lambda: supabase.table("badge_seasons").select("*").eq("club_id", club_id), order="start_date")
     recent = supabase.table("player_badges").select("id,player_id,badge_id,earned_at,value_json,awarded_by,revoked_at").eq("club_id", club_id).in_("badge_id", list(COMMUNITY_CRITERIA)).order("earned_at", desc=True).limit(100).execute().data or []
@@ -33,6 +37,8 @@ def save_badge_management(
     supabase: Any, *, club_id: str, actor_email: str, actor_user_id: str,
     actor_role: str, operation_id: str, action: str, payload: dict,
 ) -> dict:
+    if not badges_enabled():
+        raise PermissionError("Badges are retired.")
     if actor_role not in {"administrator", "super_admin", "club_owner"}:
         raise PermissionError("Only club administrators can manage badge awards and seasons.")
     if not staging_write_wave_allows("badge-diagnostics"):

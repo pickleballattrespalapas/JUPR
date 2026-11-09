@@ -27,7 +27,7 @@ const page = compile("app/clubs/[clubSlug]/players/[playerId]/page.tsx", {
       player: { id: 159, name: "Returning Player", wins: 24, losses: 17 },
       identity: { display_name: "Returning Player" },
       verified_updates: { status: "available", can_request: true },
-      league_ratings: [], awards, social: {},
+      league_ratings: [], rating_summary: { starting_rating_jupr: 3.0, highest_rating_jupr: 4.0, lowest_rating_jupr: 2.9 }, rating_history: [], rating_breakdowns: [], awards, social: {},
       recent_matches: matches.slice(0, 12), match_history: matches, history
     }};
   }}
@@ -107,13 +107,21 @@ function link(html, testId) {
     trophy("tournament_champion", 1, "weekly", "Excluded weekly award"),
     ...[0, -1, 4, null, undefined, "2", true, 2.5, NaN, Infinity].map((rank, index) => trophy("podium", rank, "league", `Excluded malformed ${index}`)),
   ];
-  awards = { trophies: [...qualifying, ...excluded], trophy_count: 99, badge_award_count: 0 };
+  awards = { trophies: [...qualifying, ...excluded], trophy_count: 99, badge_award_count: 40, prestige_total: 900, badges: [{ badge_id: "old", name: "Old participation badge" }] };
   html = await render({ section: "trophies" });
   assert.equal((html.match(/data-testid="player-trophy"/g) || []).length, qualifying.length);
   assert.match(html, /Major honors<\/strong><div[^>]*>6<\/div>/, "Summary counts only visible qualifying honors, even with an old API count");
   for (const award of qualifying) assert.ok(html.includes(award.title));
   assert.doesNotMatch(html, /Excluded|Place #66|Place #27/);
   assert.equal(awards.trophies.length, qualifying.length + excluded.length, "Presentation filtering never changes stored/API awards");
+  for (const section of ["overview", "badges", "ratings", "matches"]) {
+    html = await render({ section });
+    assert.doesNotMatch(html, /Badge cabinet|Badges earned|Old participation badge|player-section-badges|player-badges|prestige/);
+    assert.match(html, /player-section-ratings/);
+    assert.match(html, /player-section-matches/);
+    assert.match(html, /player-section-trophies/);
+    if (section === "badges") assert.match(html, /data-testid="player-overview"/, "Old badge links return to profile overview");
+  }
   awards = { ...awards, trophies: excluded };
   html = await render({ section: "trophies" });
   assert.match(html, /No top-three tournament or end-of-league awards yet/);

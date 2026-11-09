@@ -703,6 +703,9 @@ def _run_badge_stage(
     affected_player_ids = [
         int(value) for value in operation.get("affected_player_ids") or []
     ]
+    # The historical SQL ledger still requires this stage. Retired badges
+    # acknowledge each owned progress row without evaluating or changing awards;
+    # retain the normal finalizer so rating replay/recovery remains durable.
     try:
         result = reconcile_match_exclusion_badges(
             supabase,

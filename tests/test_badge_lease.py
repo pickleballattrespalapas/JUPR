@@ -143,3 +143,8 @@ def test_two_external_api_contexts_cannot_poll_program_badges(monkeypatch):
     db = SimpleNamespace(rpc=lambda *a, **k: SimpleNamespace(execute=lambda: SimpleNamespace(data=[])))
     with isolated_worker_context():
         assert program_badge_service.process_pending_program_badges(db) == {"processed": 0, "errors": 0}
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

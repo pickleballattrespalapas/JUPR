@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import hashlib
 import csv
 import io
@@ -440,6 +442,10 @@ def _badge_eval_run_count(supabase: Any, *, club_id: str, limit: int = 1000) -> 
 
 
 def build_admin_worker_status(supabase: Any, *, club_id: str) -> dict[str, Any]:
+    if not badges_enabled():
+        return {"ok": True, "status": "retired", "queue_counts": {},
+                "badge_recompute_run_count": {"ok": True, "count": None},
+                "queue_modes": [], "badge_recompute_modes": [], "confirmation_text": {}}
     queue_counts = {
         status: _table_count(supabase, "badge_eval_queue", club_id=str(club_id), status=status)
         for status in QUEUE_STATUS_VALUES
@@ -1679,6 +1685,8 @@ def run_admin_badge_queue_worker(
     operation_key: str,
     source: str = "next_admin_tools_workers",
 ) -> dict[str, Any]:
+    if not badges_enabled():
+        raise PermissionError("Badges are retired.")
     if not is_admin_tools_enabled():
         raise PermissionError("Next Admin Tools are disabled.")
     normalized_mode = str(mode or "batch").strip().lower()
@@ -1823,6 +1831,8 @@ def run_admin_badge_recompute_job(
     operation_key: str = "",
     source: str = "next_admin_tools_badge_recompute",
 ) -> dict[str, Any]:
+    if not badges_enabled():
+        raise PermissionError("Badges are retired.")
     if not is_admin_tools_enabled():
         raise PermissionError("Next Admin Tools are disabled.")
     normalized_mode = str(mode or "dry-run").strip().lower()

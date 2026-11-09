@@ -145,6 +145,12 @@ const responses = {
     const { share } = await resolve('/pages/visit', '', {}, { ...club, page: { title: 'Plan Your Visit', description: '<p>Welcome to <b>Baja</b>.</p>', image: 'https://images.example.com/courts.jpg' } });
     assert.equal(share.title, 'Plan Your Visit | Tres Palapas'); assert.doesNotMatch(share.description, /<p>|<b>/); assert.match(share.image, /courts/);
   });
+  await check('retired badge links do not advertise badges or query their API', async () => {
+    const { share, calls } = await resolve('/badge-codex', 'badge=old');
+    assert.equal(share.noindex, true);
+    assert.equal(share.title, 'Page unavailable | Tres Palapas');
+    assert.deepEqual(calls, []);
+  });
   await check('every standard club section avoids generic PCS promotion', async () => {
     for (const section of ['leaderboards','players','matches','play','live','ladder-generator','team-match-generator','challenge-ladder','weekly-recap','badge-codex','match-explorer','interclub']) {
       const { share } = await resolve(`/${section}`); assert.match(share.title, /Tres Palapas/); assert.doesNotMatch(share.title, /PCS|Sandwich/);

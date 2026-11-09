@@ -51,8 +51,10 @@ for (const changed of [{ edits_json: { editorial: { headline: "Someone else's ed
   assert(!sourceOnlyRecapChange(beforeRename, { ...renamed, ...changed }), "A conflicting editor, publication, or identity is never overwritten");
 assert.deepEqual(
   projectEditions(groups, normalizeBuilder(fixture.config)),
-  fixture.expected,
+  Object.fromEntries(Object.entries(fixture.expected).map(([channel, blocks]) => [channel, blocks.filter(block => block.key !== "achievements")])),
 );
+assert.equal(normalizeBuilder(fixture.config).order.includes("achievements"), false);
+assert.equal(normalizeBuilder({ sections: { achievements: { enabled: true, email_enabled: true } } }).sections.achievements.enabled, false);
 const report = { headline: "Club recap", ...fixture.expected };
 const html = buildWeeklyReportEmail(
   { report },

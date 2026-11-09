@@ -539,7 +539,7 @@ def test_complete_session_email_aggregates_batches_and_resumes_failed_queue_with
     snapshot = rows[0]["digest_snapshot_json"]
     assert set(snapshot["match_ids"]) == {str(match["id"]) for match in db.db["matches"]}
     assert snapshot["session_evidence"]["player_updates"]
-    assert len(snapshot["badge_refs"]) == (2 if play_format == "doubles" else 1)
+    assert snapshot["badge_refs"] == [], "Retired badges cannot hold the complete session email"
 
 
 @pytest.fixture

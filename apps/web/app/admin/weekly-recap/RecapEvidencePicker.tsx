@@ -112,12 +112,6 @@ const otherGroups: Array<{
     description: "Current award standings and progress toward eligibility.",
   },
   {
-    id: "achievements",
-    section: "achievements",
-    label: "New achievements",
-    description: "Badges earned from games in this date range.",
-  },
-  {
     id: "welcome",
     section: "welcome",
     label: "New players",

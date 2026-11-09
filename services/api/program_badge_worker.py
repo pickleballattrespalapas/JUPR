@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 from jupr_app.domain.gamification.program_badge_service import process_pending_program_badges
 from jupr_app.domain.gamification.badge_lease import processing_deferred
 
@@ -14,7 +15,7 @@ def install_program_badge_worker(app, *, get_supabase_client):
     async def start_program_badge_worker():
         # Enable only after a separately supervised worker is deployed and
         # verified. The default retains the current processing topology.
-        if processing_deferred():
+        if not badges_enabled() or processing_deferred():
             return
         if os.getenv("JUPR_ENV") != "staging" or os.getenv("FLY_APP_NAME") != "juprleagues-api-staging":
             return

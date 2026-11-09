@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import argparse
 import datetime as dt
 import json
@@ -41,6 +43,9 @@ def run_badge_queue_worker(
     max_wall_clock_seconds: float = 90.0,
     max_errors: int = 10,
 ) -> dict[str, Any]:
+    if not badges_enabled():
+        return {"ok": True, "club_id": club_id, "total_processed": 0,
+                "total_errored": 0, "stopped_reason": "badges_retired"}
     url, key, key_source = _resolve_supabase_config()
     supabase = make_supabase(url, key)
     run_id: str | None = None

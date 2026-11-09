@@ -283,3 +283,8 @@ def test_program_failure_keeps_backoff_without_provider_text_in_logs(enabled, mo
     record = next(record for record in caplog.records if record.message == "badge.program.failed")
     assert record.exception_type == "RuntimeError" and record.club_id == "other"
     assert record.exc_info is None
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

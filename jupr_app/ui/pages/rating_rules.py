@@ -10,12 +10,12 @@ def render(ctx) -> None:  # noqa: ARG001
           <div class="jupr-card jupr-rules-section">
             <div class="jupr-hero-eyebrow">Rating System</div>
             <h1 class="jupr-hero-title">Rating Rules</h1>
-            <p class="jupr-hero-subtitle">How JUPR ratings, verified matches, corrections, and badges work at Tres Palapas.</p>
+            <p class="jupr-hero-subtitle">How JUPR ratings, verified matches, corrections, and trophies work at Tres Palapas.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
             <h2>1) What JUPR tracks</h2>
-            <p>JUPR is the player rating and event tracking system for Tres Palapas leagues, ladders, verified round robins, tournaments, player profiles, badges, and weekly updates.</p>
+            <p>JUPR is the player rating and event tracking system for Tres Palapas leagues, ladders, verified round robins, tournaments, player profiles, trophies, and weekly updates.</p>
             <p>JUPR ratings update from official rated match history inside the Tres Palapas system. They are based on entered match results, not reputation, self-rating, or one strong day on court.</p>
           </div>
 
@@ -73,10 +73,8 @@ def render(ctx) -> None:  # noqa: ARG001
           </div>
 
           <div class="jupr-rules-section jupr-card">
-            <h2>8) How badges are awarded</h2>
-            <p>Badges are awarded from recorded player, match, league, tournament, and event data. Participation badges come from attendance or match history. Performance badges come from results. League and tournament badges come from completed event outcomes.</p>
-            <p>Public badge descriptions summarize the achievement. The actual award comes from recorded JUPR data.</p>
-            <a class="jupr-link-button" href="?page=badge_codex">See Badge Codex</a>
+            <h2>8) Trophies</h2>
+            <p>Player trophy cases recognize tournament podiums and top-three league end awards from recorded event results.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
@@ -86,7 +84,7 @@ def render(ctx) -> None:  # noqa: ARG001
 
           <div class="jupr-rules-section jupr-card">
             <h2>10) Admin integrity</h2>
-            <p>Rated results are entered, corrected, and managed by authorized admins. Public users can view ratings, match history, profiles, badges, and event results, but they cannot edit official rated history.</p>
+            <p>Rated results are entered, corrected, and managed by authorized admins. Public users can view ratings, match history, profiles, trophies, and event results, but they cannot edit official rated history.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">

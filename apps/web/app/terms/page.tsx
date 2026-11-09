@@ -29,7 +29,7 @@ export default function TermsPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Ratings, standings, and records</h2>
           <p style={{ color: "#475569" }}>
-            Ratings, rankings, badges, standings, match history, and tournament information are provided to support club operations, fair play, event organization, and player progress tracking. They may be updated, corrected, recalculated, or removed when organizers identify errors or operational needs.
+            Ratings, rankings, standings, match history, and tournament information are provided to support club operations, fair play, event organization, and player progress tracking. They may be updated, corrected, recalculated, or removed when organizers identify errors or operational needs.
           </p>
         </article>
         <article style={cardStyle}>

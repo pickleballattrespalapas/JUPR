@@ -134,7 +134,7 @@ def test_badge_upsert_adds_tape_excerpt_and_is_idempotent():
     assert len(storage["player_badges"]) == 1
 
 
-def test_ensure_badges_is_idempotent():
+def test_ensure_badges_is_idempotent(legacy_badges_enabled):
     df_matches = pd.DataFrame(
         [
             {

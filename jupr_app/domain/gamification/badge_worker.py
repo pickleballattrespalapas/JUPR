@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from jupr_app.data.paged_reads import DataReadUnavailable, read_all_rows
 
 from copy import copy
@@ -30,6 +32,8 @@ def process_badge_eval_queue(
     ctx: Any | None = None,
     match_limit: int = 5000,
 ) -> dict[str, int]:
+    if not badges_enabled():
+        return {"processed": 0, "errored": 0}
     clean_club_id = str(club_id or "").strip()
     if not clean_club_id:
         raise ValueError("club_id is required to process the badge evaluation queue")
@@ -89,6 +93,9 @@ def process_badge_eval_queue_until_empty(
     max_errors: int = 10,
     progress_cb: Callable[[dict[str, int | float | str]], None] | None = None,
 ) -> dict[str, int | float | str]:
+    if not badges_enabled():
+        return {"total_processed": 0, "total_errored": 0, "loops": 0,
+                "stopped_reason": "badges_retired", "duration_seconds": 0.0}
     if processing_deferred(club_id):
         return {"total_processed": 0, "total_errored": 0, "loops": 0,
                 "stopped_reason": "external_worker_required", "duration_seconds": 0.0}

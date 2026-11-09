@@ -2,6 +2,8 @@
 from urllib.parse import urlsplit
 import re
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 
 def text(value, limit=3000):
     return str(value or "").replace("<", "").replace(">", "").strip()[:limit]
@@ -44,7 +46,7 @@ def sanitize_report(raw):
         event["weekly_reports"] = [{"label": text(link.get("label"), 80), "href": report_href(link.get("href"))} for link in source.get("weekly_reports", [])[:20] if isinstance(link, dict) and report_href(link.get("href"))]
     result["season_races"] = [{"title": text(r.get("title"), 240), "lines": [text(line, 500) for line in r.get("lines", [])[:8]], "href": report_href(r.get("href"))} for r in raw.get("season_races", [])[:60] if isinstance(r, dict)]
     for k in ("achievements", "new_faces"):
-        result[k] = [text(line, 500) for line in raw.get(k, [])[:100]]
+        result[k] = [text(line, 500) for line in raw.get(k, [])[:100]] if k != "achievements" or badges_enabled() else []
     result["upcoming"] = [{"text": text(e.get("text"), 240), "url": safe_url(e.get("url"))} for e in raw.get("upcoming", [])[:10] if isinstance(e, dict) and text(e.get("text"))]
     return result
 
@@ -63,7 +65,7 @@ def report_lines(report):
         lines.append("Season awards race")
         for race in report["season_races"]:
             lines.extend([race["title"], *[f"- {line}" for line in race.get("lines", [])]])
-    if report.get("achievements"):
+    if badges_enabled() and report.get("achievements"):
         lines.extend(["New achievements", *[f"- {line}" for line in report["achievements"]]])
     if report.get("new_faces"):
         lines.extend(["Welcome to the courts", ", ".join(report["new_faces"])])

@@ -178,7 +178,7 @@ def test_new_faces_include_social_only_and_require_complete_history():
     assert 'New Social' in result and 'Returning' not in result and 'Alex' not in result
 
 
-def test_achievements_use_trigger_game_not_insertion_time_and_ignore_revocations():
+def test_achievements_use_trigger_game_not_insertion_time_and_ignore_revocations(legacy_badges_enabled):
     badges = [{'id':1,'club_id':'club','player_id':1,'badge_id':'old','earned_at':'2026-10-14','match_id':999}, {'id':2,'club_id':'club','player_id':1,'badge_id':'new','earned_at':'2026-10-20','match_id':1}, {'id':3,'club_id':'club','player_id':2,'badge_id':'revoked','match_id':1,'revoked_at':'2026-10-14'}]
     ctx = SimpleNamespace(supabase=DB(player_badges=badges),club_id='club',id_to_name={1:'Alex'},df_badges=pd.DataFrame())
     assert _achievements(ctx,[match(1)]) == ['Alex — new']

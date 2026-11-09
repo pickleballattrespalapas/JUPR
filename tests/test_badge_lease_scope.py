@@ -101,3 +101,8 @@ def test_pilot_api_never_falls_back_with_worker_only_or_shared_lease_flag(scoped
     assert result["mode"] == ("queue" if queued else "queue_error")
     if not queued:
         assert result["recovery_required"] and result["recovery_match_refs"] == ["saved"]
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

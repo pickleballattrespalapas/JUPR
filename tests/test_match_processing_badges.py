@@ -307,3 +307,8 @@ def test_bulk_edit_keeps_earlier_enqueue_failure_visible(monkeypatch, mode):
     assert result["badge_summary"]["recovery_required"]
     assert any("award evaluations could not be queued" in warning for warning in result["warnings"])
     assert sb.tables["player_badges"] == []
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

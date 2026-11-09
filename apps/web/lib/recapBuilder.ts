@@ -227,7 +227,7 @@ export function normalizeBuilder(
   ];
   return {
     version: 1,
-    order,
+    order: order.filter((key) => key !== "achievements"),
     email_order_mode: value?.email_order_mode === "custom" ? "custom" : "website",
     ...(Array.isArray(value?.email_order)
       ? {
@@ -236,7 +236,7 @@ export function normalizeBuilder(
               ...value.email_order.filter((k) => keys.includes(k)),
               ...order,
             ]),
-          ],
+          ].filter((key) => key !== "achievements"),
         }
       : {}),
     sections: Object.fromEntries(
@@ -248,6 +248,7 @@ export function normalizeBuilder(
           title: RECAP_SECTIONS[key],
           detail: "full",
           ...(value?.sections?.[key] || {}),
+          ...(key === "achievements" ? { enabled: false, email_enabled: false } : {}),
         },
       ]),
     ) as Record<SectionKey, SectionSetting>,
@@ -414,7 +415,7 @@ export function projectEditions(
       : builder.order) {
       const setting = builder.sections[key];
       if (
-        !setting.enabled ||
+        key === "achievements" || !setting.enabled ||
         (channel === "email_edition" && !setting.email_enabled)
       )
         continue;

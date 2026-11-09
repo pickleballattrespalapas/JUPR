@@ -86,7 +86,11 @@ global.fetch = async (url, options = {}) => {
 
 (async () => {
   const { CLUB_LINKS, clubPageSection, publicClubPage, publicClubLinks } = load("lib/clubSite.ts");
-  assert.equal(publicClubLinks(initial).length, 11, "Existing documents retain their public sections and gain the club trophy case");
+  assert.equal(publicClubLinks(initial).length, 10, "Existing documents keep the trophy case and hide retired badges");
+  assert.equal(publicClubPage(initial, "alpha", "/clubs/alpha/badge-codex"), false);
+  assert.equal(publicClubPage({ ...initial, page_visibility: { "badge-codex": "public" } }, "alpha", "/clubs/alpha/badge-codex?badge=old"), false);
+  assert.equal(load("lib/clubSite.ts").visible({ badges: true }, "badges"), false);
+  assert.equal(load("lib/clubSite.ts").canLinkClubPage(initial, "alpha", "/clubs/alpha/badge-codex", "/clubs/alpha/badge-codex"), false);
   const doc = { ...initial, page_visibility: { players: "private", tournaments: "private", matches: "private", leagues: "private", play: "private" } };
   for (const [route, section] of [
     ["players/12?source=results", "players"], ["matches/20", "matches"],
