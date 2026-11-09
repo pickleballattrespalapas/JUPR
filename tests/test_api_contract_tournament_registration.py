@@ -163,7 +163,9 @@ def test_public_tournament_registration_submit_and_confirmation_contract(client)
     assert tampered.status_code == 404
 
 
-def test_public_tournament_registration_duplicate_email_returns_recovery_conflict(client):
+def test_public_tournament_registration_duplicate_email_sends_edit_link(client, monkeypatch):
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
+    monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "test-registration-edit-secret-32bytes")
     payload = {
         "registration_slug": "tres-open",
         "first_name": "Alex",
@@ -178,8 +180,11 @@ def test_public_tournament_registration_duplicate_email_returns_recovery_conflic
 
     duplicate = client.post("/clubs/tres-palapas/tournament-registration", json=payload)
 
-    assert duplicate.status_code == 409
-    assert "Request an edit link" in duplicate.json()["detail"]
+    assert duplicate.status_code == 200
+    assert duplicate.json()["mode"] == "existing_registration"
+    assert duplicate.json()["edit_link_status"] == "dry_run"
+    assert "confirmation_token" not in duplicate.json()
+    assert duplicate.headers["cache-control"] == "no-store, private"
 
 
 def test_public_tournament_registration_submit_requires_age_and_gender(client):

@@ -334,6 +334,7 @@ export type PublicRegistrationEditLinkRequestResponse = {
 };
 
 export type PublicRegistrationSubmitResponse = {
+  mode?: never;
   club: { id: string; slug: string; name: string };
   ok: boolean;
   tournament: PublicTournamentSummary;
@@ -353,6 +354,14 @@ export type PublicRegistrationSubmitResponse = {
     status?: "dry_run" | "staging_redirect" | "sent" | "failed" | string | null;
     message?: string | null;
   } | null;
+};
+
+export type PublicRegistrationRecoveryResponse = {
+  club: { id: string; slug: string; name: string };
+  ok: boolean;
+  mode: "existing_registration";
+  edit_link_status: "sent" | "dry_run" | "staging_redirect" | "locked" | "unavailable";
+  message: string;
 };
 
 export type PublicRegistrationConfirmationResponse = {
@@ -673,8 +682,8 @@ export async function getClubTournamentRoster(
 export async function submitClubTournamentRegistration(
   clubSlug: string,
   payload: PublicRegistrationSubmitPayload
-): Promise<ApiResult<PublicRegistrationSubmitResponse>> {
-  return fetchJson<PublicRegistrationSubmitResponse>(`/clubs/${clubSlug}/tournament-registration`, {
+): Promise<ApiResult<PublicRegistrationSubmitResponse | PublicRegistrationRecoveryResponse>> {
+  return fetchJson<PublicRegistrationSubmitResponse | PublicRegistrationRecoveryResponse>(`/clubs/${clubSlug}/tournament-registration`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)

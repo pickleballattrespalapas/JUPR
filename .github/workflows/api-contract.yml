@@ -220,6 +220,7 @@ jobs:
             tests/test_league_manager_operator_ux_static.py \
             tests/test_league_roster_rating_integrity_migration.py \
             tests/test_public_tournament_registration_edit_service.py \
+            tests/test_tournament_registration_existing_handoff.py \
             tests/test_tournament_division_transfer_service.py \
             tests/test_public_tournament_registration_service.py \
             tests/test_public_tournament_team_setup_recovery.py \

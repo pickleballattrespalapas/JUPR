@@ -16,6 +16,7 @@ from jupr_app.domain.tournament_registration_repo import (
 from jupr_app.services.public_tournament_registration_edit_service import (
     PublicRegistrationEditUnavailableError,
     build_public_tournament_registration_edit_page,
+    recover_existing_public_tournament_registration,
     request_public_tournament_registration_edit_link,
     submit_public_tournament_registration_edit,
     withdraw_public_tournament_registration,
@@ -414,29 +415,38 @@ def install_public_tournament_registration_routes(
     def submit_club_tournament_registration(
         club_slug: str,
         payload: PublicTournamentRegistrationRequest,
+        response: Response,
     ) -> dict[str, Any]:
         require_public_intake_or_403()
         try:
             require_production_tournament_writes()
         except (PermissionError, RuntimeError) as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        response.headers["Cache-Control"] = "no-store, private"
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
         try:
             request_payload = _dump_model(payload)
             request_payload["_require_demographics"] = True
+
+            def submit_or_recover() -> dict[str, Any]:
+                try:
+                    return submit_public_tournament_registration(
+                        supabase, club_id=club_id, club_slug=club_slug, payload=request_payload,
+                    )
+                except DuplicateTournamentRegistrationError:
+                    _require_registration_edit_service_role()
+                    return recover_existing_public_tournament_registration(
+                        supabase, club_id=club_id, club_slug=club_slug, payload=request_payload,
+                    )
+
             result = audited_registration_call(
                 supabase, club_id=club_id, payload=request_payload, stage="submit",
-                operation=lambda: submit_public_tournament_registration(
-                supabase,
-                club_id=club_id,
-                club_slug=club_slug,
-                payload=request_payload,
-                ),
+                operation=submit_or_recover,
             )
-        except DuplicateTournamentRegistrationError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PublicRegistrationEditUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except (
             TournamentCommerceQuoteChangedError,
             TournamentCommerceConflictError,
