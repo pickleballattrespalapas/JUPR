@@ -587,10 +587,12 @@ export default function TournamentRegistrationForm({
         return `${event.division_name} does not accept partner information.`;
       }
       if (partner.mode === "HAS_PARTNER") {
-        if (!partner.name.trim() || !partner.email.trim() || !partner.age.trim() || !partner.gender || !partner.skill.trim()) {
+        const savedPartner = partner.profileId ? partner.registeredPartner : null;
+        if (!partner.name.trim() || (!savedPartner?.has_email && !partner.email.trim())
+          || (!savedPartner?.has_age && !partner.age.trim()) || (!savedPartner?.has_gender && !partner.gender) || !partner.skill.trim()) {
           return `${event.division_name}: partner name, email, age, gender, and starting skill are required.`;
         }
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(partner.email.trim())) {
+        if (!savedPartner?.has_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(partner.email.trim())) {
           return `${event.division_name}: enter a valid partner email address.`;
         }
         const partnerSkill = numericValue(partner.skill);
@@ -683,6 +685,7 @@ export default function TournamentRegistrationForm({
         partner_mode: partner.mode,
         partner_name: partner.name,
         partner_email: partner.email,
+        partner_registration_key: partner.profileId ? partner.registeredPartner?.key : undefined,
         partner_phone: partner.phone,
         partner_dupr_id: partner.duprId,
         partner_skill: numericValue(partner.skill),

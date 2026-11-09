@@ -77,12 +77,20 @@ export type PublicRegistrationEvent = {
   selectable?: boolean | null;
 };
 
+export type RegisteredTournamentPartner = {
+  key: string;
+  has_email: boolean;
+  has_age: boolean;
+  has_gender: boolean;
+};
+
 export type PublicRegistrationPlayer = {
   id: string;
   display_name: string;
   dupr_id?: string | null;
   doubles_skill?: number | null;
   singles_skill?: number | null;
+  registered_partner?: RegisteredTournamentPartner | null;
 };
 
 export type PublicRegistrationProfileResolutionPayload = {
@@ -207,6 +215,7 @@ export type PublicRegistrationSelectionPayload = {
   registration_day_id?: string | null;
   partner_mode: "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER";
   partner_name?: string | null;
+  partner_registration_key?: string | null;
   partner_email?: string | null;
   partner_phone?: string | null;
   partner_dupr_id?: string | null;

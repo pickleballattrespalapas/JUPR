@@ -328,6 +328,58 @@ async function testPartialNameSuggestions() {
   await act(async () => renderer.unmount());
 }
 
+async function testRegisteredPartner() {
+  const saved = { key: "tr_registered_partner", has_email: true, has_age: true, has_gender: true };
+  lookupResponse = async () => ({ data: { profile_candidates: [{ ...candidate, registered_partner: saved }], profile_match_kind: "name_exact" } });
+  await act(async () => { renderer = create(React.createElement(NewForm, props)); });
+  await act(async () => button("Start a registration").props.onClick());
+  for (const [name, value] of [["First name", "Fixture"], ["Last name", "Player"], ["Email", "player@example.invalid"], ["Age", "40"], ["Gender", "Men"]]) await change(name, value);
+  await act(async () => button("Continue").props.onClick());
+  await change("Doubles skill", "4.0");
+  await act(async () => button("Continue to events").props.onClick());
+  await act(async () => field("Mixed Below 9").props.onChange({ target: { checked: true } }));
+  await change("Below 9 partner plan", "HAS_PARTNER");
+  await change("Below 9 partner name", "Fixture Partner");
+  await settle();
+  for (const label of ["email", "age", "gender", "phone"]) {
+    assert.equal(renderer.root.findAllByProps({ "aria-label": `Below 9 partner ${label}` }).length, 0, `Saved ${label} must not be requested again`);
+  }
+  assert.match(content(renderer.root), /Already registered/);
+  await act(async () => button("Review registration").props.onClick());
+  assert.ok(button("Submit registration"), "Registered partner can continue without retyping private details");
+  await act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "checkbox").props.onChange({ target: { checked: true } }));
+  await act(async () => button("Submit registration").props.onClick());
+  assert.equal(submissions.at(-1).selections[0].partner_registration_key, saved.key);
+  assert.equal(submissions.at(-1).selections[0].partner_email, "");
+  await act(async () => renderer.unmount());
+
+  const registration = { id: "reg", email: "player@example.invalid", first_name: "Fixture", last_name: "Player", age: 40, gender: "Men", doubles_skill: 4.0 };
+  await act(async () => { renderer = create(React.createElement(EditForm, { ...props, registration, editToken: "fixture", players: [], selections: [{ id: "selection", event_option_id: "mixed", partner_mode: "HAS_PARTNER", partner_name: "Fixture Partner" }] })); });
+  await act(async () => button("Edit event").props.onClick());
+  await settle();
+  assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner email" }).length, 0);
+  await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
+  await act(async () => button("Edit event").props.onClick());
+  assert.match(content(renderer.root), /Already registered/, "Reopening preserves the selected registration");
+  await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
+  const original = global.FormData;
+  global.FormData = class { get(name) { return { first_name: "Fixture", last_name: "Player", age: "40", gender: "Men", doubles_skill: "4.0", terms_accepted: "on" }[name] ?? null; } };
+  try { await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} })); }
+  finally { global.FormData = original; }
+  assert.equal(submissions.at(-1).selections[0].partner_registration_key, saved.key, "The edit payload must retain the selected partner reference");
+  await act(async () => button("Edit event").props.onClick());
+  await act(async () => button("Change profile").props.onClick());
+  assert.equal(field("Below 9 partner email").props.required, true, "Clearing a registered partner restores manual requirements");
+  lookupResponse = async () => ({ data: { profile_candidates: [{ ...candidate, registered_partner: { ...saved, has_age: false } }] } });
+  await act(async () => button("Find partner profile").props.onClick());
+  assert.equal(field("Below 9 partner age").props.required, true, "Only missing saved information is requested");
+  assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner email" }).length, 0);
+  await change("Below 9 partner name", "A new partner");
+  assert.equal(field("Below 9 partner email").props.required, true, "Changing names immediately clears the saved registration");
+  await act(async () => renderer.unmount());
+  lookupResponse = async () => ({ data: { profile_candidates: [candidate] } });
+}
+
 async function main() {
   const previousWindow = global.window;
   global.window = { location: { hash: "" }, addEventListener() {}, removeEventListener() {} };
@@ -341,6 +393,7 @@ async function main() {
     await testUnratedPartner();
     await testDuplicatePartnerChoice();
     await testPartialNameSuggestions();
+    await testRegisteredPartner();
     await testAcceptedInvitationPrefill();
     console.log("Partner profiles: new/edit flows, prefill, eligibility, identity boundary, stale responses and manual fallback passed.");
   } finally { if (renderer) await act(async () => renderer.unmount()); global.window = previousWindow; }
