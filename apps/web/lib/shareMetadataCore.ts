@@ -92,7 +92,6 @@ const PAGES: Record<string, [string, string]> = {
   "team-match-generator": ["Team Matches", "Build and follow team pickleball matches at {club}."],
   "challenge-ladder": ["Challenge Ladder", "Follow the challenge ladder, standings, and challenges at {club}."],
   "weekly-recap": ["Weekly Recap", "Catch up on pickleball events, results, and highlights at {club}."],
-  "badge-codex": ["Badges & Trophies", "Explore pickleball achievements, badges, and trophies at {club}."],
   "match-explorer": ["Match Explorer", "Explore pickleball matchups at {club}."],
   interclub: ["Interclub Leagues", "Follow interclub pickleball leagues involving {club}, including meet schedules, standings, and results."],
   "tournament-registration": ["Tournament Registration", "Explore tournament registration at {club}."],
@@ -130,6 +129,7 @@ export async function resolveClubShare(input: {
     image: publicImage(club.image, input.origin), accent: club.accent,
     noindex: club.discoverable === false
   };
+  if (section === "badge-codex") return { ...base, title: `Page unavailable | ${name}`, description: "This page is no longer available.", query: "", noindex: true };
   if (club.available === false) return { ...base, title: "Club unavailable", description: "This club page is currently unavailable.", image: undefined, query: "", noindex: true };
   if (input.privateLink || privateShareLink(input.path, input.query)) {
     return { ...base, title: `Private page | ${name}`, description: `A private link for ${name}.`, path: `/clubs/${encodeURIComponent(club.slug)}`, query: "", noindex: true };

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.domain.player_activity import is_player_leaderboard_active
 from jupr_app.data.paged_reads import read_all_rows
@@ -436,16 +438,26 @@ def _public_match(row: dict[str, Any], name_by_id: dict[str, str], *, include_ra
 
 
 def _fetch_player_badges(supabase: Any, *, club_id: str, player_id: int | str) -> list[dict[str, Any]]:
-    rows = read_all_rows(lambda: supabase.table("player_badges").select(PLAYER_BADGE_SELECT)
-                         .eq("club_id", str(club_id)).eq("player_id", player_id))
+    def query():
+        result = (supabase.table("player_badges").select(PLAYER_BADGE_SELECT)
+                  .eq("club_id", str(club_id)).eq("player_id", player_id))
+        if not badges_enabled():
+            result = result.in_("badge_id", sorted({"podium", *_PODIUM_BADGE_PLACEMENTS, *_LEAGUE_TOP_PERFORMER_BADGES}))
+        return result
+    rows = read_all_rows(query)
     return [row for row in rows if not row.get("revoked_at")]
 
 def _fetch_badge_definitions(supabase: Any) -> dict[str, dict[str, Any]]:
+    def query(columns):
+        result = supabase.table("badges").select(columns)
+        if not badges_enabled():
+            result = result.in_("badge_id", sorted({"podium", *_PODIUM_BADGE_PLACEMENTS, *_LEAGUE_TOP_PERFORMER_BADGES}))
+        return result
     try:
-        rows = _safe_rows(supabase.table("badges").select(BADGE_SELECT).execute())
+        rows = _safe_rows(query(BADGE_SELECT).execute())
     except Exception:
         try:
-            rows = _safe_rows(supabase.table("badges").select("badge_id,name,category,prestige,is_active").execute())
+            rows = _safe_rows(query("badge_id,name,category,prestige,is_active").execute())
         except Exception:
             return {}
     return {str(row.get("badge_id") or "").strip(): row for row in rows if str(row.get("badge_id") or "").strip()}
@@ -530,7 +542,7 @@ def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict
         prestige = _int_or_none(definition.get("prestige")) or 0
         trophy_rows = [row for row in rows if _is_formal_trophy(row, badge_id)]
         cabinet_rows = [row for row in rows if row not in trophy_rows]
-        if cabinet_rows:
+        if cabinet_rows and badges_enabled():
             prestige_total += prestige * len(cabinet_rows)
             earned_values = [str(row.get("earned_at") or "") for row in cabinet_rows]
             badges.append(
@@ -568,7 +580,8 @@ def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict
     from jupr_app.services.interclub_awards_service import player_interclub_awards
     interclub = player_interclub_awards(supabase, club_id=club_id, player_id=player_id)
     trophies.extend(interclub["trophies"])
-    badges.extend(interclub["badges"])
+    if badges_enabled():
+        badges.extend(interclub["badges"])
     badges.sort(key=lambda item: (category_sort_key(item["category"]), str(item.get("name") or "").casefold()))
     trophies.sort(key=lambda item: str(item.get("earned_at") or ""), reverse=True)
     return {

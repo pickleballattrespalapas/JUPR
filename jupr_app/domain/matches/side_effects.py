@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import logging
 from typing import Any
 
@@ -13,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 def ensure_notification_badge_job(*, supabase, club_id: str, match_ids: list[int | str], player_ids: list[int]) -> str:
     """Recover a missing exact badge job without resetting an existing job."""
+    if not badges_enabled():
+        return ""
     reference = str(match_ids[0])
     rows = (supabase.table("badge_eval_queue").select("id,status")
         .eq("club_id", club_id).eq("event_type", "match_recorded")
@@ -43,6 +47,8 @@ def run_badge_side_effects(
     dedupe_match_id: str | None = None,
 ) -> dict[str, Any]:
     badge_summary: dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
+    if not badges_enabled():
+        return {**badge_summary, "mode": "disabled"}
     if not (supabase is not None and has_badge_eligible_match):
         return badge_summary
     enqueue_result = enqueue_badge_eval(

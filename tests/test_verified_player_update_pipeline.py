@@ -94,6 +94,8 @@ def test_display_range_uses_month_day_ordinals():
 
 
 def test_load_badges_uses_canonical_description(monkeypatch):
+    from jupr_app.domain.gamification import badge_policy
+    monkeypatch.setattr(badge_policy, "BADGES_ENABLED", True)
     class _Badge:
         title = "Blowout Artist"
 
@@ -249,7 +251,7 @@ def test_email_html_renders_matches_and_quiet_empty_trophies():
     html = build_player_update_email_html(digest, chart_cid="chart-1")
     assert "Chart unavailable for this date range" not in html
     assert "Matches" in html
-    assert "Blowout Artist x3" in html
+    assert "Blowout Artist x3" not in html
     assert "None this period" not in html
 
 

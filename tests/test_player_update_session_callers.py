@@ -102,11 +102,8 @@ def test_legacy_processors_queue_actual_insert_ids_without_prior_same_day_matche
     assert len(queue_calls) == 1
     assert queue_calls[0]["match_ids"] == [sb.tables["matches"][-1]["id"]]
     assert 900 not in queue_calls[0]["match_ids"]
-    if format_name == "doubles":
-        assert badge_calls[0]["match_id"] == str(sb.tables["matches"][-1]["id"])
-        assert queue_calls[0]["badge_refs"] == [badge_calls[0]["match_id"]]
-    else:
-        assert queue_calls[0]["badge_refs"] == []
+    assert badge_calls == []
+    assert queue_calls[0]["badge_refs"] == []
 
 
 def _tournament_matches():
@@ -142,10 +139,13 @@ def test_tournament_match_receipt_fails_closed_for_incomplete_or_ambiguous_scope
     ) == []
 
 
-@pytest.mark.parametrize("badge_mode", ["queue", "inline_error", "error"])
+@pytest.mark.parametrize("badge_mode", ["disabled", "queue", "inline_error", "error"])
 def test_challenge_post_processors_forward_committed_receipt_scope(monkeypatch, badge_mode):
     calls = []
-    monkeypatch.setattr(ladder, "run_badge_side_effects", lambda **kwargs: {"mode": badge_mode, "notification_badge_refs": [] if badge_mode.endswith("error") else ["operation-key"]})
+    if badge_mode != "disabled":
+        from jupr_app.domain.gamification import badge_policy
+        monkeypatch.setattr(badge_policy, "BADGES_ENABLED", True)
+        monkeypatch.setattr(ladder, "run_badge_side_effects", lambda **kwargs: {"mode": badge_mode, "notification_badge_refs": [] if badge_mode.endswith("error") else ["operation-key"]})
     monkeypatch.setattr(ladder, "queue_player_updates", lambda **kwargs: calls.append(kwargs) or {"mode": "queued", "failed": 0})
     def post_process():
         return ladder._run_atomic_match_side_effects(
@@ -162,11 +162,11 @@ def test_challenge_post_processors_forward_committed_receipt_scope(monkeypatch, 
     post_process()
     assert len(calls) == 1
     assert calls[0]["match_ids"] == [501, 502]
-    assert calls[0]["badge_refs"] == ["operation-key"]
+    assert calls[0]["badge_refs"] == ([] if badge_mode == "disabled" else ["operation-key"])
     assert calls[0]["session_evidence"]["player_updates"][0]["after"]["rating"] == 1216
 
 
-@pytest.mark.parametrize("badge_mode", ["queue", "inline_error", "error"])
+@pytest.mark.parametrize("badge_mode", ["disabled", "queue", "inline_error", "error"])
 def test_tournament_atomic_publish_forwards_committed_scope_rating_evidence_and_badge_job(monkeypatch, badge_mode):
     from tests.test_api_contract_admin_tournament_match_publish import (
         install_official_publish_prerequisites, match_publish_tables,
@@ -190,7 +190,10 @@ def test_tournament_atomic_publish_forwards_committed_scope_rating_evidence_and_
     calls = []
     badge_calls = []
     monkeypatch.setattr(tournament, "_apply_official_rating_plan_atomic", commit)
-    monkeypatch.setattr(tournament, "run_badge_side_effects", lambda **kwargs: badge_calls.append(kwargs) or {"mode": badge_mode, "notification_badge_refs": [] if badge_mode.endswith("error") else [kwargs["dedupe_match_id"]]})
+    if badge_mode != "disabled":
+        from jupr_app.domain.gamification import badge_policy
+        monkeypatch.setattr(badge_policy, "BADGES_ENABLED", True)
+        monkeypatch.setattr(tournament, "run_badge_side_effects", lambda **kwargs: badge_calls.append(kwargs) or {"mode": badge_mode, "notification_badge_refs": [] if badge_mode.endswith("error") else [kwargs["dedupe_match_id"]]})
     monkeypatch.setattr(tournament, "queue_player_updates", lambda **kwargs: calls.append(kwargs) or {"mode": "queued", "failed": 0})
     monkeypatch.setattr(tournament, "auto_send_player_updates_for_match_payloads", lambda *args, **kwargs: {"mode": "disabled"})
 
@@ -211,8 +214,11 @@ def test_tournament_atomic_publish_forwards_committed_scope_rating_evidence_and_
     assert result["match_count"] == 1
     assert calls[0]["match_ids"] == [501]
     assert len(calls[0]["session_evidence"]["player_updates"]) == 4
-    assert calls[0]["badge_refs"] == ["operation-key"]
-    assert badge_calls[0]["dedupe_match_id"] == "operation-key"
+    assert calls[0]["badge_refs"] == ([] if badge_mode == "disabled" else ["operation-key"])
+    if badge_mode == "disabled":
+        assert badge_calls == []
+    else:
+        assert badge_calls[0]["dedupe_match_id"] == "operation-key"
 
 
 @pytest.mark.parametrize("enqueue_succeeded", [False, True])
@@ -220,6 +226,8 @@ def test_tournament_atomic_publish_forwards_committed_scope_rating_evidence_and_
 def test_legacy_badge_fallback_failure_never_queues_email_and_success_clears_job_refs(
     monkeypatch, enqueue_succeeded, inline_succeeded,
 ):
+    from jupr_app.domain.gamification import badge_policy
+    monkeypatch.setattr(badge_policy, "BADGES_ENABLED", True)  # Retained historical fallback contract.
     sb = _Supabase()
     players = _players_df()
     sb.tables["players"] = [{**row, "club_id": "club"} for row in players.to_dict("records")]

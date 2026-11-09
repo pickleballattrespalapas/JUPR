@@ -215,14 +215,19 @@ PRODUCTION_PRE_MATCH_CORRECTION_ENABLED_FEATURE_FLAGS = frozenset({
     *PRODUCTION_PRE_PLAYER_EDITOR_ENABLED_FEATURE_FLAGS,
     "JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR",
 })
-PRODUCTION_ENABLED_FEATURE_FLAGS = frozenset({
+PRODUCTION_PRE_BADGE_RETIREMENT_ENABLED_FEATURE_FLAGS = frozenset({
     *PRODUCTION_PRE_MATCH_CORRECTION_ENABLED_FEATURE_FLAGS,
     "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT",
     "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
     "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
     "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
 })
+PRODUCTION_ENABLED_FEATURE_FLAGS = (
+    PRODUCTION_PRE_BADGE_RETIREMENT_ENABLED_FEATURE_FLAGS
+    - {"JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS"}
+)
 PRODUCTION_FEATURE_PROFILES = {
+    "pre_badge_retirement": PRODUCTION_PRE_BADGE_RETIREMENT_ENABLED_FEATURE_FLAGS,
     "pre_match_correction": PRODUCTION_PRE_MATCH_CORRECTION_ENABLED_FEATURE_FLAGS,
     "pre_email": PRODUCTION_PRE_EMAIL_ENABLED_FEATURE_FLAGS,
     "baseline": PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS,
@@ -907,7 +912,7 @@ def expected_production_controlled_write_flags(
 def expected_production_email_mode(*, profile: str = "release") -> str:
     if profile not in PRODUCTION_FEATURE_PROFILES:
         raise ValueError(f"Unknown production feature profile: {profile}")
-    return "live" if profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "release"} else "dry_run"
+    return "live" if profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "pre_badge_retirement", "release"} else "dry_run"
 
 
 def production_feature_profile_from_health(health: Any) -> str | None:

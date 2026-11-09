@@ -297,10 +297,9 @@ const text = (node) =>
   assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-rr" }).length, 0);
   await act(async () => checkbox("Include Round-robin winners").props.onChange({ target: { checked: true } }));
   assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-rr" }).length, 1);
-  await act(async () => checkbox("Include New achievements").props.onChange({ target: { checked: false } }));
+  assert.equal(tree.root.findAllByProps({ "aria-label": "Include New achievements" }).length, 0);
   assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-achievements" }).length, 0);
-  await act(async () => checkbox("Include New achievements").props.onChange({ target: { checked: true } }));
-  assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-achievements" }).length, 1);
+  assert(!preview.report.edition.some((section) => section.key === "achievements"));
   const courtPicker = () => tree.root.findByProps({ "data-testid": "recap-evidence-courts" });
   assert(text(courtPicker()).includes("Alex ×3"));
   assert(!text(courtPicker()).includes("point difference"));

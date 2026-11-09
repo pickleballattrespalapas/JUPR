@@ -54,3 +54,17 @@ for (const parameter of ['tournament_id', 'tournament']) {
     assert.equal(reportPath('tres', href + suffix), '');
   }
 }
+
+const historical = structuredClone(fixture);
+historical.report.achievements = ["Retired badge should stay hidden"];
+assert.doesNotMatch(buildWeeklyReportEmail(historical, { ...options, compact: false }), /Retired badge|NEW ACHIEVEMENTS/);
+historical.report.edition = [
+  { key: "achievements", title: "Hidden badge collection", items: [{ id: "badge", title: "Retired badge", lines: [] }] },
+  { key: "events", title: "Event results", items: [{ id: "result", title: "Tournament podium", lines: [] }] },
+];
+historical.report.email_edition = historical.report.edition;
+for (const compact of [true, false]) {
+  const content = buildWeeklyReportEmail(historical, { ...options, compact });
+  assert.doesNotMatch(content, /Hidden badge|Retired badge/);
+  assert.match(content, /Tournament podium/);
+}

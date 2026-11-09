@@ -1200,9 +1200,8 @@ def render(ctx):
             except Exception:
                 logger.exception("Failed to clear leaderboard caches")
 
-    leaderboard_player_ids = standings.head(limit)["_pid"].dropna().astype(int).unique().tolist()
-    badges_df = _fetch_leaderboard_badges(ctx, leaderboard_player_ids)
-    badges_by_player = _build_badge_map(badges_df)
+    # Badges are retired: no badge reads or decoration on leaderboard loads.
+    badges_by_player: dict[int, list[LeaderboardBadge]] = {}
 
     for _, row in standings.head(limit).iterrows():
         player_id = row.get("_pid")

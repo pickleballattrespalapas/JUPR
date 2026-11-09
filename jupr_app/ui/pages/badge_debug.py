@@ -1,4 +1,5 @@
 from __future__ import annotations
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 
 import json
 
@@ -18,6 +19,10 @@ def _cached_match_filter_audit(df_matches: pd.DataFrame, club_id: str, league_id
 
 
 def render(ctx):
+    if not badges_enabled():
+        st.info("This page is no longer available.")
+        return
+
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("🧪 Badge Debug", "Trace why a player earned (or missed) a badge.", mode_label=mode_label)
 

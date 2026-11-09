@@ -1,6 +1,8 @@
 """Organizer submissions, sealed review, and retry-safe publication of generators."""
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import copy
 import hashlib
 import json
@@ -532,7 +534,7 @@ def review_generator_submission(
                     queue_player_notifications=False,
                 )
                 results.append(result)
-                if rating_mode == "rated" and match_format == "doubles":
+                if badges_enabled() and rating_mode == "rated" and match_format == "doubles":
                     badge_refs.append(ensure_notification_badge_job(supabase=db, club_id=club_id,
                         match_ids=result["operation"]["match_ids"], player_ids=batch_ids))
         # One notification contains the complete session, even when publication

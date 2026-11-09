@@ -6,6 +6,8 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled, FORMAL_TROPHY_BADGE_IDS
+
 _PATCH_VERSION = "2026-07-01-trophy-dark-v3"
 _CONTROL_EXCEPTION_NAMES = {"RerunException", "StopException"}
 _OPTIONAL_LEAGUE_METADATA_COLUMNS = {
@@ -431,29 +433,25 @@ def _merge_badge_definitions(df: Any, ctx: Any = None, supabase: Any = None) -> 
 def _fetch_player_badges_resilient(supabase: Any, club_id: str, pid: int) -> Any:
     import pandas as pd
 
-    select_cols = "id,club_id,player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json"
+    def query(columns: str) -> Any:
+        request = (supabase.table("player_badges").select(columns)
+                   .eq("club_id", str(club_id)).eq("player_id", int(pid)))
+        if not badges_enabled():
+            request = request.in_("badge_id", sorted(FORMAL_TROPHY_BADGE_IDS))
+        return request.execute()
+
     try:
-        resp = (
-            supabase.table("player_badges")
-            .select(select_cols)
-            .eq("club_id", str(club_id))
-            .eq("player_id", int(pid))
-            .execute()
-        )
+        resp = query("id,club_id,player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json")
     except Exception:
         try:
-            resp = (
-                supabase.table("player_badges")
-                .select("player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json")
-                .eq("club_id", str(club_id))
-                .eq("player_id", int(pid))
-                .execute()
-            )
+            resp = query("player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json")
         except Exception:
             return pd.DataFrame()
     pb_df = pd.DataFrame(resp.data or [])
     if pb_df.empty:
         return pb_df
+    if not badges_enabled():
+        pb_df = pb_df[pb_df["badge_id"].isin(FORMAL_TROPHY_BADGE_IDS)].copy()
     return _merge_badge_definitions(pb_df, supabase=supabase)
 
 
@@ -597,16 +595,21 @@ def _patch_players_module(module: Any) -> Any:
         virtual = _virtual_top_performer_badges(ctx, club_id, pid)
         if isinstance(virtual, pd.DataFrame) and not virtual.empty:
             frames.append(virtual)
+        resolved = False
         if callable(original_resolve):
             try:
                 existing = original_resolve(ctx, supabase, club_id, pid)
+                resolved = True
                 if isinstance(existing, pd.DataFrame) and not existing.empty:
                     frames.append(existing)
             except Exception:
                 pass
-        direct = _fetch_player_badges_resilient(supabase, club_id, pid)
-        if isinstance(direct, pd.DataFrame) and not direct.empty:
-            frames.append(direct)
+        # The ordinary resolver already performs a selected-player trophy read.
+        # Do not repeat that database request when badges are retired.
+        if badges_enabled() or not resolved:
+            direct = _fetch_player_badges_resilient(supabase, club_id, pid)
+            if isinstance(direct, pd.DataFrame) and not direct.empty:
+                frames.append(direct)
         if not frames:
             return pd.DataFrame()
         combined = _dedupe_badges(pd.concat(frames, ignore_index=True, sort=False))

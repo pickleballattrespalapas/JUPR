@@ -23,7 +23,6 @@ const publicSurfaces: Surface[] = [
   { name: "players", path: `/clubs/${clubSlug}/players`, expected: /players/i },
   { name: "matches", path: `/clubs/${clubSlug}/matches`, expected: /matches/i },
   { name: "match explorer", path: `/clubs/${clubSlug}/match-explorer`, expected: /match explorer/i },
-  { name: "badge codex", path: `/clubs/${clubSlug}/badge-codex`, expected: /badge/i },
   { name: "weekly recap", path: `/clubs/${clubSlug}/weekly-recap`, expected: /weekly recap/i },
   { name: "challenge ladder", path: `/clubs/${clubSlug}/challenge-ladder`, expected: /challenge ladder/i },
   { name: "tournament registration", path: `/clubs/${clubSlug}/tournament-registration`, expected: /registration/i },
@@ -57,7 +56,7 @@ const adminSurfaces: Surface[] = [
   { name: "tournament operations", path: "/admin/tournaments/ops", expected: /tournament operations/i },
   { name: "tournament live", path: "/admin/tournament-live", expected: /tournament live/i },
   { name: "weekly recap admin", path: "/admin/weekly-recap", expected: /weekly recap admin/i },
-  { name: "badge diagnostics", path: "/admin/badges", expected: /badge debug/i },
+  { name: "badge diagnostics", path: "/admin/badges", expected: /badges are disabled/i },
   { name: "moneyball", path: "/admin/moneyball", expected: /moneyball/i },
   { name: "JUPR live admin", path: "/admin/jupr-live", expected: /JUPR live admin/i },
   { name: "challenge ladder admin", path: "/admin/challenge-ladder", expected: /challenge ladder admin/i },
@@ -271,23 +270,11 @@ test("tournament roster filters and public deep links remain navigable", async (
   await expect(page.getByRole("link", { name: "View on partner board" })).toHaveCount(0);
 });
 
-test("badge codex: authoritative buckets, filters, anchors, and trophy room", async ({ page }) => {
-  const response = await page.goto(`/clubs/${clubSlug}/badge-codex?bucket=all`, { waitUntil: "domcontentloaded" });
-  expect(response?.status()).toBeLessThan(400);
-  await expect(page.getByRole("heading", { name: /badge codex/i })).toBeVisible();
-  await expect(page.locator("[data-badge-bucket]")).toHaveCount(4);
-  await expect(page.getByText(/Badge earners/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Recent trophy room" })).toBeVisible();
-
-  const firstBadge = page.locator("[data-badge-id]").first();
-  await expect(firstBadge).toBeVisible();
-  const badgeId = await firstBadge.getAttribute("data-badge-id");
-  expect(badgeId).toBeTruthy();
-  const directHref = await firstBadge.getByRole("link", { name: "Share this badge" }).getAttribute("href");
-  expect(directHref).toContain(`badge=${badgeId}`);
-  expect(directHref).toContain(`#badge-${badgeId}`);
-  await page.goto(String(directHref), { waitUntil: "domcontentloaded" });
-  await expect(page.locator(`[data-badge-id="${badgeId}"]`)).toBeVisible();
+test("retired badge codex is unavailable and hidden from navigation", async ({ page }) => {
+  await page.goto(`/clubs/${clubSlug}/badge-codex?bucket=all`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("[data-badge-id]")).toHaveCount(0);
+  await expect(page.locator('meta[name="robots"][content*="noindex"]')).toHaveCount(1);
+  await expect(page.getByRole("link", { name: /Badges.*trophies/i })).toHaveCount(0);
 });
 
 test("challenge ladder: Python eligibility, deep links, rulebook, and status legend", async ({ page }) => {

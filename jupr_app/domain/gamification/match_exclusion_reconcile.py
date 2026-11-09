@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import json
 import math
 from types import SimpleNamespace
@@ -11,6 +11,7 @@ from uuid import uuid4
 import pandas as pd
 
 from jupr_app.data.load import load_data
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 from jupr_app.domain.gamification.badge_registry import active_badge_ids, registry
 from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
 from jupr_app.domain.gamification.badges_repo import build_player_badge_rows
@@ -120,6 +121,20 @@ def resolve_match_exclusion_badge_ids(
     """Resolve and freeze the exact badge scope before a match exclusion."""
 
     clean_club_id = _required_text(club_id, "club_id")
+    if not badges_enabled():
+        # The existing atomic exclusion schema requires a nonempty frozen
+        # allowlist. Resolve only its small catalog contract; never load match
+        # history or evaluate retired badges to authorize a rating correction.
+        response = (
+            supabase.table("badges")
+            .select("badge_id,state,is_active,eval_triggers,badge_status,badge_award_timing")
+            .in_("badge_id", list(MATCH_EXCLUSION_BADGE_IDS))
+            .limit(len(MATCH_EXCLUSION_BADGE_IDS))
+            .execute()
+        )
+        return list(_effective_catalog_badge_ids(SimpleNamespace(
+            df_badges=pd.DataFrame(getattr(response, "data", None) or []),
+        )))
     _assert_frozen_code_contract()
     ctx = _load_reconciliation_context(
         supabase,
@@ -139,6 +154,8 @@ def build_match_exclusion_badge_plan(
 ) -> list[dict[str, Any]]:
     """Build one player's exact desired engine-owned badge rows."""
 
+    if not badges_enabled():
+        raise RuntimeError("Badge calculations are retired.")
     clean_club_id = _required_text(club_id, "club_id")
     clean_player_id = _positive_player_id(player_id)
     clean_badge_ids = _validate_frozen_badge_ids(badge_ids, contract_version=contract_version)
@@ -166,6 +183,10 @@ def apply_match_exclusion_badge_plan(
 ) -> dict[str, Any]:
     """Atomically apply one claimed player's exact desired badge plan."""
 
+    if not badges_enabled():
+        # An empty plan would revoke existing awards. Retirement must instead
+        # acknowledge only the leased progress ledger through the path below.
+        raise RuntimeError("Badge award reconciliation is retired.")
     response = supabase.rpc(
         MATCH_EXCLUSION_BADGE_APPLY_RPC,
         {
@@ -299,33 +320,46 @@ def reconcile_match_exclusion_badges(
                     "Badge progress rows disagree on the operation's frozen badge allowlist."
                 )
 
-            if context is None:
-                context = _load_reconciliation_context(
+            if not badges_enabled():
+                applied = _finish_retired_progress(
                     supabase,
+                    operation_id=clean_operation_id,
+                    progress_id=progress_id,
                     club_id=clean_club_id,
-                    match_limit=match_limit,
+                    player_id=claimed_player_id,
+                    lease_token=lease_token,
+                    worker_id=worker_id,
+                    badge_ids=claimed_badge_ids,
+                    contract_version=contract_version,
                 )
-                evaluation = _canonical_evaluation_context(context, clean_club_id)
-            if evaluation is None:
-                raise RuntimeError("Canonical badge evaluation context is unavailable.")
+            else:
+                if context is None:
+                    context = _load_reconciliation_context(
+                        supabase,
+                        club_id=clean_club_id,
+                        match_limit=match_limit,
+                    )
+                    evaluation = _canonical_evaluation_context(context, clean_club_id)
+                if evaluation is None:
+                    raise RuntimeError("Canonical badge evaluation context is unavailable.")
 
-            desired_badges = _build_player_plan(
-                evaluation=evaluation,
-                club_id=clean_club_id,
-                player_id=claimed_player_id,
-                badge_ids=claimed_badge_ids,
-                contract_version=contract_version,
-            )
-            applied = apply_match_exclusion_badge_plan(
-                supabase,
-                operation_id=clean_operation_id,
-                progress_id=progress_id,
-                club_id=clean_club_id,
-                lease_token=lease_token,
-                worker_id=worker_id,
-                actor_email=actor_email,
-                desired_badges=desired_badges,
-            )
+                desired_badges = _build_player_plan(
+                    evaluation=evaluation,
+                    club_id=clean_club_id,
+                    player_id=claimed_player_id,
+                    badge_ids=claimed_badge_ids,
+                    contract_version=contract_version,
+                )
+                applied = apply_match_exclusion_badge_plan(
+                    supabase,
+                    operation_id=clean_operation_id,
+                    progress_id=progress_id,
+                    club_id=clean_club_id,
+                    lease_token=lease_token,
+                    worker_id=worker_id,
+                    actor_email=actor_email,
+                    desired_badges=desired_badges,
+                )
         except Exception as exc:
             _fail_progress(
                 supabase,
@@ -367,7 +401,67 @@ def reconcile_match_exclusion_badges(
         "revoked_count": revoked_count,
         "unchanged_count": unchanged_count,
         "idempotent": all_idempotent if processed_player_ids else True,
+        **({"skipped_reason": "badges_retired"} if not badges_enabled() else {}),
     }
+
+
+def _finish_retired_progress(
+    supabase: Any,
+    *,
+    operation_id: str,
+    progress_id: str,
+    club_id: str,
+    player_id: int,
+    lease_token: str,
+    worker_id: str,
+    badge_ids: tuple[str, ...],
+    contract_version: str,
+) -> dict[str, Any]:
+    """Complete only an owned progress ledger, preserving every stored award.
+
+    The table already grants UPDATE solely to service_role. Compare-and-swap
+    checks fence a stale claimant exactly as the award RPC does. PostgreSQL's
+    timestamp input `now` evaluates expiry at the database, avoiding app-clock
+    drift. The existing finalizer still requires all players to be complete and
+    records the rating correction's normal durable audit trail.
+    """
+    result = {
+        "ok": True, "operation_id": operation_id, "progress_id": progress_id,
+        "player_id": player_id, "status": "succeeded",
+        "badge_ids": list(badge_ids), "badge_contract_version": contract_version,
+        "desired_count": 0, "inserted_count": 0, "updated_count": 0,
+        "revoked_count": 0, "idempotent": False, "skipped_reason": "badges_retired",
+    }
+    finished_at = datetime.now(timezone.utc).isoformat()
+    response = (
+        supabase.table("match_exclusion_badge_progress")
+        .update({
+            "status": "succeeded", "result_json": result, "error_text": None,
+            "lease_token": None, "leased_by": None, "lease_expires_at": None,
+            "heartbeat_at": None, "finished_at": finished_at, "updated_at": finished_at,
+        })
+        .eq("id", progress_id)
+        .eq("operation_id", operation_id)
+        .eq("club_id", club_id)
+        .eq("player_id", player_id)
+        .eq("status", "running")
+        .eq("lease_token", lease_token)
+        .eq("leased_by", worker_id)
+        .gt("lease_expires_at", "now")
+        .execute()
+    )
+    rows = getattr(response, "data", None)
+    if (
+        not isinstance(rows, list) or len(rows) != 1
+        or rows[0].get("id") != progress_id
+        or rows[0].get("operation_id") != operation_id
+        or rows[0].get("club_id") != club_id
+        or rows[0].get("player_id") != player_id
+        or rows[0].get("status") != "succeeded"
+        or rows[0].get("result_json") != result
+    ):
+        raise RuntimeError("Retired badge progress lease was lost or not acknowledged.")
+    return result
 
 
 def _load_reconciliation_context(

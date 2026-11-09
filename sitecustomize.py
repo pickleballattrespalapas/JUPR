@@ -218,20 +218,25 @@ def _merge_badge_definitions(df: Any, ctx: Any = None, supabase: Any = None) -> 
 
 def _fetch_player_badges(supabase: Any, club_id: str, pid: int) -> Any:
     import pandas as pd
+    from jupr_app.domain.gamification.badge_policy import badges_enabled, FORMAL_TROPHY_BADGE_IDS
 
     for select_cols in [
         "id,club_id,player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json",
         "player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json",
     ]:
         try:
-            resp = (
+            query = (
                 supabase.table("player_badges")
                 .select(select_cols)
                 .eq("club_id", str(club_id))
                 .eq("player_id", int(pid))
-                .execute()
             )
+            if not badges_enabled():
+                query = query.in_("badge_id", sorted(FORMAL_TROPHY_BADGE_IDS))
+            resp = query.execute()
             df = pd.DataFrame(resp.data or [])
+            if not badges_enabled() and not df.empty:
+                df = df[df["badge_id"].isin(FORMAL_TROPHY_BADGE_IDS)].copy()
             return _merge_badge_definitions(df, supabase=supabase) if not df.empty else df
         except Exception:
             continue
@@ -386,21 +391,25 @@ def _patch_players_module() -> None:
 
     def patched_resolve(ctx: Any, supabase: Any, club_id: str, pid: int) -> Any:
         import pandas as pd
+        from jupr_app.domain.gamification.badge_policy import badges_enabled
 
         frames = []
         for frame in [_virtual_top_performer_badges(ctx, club_id, pid)]:
             if isinstance(frame, pd.DataFrame) and not frame.empty:
                 frames.append(frame)
+        resolved = False
         if callable(original_resolve):
             try:
                 existing = original_resolve(ctx, supabase, club_id, pid)
+                resolved = True
                 if isinstance(existing, pd.DataFrame) and not existing.empty:
                     frames.append(existing)
             except Exception:
                 pass
-        direct = _fetch_player_badges(supabase, club_id, pid)
-        if isinstance(direct, pd.DataFrame) and not direct.empty:
-            frames.append(direct)
+        if badges_enabled() or not resolved:
+            direct = _fetch_player_badges(supabase, club_id, pid)
+            if isinstance(direct, pd.DataFrame) and not direct.empty:
+                frames.append(direct)
         if not frames:
             return pd.DataFrame()
         return _merge_badge_definitions(_dedupe_badges(pd.concat(frames, ignore_index=True, sort=False)), ctx=ctx, supabase=supabase)

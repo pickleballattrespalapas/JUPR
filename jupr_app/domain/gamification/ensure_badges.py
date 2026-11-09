@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled, is_formal_trophy_candidate
+
 import logging
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +25,9 @@ def ensure_badges(
     award_timing: str = "live",
     allow_non_live: bool = False,
 ) -> list:
+    # League close still mints its formal podium/top-performer trophies.
+    if not badges_enabled() and award_timing != "on_league_close":
+        return []
     if bool(getattr(ctx, "public_mode", False)):
         return []
 
@@ -49,6 +54,9 @@ def ensure_badges(
                 allow_non_live=allow_non_live,
             )
         )
+        if not badges_enabled():
+            candidates = [candidate for candidate in candidates
+                          if is_formal_trophy_candidate(candidate)]
         if not candidates:
             return []
         return upsert_player_badges(supabase, resolved_club_id, candidates)

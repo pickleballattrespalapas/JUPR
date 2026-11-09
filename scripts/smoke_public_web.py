@@ -243,7 +243,7 @@ def _api_get_checks(api_base_url: str, club_slug: str, club_id: str, *, allow_li
         ("api: club", f"/clubs/{club_slug}", (200,)),
         ("api: leaderboards", f"/clubs/{club_slug}/leaderboards", (200,)),
         ("api: league results", f"/clubs/{club_slug}/league-results", (200,)),
-        ("api: badge codex", f"/clubs/{club_slug}/badges", (200,)),
+        ("api: retired badge codex", f"/clubs/{club_slug}/badges", (404,)),
         ("api: challenge ladder", f"/clubs/{club_slug}/challenge-ladder", (200,)),
         ("api: weekly recaps", f"/clubs/{club_slug}/weekly-recaps", (200,)),
         ("api: tournament registration", f"/clubs/{club_slug}/tournament-registration", (200,)),
@@ -300,7 +300,6 @@ def _web_get_checks(web_base_url: str, club_slug: str) -> list[SmokeCheck]:
         ("web: club home", f"/clubs/{club_slug}"),
         ("web: leaderboards", f"/clubs/{club_slug}/leaderboards"),
         ("web: league results", f"/clubs/{club_slug}/league-results"),
-        ("web: badge codex", f"/clubs/{club_slug}/badge-codex"),
         ("web: challenge ladder", f"/clubs/{club_slug}/challenge-ladder"),
         ("web: weekly recap", f"/clubs/{club_slug}/weekly-recap"),
         ("web: tournament registration", f"/clubs/{club_slug}/tournament-registration"),
@@ -324,6 +323,10 @@ def _web_get_checks(web_base_url: str, club_slug: str) -> list[SmokeCheck]:
         ("web: verified updates", "/verified-updates"),
     ]
     checks = [SmokeCheck(label, _join_url(web_base_url, path), (200,), allow_vercel_bypass=True) for label, path in paths]
+    checks.append(SmokeCheck(
+        "web: retired badge codex", _join_url(web_base_url, f"/clubs/{club_slug}/badge-codex"),
+        (404,), allow_vercel_bypass=True,
+    ))
     checks.append(
         SmokeCheck(
             "web: match explorer preview proxy validation",

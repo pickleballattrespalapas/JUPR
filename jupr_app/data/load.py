@@ -2,6 +2,7 @@ import time
 import pandas as pd
 
 from jupr_app.data.counted_reads import read_counted_rows
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 
 from jupr_app.domain.player_activity import PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR, add_activity_columns
 from jupr_app.domain.gamification.badge_descriptions import BADGE_DESCRIPTIONS_MD
@@ -148,7 +149,8 @@ def load_data(supabase, club_id: str, match_limit: int | None = None):
     No Streamlit calls here. Raise exceptions to be handled by UI.
     """
     club_id = str(club_id)
-    ensure_badge_schema_preflight(supabase)
+    if badges_enabled():
+        ensure_badge_schema_preflight(supabase)
 
     max_retries = 3
     last_err = None
@@ -196,63 +198,68 @@ def load_data(supabase, club_id: str, match_limit: int | None = None):
             # Metadata
             df_meta = pd.DataFrame(_read_rows(supabase, "leagues_metadata", club_id))
 
-            # Badges (global definitions)
-            try:
-                # Support older badge schema variants that lack state-related columns.
-                badge_rows = _read_rows(supabase, "badges", columns=
-                    "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                    "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at")
-            except APIError as exc:
-                message = str(exc)
-                if getattr(exc, "code", None) == "42703" or "badges.state does not exist" in message:
+            # Engagement badges are retired. Trophy pages load only the selected
+            # player's formal awards; ordinary pages never scan the badge ledger.
+            df_badges = pd.DataFrame()
+            df_player_badges = _ensure_player_badges_columns(pd.DataFrame())
+            if badges_enabled():
+                # Badges (global definitions)
+                try:
+                    # Support older badge schema variants that lack state-related columns.
                     badge_rows = _read_rows(supabase, "badges", columns=
                         "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                        "tier,icon_key,scope,created_at")
-                else:
-                    raise
-            df_badges = pd.DataFrame(badge_rows)
-            if not df_badges.empty and "badge_id" in df_badges.columns:
-                if "state" not in df_badges.columns:
-                    df_badges["state"] = "live"
-                if "eval_triggers" not in df_badges.columns:
-                    df_badges["eval_triggers"] = [["match_recorded", "match_updated"]] * len(df_badges)
-                from jupr_app.domain.gamification.presentation import badge_category
-                df_badges["category"] = df_badges["badge_id"].astype(str).map(badge_category)
-                requirements_map = load_requirements_map()
-                df_badges["requirements"] = (
-                    df_badges["badge_id"].astype(str).map(requirements_map).fillna("Requirements TBD")
-                )
-                df_badges["description_md"] = (
-                    df_badges["badge_id"].astype(str).map(BADGE_DESCRIPTIONS_MD).fillna("")
-                )
-                schema_map = badge_schema_by_id()
-                df_badges["badge_status"] = df_badges["badge_id"].astype(str).map(
-                    lambda bid: schema_map.get(str(bid)).status if str(bid) in schema_map else "live"
-                )
-                df_badges["badge_award_timing"] = df_badges["badge_id"].astype(str).map(
-                    lambda bid: schema_map.get(str(bid)).award_timing if str(bid) in schema_map else "live"
-                )
-                df_badges["badge_scope"] = df_badges["badge_id"].astype(str).map(
-                    lambda bid: schema_map.get(str(bid)).scope if str(bid) in schema_map else None
-                )
-
-            # Player badges (club-scoped)
-            (
-                df_player_badges,
-                badges_schema_degraded,
-                badges_schema_degraded_reason,
-            ) = _fetch_player_badges(
-                supabase,
-                club_id,
-            )
-            if badges_schema_degraded:
-                schema_degraded = True
-                if schema_degraded_reason and badges_schema_degraded_reason:
-                    schema_degraded_reason = (
-                        f"{schema_degraded_reason} Also: {badges_schema_degraded_reason}"
+                        "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at")
+                except APIError as exc:
+                    message = str(exc)
+                    if getattr(exc, "code", None) == "42703" or "badges.state does not exist" in message:
+                        badge_rows = _read_rows(supabase, "badges", columns=
+                            "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+                            "tier,icon_key,scope,created_at")
+                    else:
+                        raise
+                df_badges = pd.DataFrame(badge_rows)
+                if not df_badges.empty and "badge_id" in df_badges.columns:
+                    if "state" not in df_badges.columns:
+                        df_badges["state"] = "live"
+                    if "eval_triggers" not in df_badges.columns:
+                        df_badges["eval_triggers"] = [["match_recorded", "match_updated"]] * len(df_badges)
+                    from jupr_app.domain.gamification.presentation import badge_category
+                    df_badges["category"] = df_badges["badge_id"].astype(str).map(badge_category)
+                    requirements_map = load_requirements_map()
+                    df_badges["requirements"] = (
+                        df_badges["badge_id"].astype(str).map(requirements_map).fillna("Requirements TBD")
                     )
-                elif badges_schema_degraded_reason:
-                    schema_degraded_reason = badges_schema_degraded_reason
+                    df_badges["description_md"] = (
+                        df_badges["badge_id"].astype(str).map(BADGE_DESCRIPTIONS_MD).fillna("")
+                    )
+                    schema_map = badge_schema_by_id()
+                    df_badges["badge_status"] = df_badges["badge_id"].astype(str).map(
+                        lambda bid: schema_map.get(str(bid)).status if str(bid) in schema_map else "live"
+                    )
+                    df_badges["badge_award_timing"] = df_badges["badge_id"].astype(str).map(
+                        lambda bid: schema_map.get(str(bid)).award_timing if str(bid) in schema_map else "live"
+                    )
+                    df_badges["badge_scope"] = df_badges["badge_id"].astype(str).map(
+                        lambda bid: schema_map.get(str(bid)).scope if str(bid) in schema_map else None
+                    )
+
+                # Player badges (club-scoped)
+                (
+                    df_player_badges,
+                    badges_schema_degraded,
+                    badges_schema_degraded_reason,
+                ) = _fetch_player_badges(
+                    supabase,
+                    club_id,
+                )
+                if badges_schema_degraded:
+                    schema_degraded = True
+                    if schema_degraded_reason and badges_schema_degraded_reason:
+                        schema_degraded_reason = (
+                            f"{schema_degraded_reason} Also: {badges_schema_degraded_reason}"
+                        )
+                    elif badges_schema_degraded_reason:
+                        schema_degraded_reason = badges_schema_degraded_reason
 
             # Mappings
             if (

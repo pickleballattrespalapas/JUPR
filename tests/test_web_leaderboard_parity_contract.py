@@ -18,8 +18,9 @@ def test_leaderboard_page_has_parity_controls_and_states():
     assert 'data-testid="leaderboard-error-state"' in source
     assert 'data-testid="leaderboard-league-view-toggle"' in source
     assert '"Past leagues"' in source
-    for label in ("Gain", "Gap", "Qualification", "Badges"):
+    for label in ("Gain", "Gap", "Qualification"):
         assert f">{label}<" in source
+    assert ">Badges<" not in source
 
 
 def test_leaderboard_api_client_forwards_only_explicit_filters():

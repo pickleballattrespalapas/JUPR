@@ -255,3 +255,8 @@ def test_admin_badge_state_force_override_and_stale_expected_state(monkeypatch):
     assert forced.status_code == 200
     assert forced.json()["force"] is True
     assert tables["badges"][0]["state"] == "deprecated"
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

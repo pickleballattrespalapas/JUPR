@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from typing import Any
 
 from fastapi import HTTPException, Query
@@ -113,7 +115,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
 
     @app.get("/admin/clubs/{club_id}/badges/status")
     def get_admin_badge_diagnostics_status(club_id: str) -> dict[str, Any]:
-        supabase = get_supabase_client() if is_admin_badge_diagnostics_enabled() else None
+        supabase = get_supabase_client() if badges_enabled() and is_admin_badge_diagnostics_enabled() else None
         return build_admin_badge_diagnostics_status(supabase, club_id=str(club_id))
 
     @app.get("/admin/clubs/{club_id}/badges/options")
@@ -121,7 +123,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
         club_id: str,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        if not is_admin_badge_diagnostics_enabled():
+        if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
             raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
         supabase = get_supabase_client()
         _resolve_badge_diagnostics_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_badge_diagnostics_options")
@@ -139,7 +141,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
         match_limit: int = Query(default=5000, ge=1, le=20000),
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        if not is_admin_badge_diagnostics_enabled():
+        if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
             raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
         supabase = get_supabase_client()
         _resolve_badge_diagnostics_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_badge_debug")
@@ -162,7 +164,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
         payload: BadgeDefinitionStateRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        if not is_admin_badge_diagnostics_enabled():
+        if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
             raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_badge_diagnostics_role_or_403(
@@ -204,7 +206,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
         match_limit: int = Query(default=5000, ge=1, le=20000),
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        if not is_admin_badge_diagnostics_enabled():
+        if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
             raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
         supabase = get_supabase_client()
         _resolve_badge_diagnostics_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_badge_audit")
@@ -231,7 +233,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
         payload: BadgeRecomputeRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        if not is_admin_badge_diagnostics_enabled():
+        if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
             raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
         supabase = get_supabase_client()
         required_permission = (
@@ -275,7 +277,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
         payload: BadgeRevokeRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        if not is_admin_badge_diagnostics_enabled():
+        if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
             raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_badge_diagnostics_role_or_403(
@@ -309,7 +311,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
         operation_key: str,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        if not is_admin_badge_diagnostics_enabled():
+        if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
             raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
         supabase = get_supabase_client()
         _resolve_badge_diagnostics_role_or_403(

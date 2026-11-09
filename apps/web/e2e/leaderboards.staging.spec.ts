@@ -14,7 +14,7 @@ test("leaderboards default to active overall standings with parity fields and st
   await expect(page.getByRole("columnheader", { name: "Gain" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Gap" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Qualification" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Badges" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Badges" })).toHaveCount(0);
   await expect(page.getByTestId("leaderboard-highlight-card")).toHaveCount(4);
 
   const rows = page.getByTestId("leaderboard-row");

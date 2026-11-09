@@ -112,7 +112,8 @@ def test_public_leaderboards_contract_shape(client):
     assert first_row["matches_played"] == 12
     assert first_row["rating_gain_jupr"] == 0.1
     assert first_row["qualified"] is True
-    assert first_row["badges"] == [{"badge_id": "champ", "name": "Champion", "prestige": 100}]
+    assert first_row["badges"] == []
+    assert first_row["badge_count"] == 0
     assert "email" not in first_row
     assert "admin_flag" not in first_row
 

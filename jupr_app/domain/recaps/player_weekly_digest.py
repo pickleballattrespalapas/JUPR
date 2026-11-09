@@ -7,6 +7,7 @@ import pandas as pd
 
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id, registry
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 from jupr_app.domain.gamification.badge_types import BadgeEvaluationContext
 from jupr_app.domain.gamification.match_facts import build_hybrid_player_match_facts
 from jupr_app.domain.gamification.trophies import get_player_tournament_trophies
@@ -200,7 +201,7 @@ def _receipt_proves_milestone(row: dict, player_id: int, evidence: dict) -> bool
 
 def _load_badges_earned(supabase, club_id: str, player_id: int, start_dt_utc: datetime, end_dt_utc: datetime,
                         *, match_ids: set[str] | None = None, ctx=None, session_evidence: dict | None = None) -> list[dict]:
-    if not supabase or match_ids == set():
+    if not badges_enabled() or not supabase or match_ids == set():
         return []
 
     try:
@@ -798,8 +799,8 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
         {"key": "leagues", "label": "Leagues", "value": len(league_breakdown)},
         {
             "key": "awards",
-            "label": "Badges/Trophies",
-            "value": f"{len(badges_earned)}/{len(trophies_earned)}",
+            "label": "Badges/Trophies" if badges_enabled() else "Trophies",
+            "value": f"{len(badges_earned)}/{len(trophies_earned)}" if badges_enabled() else len(trophies_earned),
         },
     ]
 

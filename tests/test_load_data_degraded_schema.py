@@ -70,6 +70,7 @@ class _FakeSupabase:
 
 def test_load_data_degrades_player_badges_schema(monkeypatch):
     monkeypatch.setenv("JUPR_SKIP_BADGE_SCHEMA_PREFLIGHT", "1")
+    monkeypatch.setattr("jupr_app.data.load.badges_enabled", lambda: True)
     supabase = _FakeSupabase()
 
     (
