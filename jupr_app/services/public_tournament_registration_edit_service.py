@@ -136,6 +136,9 @@ def _unchanged_edit_selections(
     for raw in submitted:
         if not isinstance(raw, dict):
             continue
+        if raw.get("partner_registration_key"):
+            # A newly selected registration must be resolved and revalidated.
+            continue
         event_id = str(raw.get("event_option_id") or "")
         pair = by_event.get(event_id)
         if not pair:

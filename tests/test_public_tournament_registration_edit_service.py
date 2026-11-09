@@ -64,6 +64,33 @@ def _edit_versions(storage):
     }
 
 
+def test_edit_can_choose_registered_partner_without_reentering_details(monkeypatch):
+    from jupr_app.services.public_tournament_registration_service import resolve_public_tournament_partner_profile
+
+    supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+    storage["tournament_event_options"][0].update({"event_type": "MIXED_DOUBLES", "partner_required": True})
+    partner = {"id": "saved-partner", "tournament_id": "t1", "display_name": "Paola Masera", "email": "private@example.test",
+               "age": 48, "gender": "Women", "doubles_skill": 4.65, "status": "confirmed",
+               "submitted_at": "2026-11-01T00:00:00Z"}
+    storage["tournament_registrations"].append(partner)
+    before = deepcopy(partner)
+    lookup = resolve_public_tournament_partner_profile(supabase, club_id="club-1",
+        payload={"registration_slug": "tres-open", "name": "Paola Masera"})
+    selection = storage["tournament_registration_selections"][0]
+    result = submit_public_tournament_registration_edit(supabase, club_id="club-1", edit_token=token, payload={
+        **_edit_versions(storage), "tournament_id": "t1", "first_name": "Alex", "last_name": "Rivera",
+        "age": 38, "gender": "Men", "doubles_skill": 4.0, "terms_accepted": True,
+        "selections": [{"id": selection["id"], "event_option_id": "event1", "partner_mode": "HAS_PARTNER",
+            "partner_name": "Paola Masera", "partner_registration_key": lookup["profile_candidates"][0]["registered_partner"]["key"]}],
+    })
+    assert result["ok"] is True
+    saved = storage["tournament_registration_selections"][0]
+    assert saved["registration_id"] == registration_id
+    assert saved["partner_email"] == partner["email"] and saved["partner_age"] == 48
+    assert saved["partner_gender"] == "Women" and saved["partner_skill"] == 4.65
+    assert storage["tournament_registrations"][-1] == before
+
+
 def test_reserved_partner_conflict_has_recovery_instructions(monkeypatch):
     supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
     page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
