@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
+from jupr_app.observability.request_timing import instrument_supabase_client
 
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
@@ -312,7 +313,10 @@ def _get_supabase_credentials() -> tuple[str, str]:
 
 def get_supabase_client() -> Client:
     url, key = _get_supabase_credentials()
-    return create_client(url, key)
+    client = create_client(url, key)
+    # Compatibility adapters supplied by local tools/tests retain their identity
+    # and capability surface. Production uses the real synchronous SDK client.
+    return instrument_supabase_client(client) if isinstance(client, Client) else client
 
 
 def _supabase_host_for_diagnostics() -> str:
@@ -902,6 +906,9 @@ def health() -> dict[str, Any]:
         payload.update(
             {
                 "environment": environment,
+                "badge_worker_mode": os.getenv("JUPR_BADGE_WORKER_MODE", "embedded"),
+                "badge_worker_club_id": os.getenv("JUPR_BADGE_WORKER_CLUB_ID", ""),
+                "badge_queue_leases_enabled": os.getenv("JUPR_BADGE_QUEUE_LEASES", "0").strip() == "1",
                 "git_commit_sha": (
                     os.getenv("JUPR_IMAGE_BUILD_GIT_SHA", "").strip().lower()
                     or os.getenv("JUPR_DEPLOYMENT_GIT_SHA", "").strip().lower()

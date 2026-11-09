@@ -75,10 +75,11 @@ def dequeue_badge_eval(supabase: Any, *, club_id: str) -> dict[str, Any] | None:
         return None
     if not clean_club_id:
         raise ValueError("club_id is required to dequeue a badge evaluation")
+    use_leases = leases_enabled(clean_club_id)
     try:
-        rpc_name = "claim_badge_eval_queue_job_leased" if leases_enabled() else BADGE_QUEUE_CLAIM_RPC
+        rpc_name = "claim_badge_eval_queue_job_leased" if use_leases else BADGE_QUEUE_CLAIM_RPC
         args = {"p_club_id": clean_club_id}
-        if leases_enabled():
+        if use_leases:
             args.update(p_worker_id=WORKER_ID, p_lease_seconds=LEASE_SECONDS)
         resp = supabase.rpc(rpc_name, args).execute()
         rows = resp.data or []
@@ -94,7 +95,7 @@ def dequeue_badge_eval(supabase: Any, *, club_id: str) -> dict[str, Any] | None:
         code = _get_api_error_code(exc)
         message = _get_api_error_message(exc)
         if code in _MISSING_CLAIM_RPC_CODES:
-            if leases_enabled():
+            if use_leases:
                 raise RuntimeError("Leased badge queue RPCs are unavailable. Apply the worker-lease migration before enabling queue leases.") from exc
             raise RuntimeError(
                 "Atomic badge queue claims are unavailable. Apply "
@@ -120,10 +121,11 @@ def ack_badge_eval(
     status: str,
     error: str | None = None,
     claim_token: str | None = None,
+    club_id: str | None = None,
 ) -> None:
     if supabase is None or not job_id:
         return
-    if leases_enabled() and not claim_token:
+    if leases_enabled(club_id) and not claim_token:
         raise BadgeLeaseLost("Lease-enabled acknowledgement requires the current claim token.")
     if claim_token:
         ok = supabase.rpc("finish_badge_eval_queue_job", {

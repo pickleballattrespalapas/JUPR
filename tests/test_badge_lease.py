@@ -70,6 +70,7 @@ def test_heartbeat_thread_stops_on_completion(monkeypatch):
 
 
 def test_external_worker_requires_explicit_activation_and_exact_target(monkeypatch):
+    monkeypatch.setenv("JUPR_BADGE_WORKER_CLUB_ID", "tres_palapas")
     monkeypatch.setenv("JUPR_ENV", "staging")
     monkeypatch.setenv("FLY_APP_NAME", "juprleagues-api-staging")
     monkeypatch.setenv("JUPR_BADGE_WORKER_MODE", "external")
@@ -84,6 +85,7 @@ def test_external_worker_requires_explicit_activation_and_exact_target(monkeypat
 @pytest.mark.parametrize("origin", ["https://dnoockbwfenunhcibwfn.supabase.co", "https://example.supabase.co",
                                    "https://sijpxjxvdtrehmqvirfi.supabase.co/other", "http://sijpxjxvdtrehmqvirfi.supabase.co"])
 def test_staging_worker_rejects_wrong_database_before_connecting(monkeypatch, origin):
+    monkeypatch.setenv("JUPR_BADGE_WORKER_CLUB_ID", "tres_palapas")
     monkeypatch.setenv("JUPR_ENV", "staging")
     monkeypatch.setenv("FLY_APP_NAME", "juprleagues-api-staging")
     monkeypatch.setenv("JUPR_BADGE_WORKER_MODE", "external")

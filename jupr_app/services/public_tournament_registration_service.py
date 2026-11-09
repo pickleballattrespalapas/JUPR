@@ -916,24 +916,8 @@ def resolve_public_tournament_registration_profile(
     if not tournament_id:
         raise ValueError("Tournament registration was not found.")
 
-    existing = get_registration_by_email(supabase, tournament_id, email)
-    if existing:
-        return {
-            "ok": True,
-            "status": "existing_registration",
-            "can_start_new": False,
-            "registration_open": bool(page.get("registration_open")),
-            "registration_closed_reason": page.get("registration_closed_reason"),
-            "masked_email": _mask_email(email),
-            "profile_match_kind": "none",
-            "profile_candidates": [],
-            "profile_policy": {
-                "linkage": "staff_review_required",
-                "public_submission_links_player": False,
-            },
-            "message": "You’re already registered with this email. Request an edit link to make changes.",
-        }
-
+    # Let returning registrants complete the same form. Submission hands them
+    # into email-verified editing without exposing or overwriting their entry.
     if not page.get("registration_open"):
         return {
             "ok": True,
@@ -1473,6 +1457,8 @@ def submit_public_tournament_registration(
     club_slug: str | None = None,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    if _clean_text(payload.get("website")):
+        raise ValueError("Unable to submit registration.")
     page = build_public_tournament_registration_page(
         supabase,
         club_id=str(club_id),
@@ -1546,7 +1532,7 @@ def submit_public_tournament_registration(
             commerce_transaction=commerce_transaction,
         )
     except ValueError as exc:
-        if "registration already exists" in str(exc).lower():
+        if any(message in str(exc).lower() for message in ("registration already exists", "already registered with this email")):
             raise DuplicateTournamentRegistrationError(str(exc)) from exc
         raise
     pairing = None

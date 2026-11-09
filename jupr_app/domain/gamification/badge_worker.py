@@ -33,7 +33,7 @@ def process_badge_eval_queue(
     clean_club_id = str(club_id or "").strip()
     if not clean_club_id:
         raise ValueError("club_id is required to process the badge evaluation queue")
-    if processing_deferred():
+    if processing_deferred(clean_club_id):
         # Match-save callers keep the durable queue record and do not start
         # CPU-heavy work (or trigger their error fallback) in the API process.
         return {"processed": 0, "errored": 0}
@@ -53,7 +53,8 @@ def process_badge_eval_queue(
                 _process_job_with_retry(supabase, job, ctx=ctx, match_limit=match_limit)
                 lease.stop_heartbeat()
                 assert_job_owned(job)
-                ack_badge_eval(supabase, job_id=str(job.get("id")), status="done", **ownership)
+                ack_badge_eval(supabase, job_id=str(job.get("id")), club_id=clean_club_id,
+                               status="done", **ownership)
             processed += 1
         except BadgeLeaseLost:
             # Retain the processing record for review. Neither completion nor
@@ -65,6 +66,7 @@ def process_badge_eval_queue(
             ack_badge_eval(
                 supabase,
                 job_id=str(job.get("id")),
+                club_id=clean_club_id,
                 status="error",
                 error=details[:2000],
                 **ownership,
@@ -87,7 +89,7 @@ def process_badge_eval_queue_until_empty(
     max_errors: int = 10,
     progress_cb: Callable[[dict[str, int | float | str]], None] | None = None,
 ) -> dict[str, int | float | str]:
-    if processing_deferred():
+    if processing_deferred(club_id):
         return {"total_processed": 0, "total_errored": 0, "loops": 0,
                 "stopped_reason": "external_worker_required", "duration_seconds": 0.0}
     started = time.monotonic()

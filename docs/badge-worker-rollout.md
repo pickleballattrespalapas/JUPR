@@ -1,15 +1,16 @@
 # Badge worker ownership and isolation
 
-This change is additive and opt-in. It does not repair, requeue, or replay any
-existing job. Existing processing records without heartbeats remain evidence
+Queue ownership is additive. The reviewed staging configuration now enables
+one dedicated Tres Palapas worker; production remains unchanged. It does not
+repair, requeue, or replay any existing job. Existing processing records without heartbeats remain evidence
 for review, not proof of running work.
 
 ## Preparation and migration order
 
-This separate worker package was prepared against staging commit
-`6dbf8dfe06f7ab1191957e470bb274398754c064`. It is dormant until the migration,
-deployment and activation steps below are separately reviewed. No migration
-application, worker provisioning or runtime-setting change is part of this PR.
+The worker package is integrated with the current staging calculation reuse,
+request timing, and registration changes. The lease migration is already applied
+to staging as recorded below. The staging workflow checks its RPCs and columns
+and refuses activation while any badge job is processing. It never applies SQL.
 
 Before applying anything, verify the current remote staging head and review any
 changes since that preparation commit. Compare the hosted staging migration
@@ -45,43 +46,51 @@ ledger timestamp `20261109000605` is not a production expected-head value. Leave
 production head configuration unchanged until the exact production application
 is separately authorized and its resulting ledger is verified.
 
-## Release sequence
+## Selected staging topology and release sequence
 
-1. Apply the new queue-lease migration to staging and verify the SQL behavior
-   fixture, role grants, and RLS. Existing historical migrations have later
-   timestamps, so check migration history before applying this migration.
-2. Deploy the worker-aware API and worker code with the existing topology. The
-   default `JUPR_BADGE_QUEUE_LEASES=0` preserves compatibility until the new RPCs
-   are verified. Never mix old queue consumers with lease-enabled consumers.
-3. In a reviewed release, set `JUPR_BADGE_QUEUE_LEASES=1` for **all** queue
-   consumers. Check claimed-job heartbeats and fenced completion in staging.
-   Lease-enabled match saves only enqueue; they never run the inline fallback,
-   including when enqueue fails or ownership is lost. Failed enqueue returns
-   `queue_error` and saved-source recovery references, suppresses dependent
-   notifications, and emits `badge.job.enqueue_failed`. It does not pretend a
-   missing queue write succeeded. The already-committed matches are the durable
-   recovery source; do not submit those matches again.
-4. Provision **one** separately supervised badge process for this club, running
-   `python -m jupr_app.workers.isolated_badge_worker --club-id tres_palapas`.
-   It requires `JUPR_BADGE_WORKER_MODE=external` and leases enabled. Give it its
-   own CPU/memory allocation; a second process on the same constrained machine
-   does not isolate capacity. Route HTTP only to API processes. The same
-   external-mode value disables the API's embedded program-badge loop.
-   Common inline queue drains in match-save flows also defer to this process.
-   An unrelated explicit badge-recompute/admin operation is not made a queue
-   operation by this switch; keep those operations out of peak public traffic.
-   The program-badge processor also refuses polling from API contexts in external
-   mode. With two API machines and one dedicated worker, only the latter polls.
-   Program award application already locks the club revision and matches award
-   identity for idempotent application; it does not lease the calculation itself.
-   Do not horizontally duplicate the dedicated worker without adding a shared
-   program-calculation lease first.
-5. Verify queue progress, program-revision progress, heartbeat, CPU, memory and
-   public latency before declaring isolation successful. A graceful stop waits
-   for the current cycle; a forced stop leaves its claim for review.
-6. Repeat the reviewed sequence for production. Promote only reviewed changes;
-   staging and production have different feature-policy code. Production's
-   explicit badge feature policy remains required by the isolated entrypoint.
+- Keep both DFW API machines at shared-cpu-1x / 1 GB.
+- Add exactly one DFW badge worker at shared-cpu-1x / 2 GB, with no HTTP service.
+- All processes use external mode scoped to `JUPR_BADGE_WORKER_CLUB_ID=tres_palapas`.
+  API processes use `JUPR_BADGE_QUEUE_LEASES=0`; the worker command overrides it
+  to `1`. Tres Palapas requests only enqueue. Other clubs keep their embedded
+  program processing and legacy queue claims/fallback. Scope validation also
+  prevents an accidental global lease flag from changing unrelated clubs.
+- Current Fly list pricing checked November 8 gives an approximate $15.86/month
+  for this continuously running shared worker in Dallas: (base $2.19 + 1.75 GB
+  additional RAM at $6/GB) × Dallas multiplier 1.25. This is additional compute,
+  excluding storage, network and tax. It is a starting size to measure, not a
+  guarantee of adequate sustained worker CPU. Pricing: https://fly.io/pricing/.
+
+The normal staging deploy has two phases. It verifies the migration and an idle
+processing queue, records a sanitized inventory, then stops the previous worker
+if present. It deploys only the `app` group first. Exact health must attest the
+staging SHA, external pilot scope, API leases off, and dry-run email. Inventory
+validation requires both API machines to have their original capacity and the
+same immutable image, with any old worker stopped. Only then does it deploy the
+`badge_worker` group using that immutable image and `--ha=false`.
+
+Final inventory must contain exactly two API machines and one running worker,
+all on the same image; the worker must have 2 GB, the exact scoped lease-enabled
+command, and no network services. An extra worker, changed API capacity, foreign
+image, or mixed image fails the release. Existing scope/lease settings must not
+be overridden manually. Do not activate an old worker or run a second worker
+entrypoint from SSH.
+
+The rollout briefly pauses background processing; API traffic continues during
+its rolling update. A deployment that fails after stopping the worker needs
+operator attention: retain that failure, inspect whether the APIs already defer,
+and finish the same reviewed candidate or restore the previous known topology.
+Do not treat a healthy HTTP endpoint as proof that badge processing resumed.
+
+Worker logs emit `badge.worker.started`, cycle counts and durations, job lease
+heartbeats, and graceful stop. Validate real queue and program progress and
+public request timings before claiming capacity recovery. Staging idle cycles
+alone do not establish production performance. Keep all emails in dry-run mode.
+
+Production needs a separately reviewed cherry-pick, its migration applied and
+verified against its own ledger, preservation of its badge feature policy, and
+explicit production release authorization. This staging rollout does not make
+any production change or recover stranded historical jobs.
 
 ## Ownership behavior
 
@@ -145,3 +154,18 @@ Verified against the hosted database as `service_role`:
 No worker was provisioned and no activation flags changed. End-to-end worker
 progress, graceful shutdown and public latency still need validation with a
 separately provisioned staging worker before production isolation approval.
+
+## Measurement and acceptance
+
+Record the exact release image and machine IDs with before/after windows. Use
+request timing logs to compare the same routes, cache state and representative
+traffic, plus CPU throttling/burst credits, memory/restarts, queue age and job
+completion, and program revision/applied_revision. Never infer p95 or recovery
+from a handful of health probes. The preliminary staging check is a bounded
+smoke test, not a load test. Keep API upgrades deferred until these measurements
+show their remaining bottleneck.
+
+Graceful shutdown is regression-tested with a live heartbeat: the current job
+finishes, the heartbeat joins, and no subsequent phase claims new work. Fly's
+300-second shutdown allowance is best effort; a forced stop leaves unresolved
+claims for explicit review. There is no automatic expired-job replay.

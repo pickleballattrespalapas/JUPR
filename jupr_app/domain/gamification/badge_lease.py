@@ -25,12 +25,32 @@ class BadgeLeaseLost(RuntimeError):
     pass
 
 
-def leases_enabled() -> bool:
-    return os.getenv("JUPR_BADGE_QUEUE_LEASES", "0").strip() == "1"
+def leases_enabled(club_id: str | None = None) -> bool:
+    if os.getenv("JUPR_BADGE_QUEUE_LEASES", "0").strip() != "1":
+        return False
+    # A scoped pilot must not silently change ownership semantics for clubs
+    # that retain legacy inline processing and fallback. Without a club,
+    # retain the global flag for startup validation and fail-closed ack checks.
+    if club_id is not None and os.getenv("JUPR_BADGE_WORKER_MODE", "embedded") == "external":
+        scope = external_worker_club_id()
+        if scope is not None:
+            return str(club_id).strip() == scope
+    return True
 
 
-def processing_deferred() -> bool:
-    return os.getenv("JUPR_BADGE_WORKER_MODE", "embedded") == "external" and not _worker_context.get()
+def external_worker_club_id() -> str | None:
+    """Optional pilot scope; absent retains the existing global mode contract."""
+    scope = os.getenv("JUPR_BADGE_WORKER_CLUB_ID", "").strip()
+    if scope and scope != "tres_palapas":
+        raise ValueError("Dedicated badge worker club scope is not authorized.")
+    return scope or None
+
+
+def processing_deferred(club_id: str | None = None) -> bool:
+    if os.getenv("JUPR_BADGE_WORKER_MODE", "embedded") != "external" or _worker_context.get():
+        return False
+    scope = external_worker_club_id()
+    return scope is None or str(club_id or "").strip() == scope
 
 
 def deferred_badge_summary(enqueue_result: dict[str, Any], *, club_id: str,
@@ -41,7 +61,13 @@ def deferred_badge_summary(enqueue_result: dict[str, Any], *, club_id: str,
     Return an explicit recovery error tied to the already-saved source, so
     callers suppress incomplete notifications and operators retry that source.
     """
-    if os.getenv("JUPR_BADGE_WORKER_MODE", "embedded") != "external" and not leases_enabled():
+    external = os.getenv("JUPR_BADGE_WORKER_MODE", "embedded") == "external"
+    scope = external_worker_club_id() if external else None
+    if external and scope is not None and str(club_id).strip() != scope:
+        # Other clubs retain legacy processing, claims and fallback together;
+        # they must not execute an unfenced fallback after losing a lease.
+        return None
+    if not external and not leases_enabled():
         return None
     if enqueue_result.get("queued"):
         result = {"mode": "queue", "processed": 0, "errored": 0, "deferred": True}
@@ -111,7 +137,7 @@ class BadgeJobLease:
                 return
 
     def __enter__(self):
-        if leases_enabled() and not self.token:
+        if leases_enabled(str(self.job.get("club_id") or "")) and not self.token:
             raise BadgeLeaseLost("Lease-enabled worker received an unfenced job.")
         self.renew()
         self.job["_assert_owned"] = self.renew

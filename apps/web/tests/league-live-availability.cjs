@@ -17,6 +17,7 @@ function load(file, overrides = {}) {
 
 const savedGlobals = { fetch: global.fetch, sessionStorage: global.sessionStorage, addEventListener: global.addEventListener, removeEventListener: global.removeEventListener };
 const storage = new Map();
+let failSessionRead = false;
 if (!global.crypto) global.crypto = require("node:crypto").webcrypto;
 global.sessionStorage = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
 global.addEventListener = () => {};
@@ -56,6 +57,7 @@ const Panel = load("app/admin/league-manager/live/LeagueLiveRoundPanel.tsx", {
   "@/components/interaction": load("components/interaction/types.ts"),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "test-token", session: {} }), adminSessionLabel: () => "Signed in" },
   "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),
+  "@/lib/leagueLiveDateReview": load("lib/leagueLiveDateReview.ts"),
   "@/lib/leagueLiveSetupDraft": load("lib/leagueLiveSetupDraft.ts")
 }).default;
 
@@ -99,6 +101,7 @@ global.fetch = async (url, options = {}) => {
   const pathname = new URL(url).pathname;
   const body = options.body ? JSON.parse(options.body) : null;
   requests.push({ path: pathname, method: options.method || "GET", body });
+  if (pathname === `${base}/live-sessions/session-a` && failSessionRead) throw new TypeError("Saved session read timed out");
   assert.equal(options.headers.get("Authorization"), "Bearer test-token");
   assert.doesNotMatch(pathname, /match-uploader/, "League Live must never depend on Match Uploader routes");
   if (pathname === `${base}/leagues`) return response({ leagues: [detail.league] });
@@ -225,6 +228,22 @@ global.fetch = async (url, options = {}) => {
   assert.equal(courtsNavigation.props.disabled, true, "Official rounds must not expose court editing");
   await act(async () => courtsNavigation.props.onClick());
   assert.equal(tree.root.findAllByType(CourtRosterEditor).length, 0, "Navigation guards must keep the editor closed after publication");
+  // A transient saved-session read failure must not look like a new setup or
+  // expose any editing action. Retry restores the authoritative published phase.
+  await act(async () => tree.root.findAllByType("button").find(node => /Step 1Setup/.test(text(node))).props.onClick());
+  failSessionRead = true;
+  const writesBeforeRetry = requests.filter(request => request.method !== "GET" && !request.path.endsWith("/plan")).length;
+  await click("Retry selected session");
+  assert.match(rendered(), /Saved session could not be loaded/);
+  assert.doesNotMatch(rendered(), /1. Setup/);
+  assert.equal(tree.root.findAllByType(ConfirmAction).length, 0);
+  assert.equal(tree.root.findAllByType(CourtRosterEditor).length, 0);
+  failSessionRead = false;
+  await click("Retry selected session");
+  assert.match(rendered(), /5. Movement/);
+  assert.match(rendered(), /scores are official/);
+  assert.equal(requests.filter(request => request.method !== "GET" && !request.path.endsWith("/plan")).length,
+    writesBeforeRetry, "Reloading must not republish scores or modify the saved session");
   await act(async () => tree.unmount());
 
   // A one-game staff substitution and unfinished game serialize exact people,

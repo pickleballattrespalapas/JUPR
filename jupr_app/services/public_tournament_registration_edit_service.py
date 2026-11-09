@@ -485,8 +485,55 @@ def request_public_tournament_registration_edit_link(
     website: str | None = None,
     public_base_url: str | None = None,
 ) -> dict[str, Any]:
+    # A standalone email lookup must not reveal whether a registration exists.
+    _deliver_public_tournament_registration_edit_link(
+        supabase, club_id=club_id, club_slug=club_slug, email=email,
+        tournament_id=tournament_id, registration_slug=registration_slug,
+        idempotency_key=idempotency_key, website=website, public_base_url=public_base_url,
+    )
+    return _generic_edit_link_response()
+
+
+def recover_existing_public_tournament_registration(
+    supabase: Any, *, club_id: str, club_slug: str, payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Called only after intake detects a duplicate; never apply its form edits."""
+    status = _deliver_public_tournament_registration_edit_link(
+        supabase, club_id=club_id, club_slug=club_slug,
+        email=_clean_email(payload.get("email")),
+        tournament_id=payload.get("tournament_id"),
+        registration_slug=payload.get("registration_slug"),
+        idempotency_key=str(payload.get("attempt_id") or "existing-registration"),
+        website=payload.get("website"),
+    )
+    if status == "not_found":
+        raise ValueError("We couldn’t find that registration. Please try again.")
+    if status == "sent":
+        message = "We recognize that you’re already registered for this tournament. We’ve sent an email to the address you entered with a secure link to continue editing your registration."
+    elif status in {"dry_run", "staging_redirect"}:
+        message = "We found your existing registration. Your edit-link email was prepared in test mode; no email was sent to the player."
+    elif status == "locked":
+        message = "We recognize that you’re already registered for this tournament. Your entry is already in a tournament draw. Please contact the organizer to add events or make changes."
+    else:
+        status = "unavailable"
+        message = "We recognize that you’re already registered for this tournament, but we couldn’t confirm that your edit-link email was sent. Check your inbox and spam folder. If it hasn’t arrived, request an edit link below or contact the organizer."
+    return {"ok": True, "mode": "existing_registration", "edit_link_status": status, "message": message}
+
+
+def _deliver_public_tournament_registration_edit_link(
+    supabase: Any,
+    *,
+    club_id: str,
+    club_slug: str,
+    email: str,
+    tournament_id: str | None = None,
+    registration_slug: str | None = None,
+    idempotency_key: str = "legacy-edit-link-request",
+    website: str | None = None,
+    public_base_url: str | None = None,
+) -> str:
     if _clean_text(website, limit=200):
-        return _generic_edit_link_response()
+        return "unavailable"
     secret = _stable_edit_secret()
     clean_email = _clean_email(email)
     if not clean_email or "@" not in clean_email:
@@ -506,14 +553,14 @@ def request_public_tournament_registration_edit_link(
         raise ValueError("Tournament registration was not found.")
     registration = get_registration_by_email(supabase, tid, clean_email)
     if not registration:
-        return _generic_edit_link_response()
+        return "not_found"
     registration_id = str(registration.get("id") or "").strip()
     if registration_has_imported_draw_selection(
         supabase,
         tournament_id=tid,
         registration_id=registration_id,
     ):
-        return _generic_edit_link_response()
+        return "locked"
     # Dedupe by recipient/tournament in a short server-side bucket as well as by
     # the caller's request. A user can double-click, retry after a dropped
     # response, or generate a new browser key without triggering another email.
@@ -540,11 +587,11 @@ def request_public_tournament_registration_edit_link(
             before_json={"client_request_key_fingerprint": hashlib.sha256(str(idempotency_key).encode("utf-8")).hexdigest()},
         )
         if idempotent:
-            return _generic_edit_link_response()
+            return str((operation.get("after_json") or {}).get("email_status") or "unavailable")
     except (GuardedWriteRecoveryRequired, RuntimeError, ValueError):
         # Preserve the anti-enumeration response and suppress a second delivery
         # whenever durable delivery state cannot prove that sending is safe.
-        return _generic_edit_link_response()
+        return "unavailable"
     token = build_registration_edit_token(
         tournament_id=tid,
         registration_id=registration_id,
@@ -552,7 +599,7 @@ def request_public_tournament_registration_edit_link(
         secret=secret,
     )
     try:
-        send_tournament_registration_edit_email(
+        delivery = send_tournament_registration_edit_email(
             tournament_name=_clean_text(tournament.get("name") or "Tournament"),
             registered_email=clean_email,
             edit_url=_edit_url(
@@ -575,7 +622,8 @@ def request_public_tournament_registration_edit_link(
             )
         except GuardedWriteRecoveryRequired:
             pass
-        return _generic_edit_link_response()
+        return "unavailable"
+    email_status = str((delivery or {}).get("status") or "unavailable")
     try:
         update_guarded_operation(
             supabase,
@@ -583,13 +631,13 @@ def request_public_tournament_registration_edit_link(
             operation_key=delivery_operation_key,
             status="completed",
             result_json=_generic_edit_link_response(),
-            after_json={"delivery": "accepted", "delivery_bucket": bucket},
+            after_json={"delivery": "accepted", "email_status": email_status, "delivery_bucket": bucket},
         )
     except GuardedWriteRecoveryRequired:
         # The provider may already have accepted the message. Never send again
         # just because the response/receipt write was interrupted.
-        return _generic_edit_link_response()
-    return _generic_edit_link_response()
+        return email_status
+    return email_status
 
 
 def build_public_tournament_registration_edit_page(

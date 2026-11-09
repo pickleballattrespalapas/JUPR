@@ -6,6 +6,7 @@ import {
   PublicRegistrationEvent,
   PublicRegistrationPlayer,
   PublicRegistrationProfileResolutionResponse,
+  PublicRegistrationRecoveryResponse,
   PublicRegistrationSelectionPayload,
   resolveClubTournamentPartnerProfile,
   resolveClubTournamentRegistrationProfile,
@@ -210,7 +211,7 @@ export default function TournamentRegistrationForm({
   const formRef = useRef<HTMLDivElement>(null);
   const partnerInvitation = usePartnerInvitationRegistration(clubSlug);
   const invitedEventId = partnerInvitation.invitation?.registration_prefill?.event_option_id;
-  const [mode, setMode] = useState<"choose" | "new" | "edit">("choose");
+  const [mode, setMode] = useState<"choose" | "new" | "edit" | "recovery">("choose");
   // Confirmation emails/pages already link to this anchor. Open the same
   // recovery form used by the chooser instead of rendering a second form.
   useEffect(() => {
@@ -253,6 +254,7 @@ export default function TournamentRegistrationForm({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recoveryEmail, setRecoveryEmail] = useState("");
+  const [recovery, setRecovery] = useState<PublicRegistrationRecoveryResponse | null>(null);
   const [commerceSelections, setCommerceSelections] = useState<
     TournamentCommerceSelection[]
   >([]);
@@ -274,7 +276,7 @@ export default function TournamentRegistrationForm({
     clubSlug, tournamentId, active: mode === "new", flow: "new",
     stage: pending ? "submit" : ["contact", "profile", "events", "review"][step - 1],
     name: `${contact.firstName} ${contact.lastName}`.trim(), email: contact.email, error,
-    completed: Boolean(savedRegistration),
+    completed: Boolean(savedRegistration || recovery),
     selections: selectedIds.map(id => ({ event_option_id: id, partner_mode: partnerDetails[id]?.mode,
       partner_name: partnerDetails[id]?.name,
       same_email_as_player: Boolean(partnerDetails[id]?.email && partnerDetails[id].email.trim().toLowerCase() === contact.email.trim().toLowerCase()) }))
@@ -363,6 +365,7 @@ export default function TournamentRegistrationForm({
 
   function resetWizard(nextMode: "choose" | "new" | "edit" = "choose") {
     setMode(nextMode);
+    setRecovery(null);
     setStep(1);
     profileRequestId.current += 1;
     nameRequestId.current += 1;
@@ -771,6 +774,13 @@ export default function TournamentRegistrationForm({
             }
           : null
       });
+      if (response.data?.mode === "existing_registration") {
+        setPending(false);
+        setRecoveryEmail(contact.email.trim());
+        setRecovery(response.data);
+        setMode("recovery");
+        return;
+      }
       if (response.error || !response.data?.registration_id) {
         setPending(false);
         if (response.status === 409 && response.current_quote) {
@@ -886,6 +896,17 @@ export default function TournamentRegistrationForm({
         {!registrationOpen && registrationClosedReason ? (
           <p style={{ color: "#92400e", margin: 0 }}>{registrationClosedReason}</p>
         ) : null}
+      </section>
+    ) : mode === "recovery" && recovery ? (
+      <section style={{ ...cardStyle, display: "grid", gap: "0.9rem" }} data-testid="registration-existing-handoff" role="status">
+        <h2 style={{ margin: 0 }}>{recovery.edit_link_status === "sent" ? "Check your email" : "You’re already registered"}</h2>
+        <p style={{ color: "#475569", margin: 0 }}>{recovery.message}</p>
+        {recovery.edit_link_status !== "locked" ? <>
+          <p style={{ color: "#475569", margin: 0 }}>Use the edit link to add events or change your registration. The event choices from this form haven’t been saved.</p>
+          <p style={{ color: "#475569", margin: 0 }}>A partner may have registered you already. Your existing events and partnerships are still in place.</p>
+          <button type="button" onClick={() => setMode("edit")} style={secondaryButtonStyle}>Request another edit link</button>
+        </> : null}
+        <button type="button" onClick={() => resetWizard("choose")} style={secondaryButtonStyle}>Back to registration choices</button>
       </section>
     ) : mode === "edit" ? (
       <section style={{ ...cardStyle, display: "grid", gap: "0.9rem" }} data-testid="registration-edit-mode">
@@ -1160,7 +1181,7 @@ export default function TournamentRegistrationForm({
 
   return (
     <>
-      {registrationOpen && mode !== "new" ? (
+      {registrationOpen && mode !== "new" && mode !== "recovery" ? (
         <article
           style={{
             ...cardStyle,

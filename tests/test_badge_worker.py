@@ -521,7 +521,8 @@ def test_worker_respects_time_budget_deadline(monkeypatch):
         assert club_id == "club"
         return jobs.pop(0) if jobs else None
 
-    def fake_ack(_supabase, job_id, status, error=None):
+    def fake_ack(_supabase, job_id, status, error=None, club_id=None):
+        assert club_id == "club"
         if status == "done":
             acked.append(str(job_id))
 
