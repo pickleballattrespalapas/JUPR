@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import os
 from typing import Any
 from typing import Literal
@@ -1020,7 +1022,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
             )
-            background_tasks.add_task(process_published_round_badges, supabase, str(club_id), result)
+            if badges_enabled():
+                background_tasks.add_task(process_published_round_badges, supabase, str(club_id), result)
             return result
         except Exception as exc:
             _handle_common(exc)
@@ -1091,7 +1094,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
             )
-            background_tasks.add_task(process_published_round_badges, supabase, str(club_id), result)
+            if badges_enabled():
+                background_tasks.add_task(process_published_round_badges, supabase, str(club_id), result)
             return result
         except Exception as exc:
             _handle_common(exc)
@@ -1124,7 +1128,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
             )
-            background_tasks.add_task(process_published_round_badges, supabase, str(club_id), result)
+            if badges_enabled():
+                background_tasks.add_task(process_published_round_badges, supabase, str(club_id), result)
             return result
         except Exception as exc:
             _handle_common(exc)

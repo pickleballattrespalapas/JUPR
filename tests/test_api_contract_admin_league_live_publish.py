@@ -149,7 +149,7 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     assert first.status_code == 200, first.text
     payload = first.json()
     assert payload["publish_operation"]["status"] == "completed"
-    assert events == ["sent", "badges"]
+    assert events == ["sent"]
     assert payload["rating_review"]["status"] == "verified_readback"
     assert len(payload["published_match_ids"]) == 1
     assert payload["player_update_queue"]["queued"] == 1
@@ -182,7 +182,7 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
         json=request,
     )
     assert replay.status_code == 200, replay.text
-    assert events == ["sent", "badges", "sent", "badges"]
+    assert events == ["sent", "sent"]
     assert replay.json()["idempotent_replay"] is True
     assert replay.json()["player_update_queue"]["already_queued"] == 1
     assert len(tables["player_profile_update_outbox"]) == 1
