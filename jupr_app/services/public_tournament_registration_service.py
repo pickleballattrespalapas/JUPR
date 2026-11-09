@@ -11,6 +11,10 @@ from typing import Any
 from urllib.parse import urlencode
 
 from jupr_app.domain.player_visibility import is_merged_player
+from jupr_app.domain.tournament_public_references import (
+    build_public_tournament_reference,
+    public_tournament_reference_matches,
+)
 from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.config import get_env_or_default
 from jupr_app.domain.tournament_age_policy import evaluate_age_eligibility, normalize_age_policy
@@ -970,6 +974,95 @@ def resolve_public_tournament_registration_profile(
     }
 
 
+def _partner_registration_rows(supabase: Any, *, tournament_id: str) -> list[dict[str, Any]]:
+    """Read only this tournament; never truncate a later registered partner."""
+    rows: list[dict[str, Any]] = []
+    while True:
+        page = _safe_rows(supabase.table("tournament_registrations")
+                         .select("id,tournament_id,player_id,display_name,first_name,last_name,email,age,gender,doubles_skill,status")
+                         .eq("tournament_id", str(tournament_id)).order("id")
+                         .range(len(rows), len(rows) + 499).execute())
+        rows.extend(page)
+        if len(page) < 500:
+            break
+    return [row for row in rows if str(row.get("status") or "").strip().upper() not in {"CANCELLED", "CANCELED", "WITHDRAWN"}]
+
+
+def _partner_registration_name(row: dict[str, Any]) -> str:
+    return _clean_text(row.get("display_name") or " ".join(
+        str(row.get(key) or "") for key in ("first_name", "last_name")
+    ), limit=160)
+
+
+def _with_registered_partners(
+    supabase: Any, *, club_id: str, tournament_id: str, name: str, email: str,
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Offer existing registrations without disclosing contact or demographics.
+
+    The opaque reference selects a partner; it never authorizes editing their
+    registration or establishes the requesting player's club-profile identity.
+    """
+    rows = _partner_registration_rows(supabase, tournament_id=tournament_id)
+    result = [dict(candidate) for candidate in candidates]
+    used: set[str] = set()
+    registration_by_candidate: dict[str, dict[str, Any]] = {}
+
+    def attach(candidate: dict[str, Any], registration: dict[str, Any]) -> None:
+        registration_by_candidate[str(candidate["id"])] = registration
+        used.add(str(registration["id"]))
+
+    def hydrate(candidate: dict[str, Any], registration: dict[str, Any]) -> None:
+        profile = build_tournament_registration_player_profile(
+            supabase, club_id=club_id, registration=registration,
+        )
+        key = build_public_tournament_reference(tournament_id=tournament_id,
+                                               namespace="partner-registration", source_id=str(registration["id"]))
+        candidate["registered_partner"] = {
+            "key": key,
+            "has_email": bool(_EMAIL_RE.match(_clean_email(profile.get("email")))),
+            "has_age": profile.get("age") is not None,
+            "has_gender": bool(profile.get("gender")),
+        }
+        if profile.get("doubles_skill") is not None:
+            candidate["doubles_skill"] = profile["doubles_skill"]
+
+    for candidate in result:
+        matches = [row for row in rows if row.get("player_id") not in (None, "")
+                   and str(row["player_id"]) == str(candidate["id"])]
+        if not matches:
+            same_name_candidates = [other for other in result if _normalized_name(other["display_name"]) == _normalized_name(candidate["display_name"])]
+            if len(same_name_candidates) == 1:
+                matches = [row for row in rows if row.get("player_id") in (None, "")
+                           and _normalized_name(_partner_registration_name(row)) == _normalized_name(candidate["display_name"])]
+        if len(matches) == 1:
+            attach(candidate, matches[0])
+
+    terms = _normalized_name(name).split()
+    if len("".join(terms)) >= 2:
+        for row in rows:
+            if str(row["id"]) in used:
+                continue
+            display_name = _partner_registration_name(row)
+            if not display_name or not (all(term in _normalized_name(display_name) for term in terms)
+                                        or (email and _clean_email(row.get("email")) == email)):
+                continue
+            # Registrations without a club profile must also be selectable.
+            key = build_public_tournament_reference(tournament_id=tournament_id,
+                                                   namespace="partner-registration", source_id=str(row["id"]))
+            candidate = {"id": key, "display_name": display_name, "doubles_skill": row.get("doubles_skill"), "singles_skill": None}
+            attach(candidate, row)
+            result.append(candidate)
+    # Exact names take precedence; multiple exact names still require a choice.
+    exact = [candidate for candidate in result if _normalized_name(candidate["display_name"]) == _normalized_name(name)]
+    selected = (exact or result)[:8]
+    for candidate in selected:
+        registration = registration_by_candidate.get(str(candidate["id"]))
+        if registration:
+            hydrate(candidate, registration)
+    return selected
+
+
 def resolve_public_tournament_partner_profile(
     supabase: Any,
     *,
@@ -979,7 +1072,7 @@ def resolve_public_tournament_partner_profile(
     """Find public-safe partner suggestions without creating or linking a player.
 
     Unlike the registrant preflight, a partner may already be registered. Their
-    registration/contact records are neither returned nor changed by this lookup.
+    contact and demographic values are neither returned nor changed by lookup.
     """
     if _clean_text(payload.get("website")):
         raise ValueError("Unable to look up a partner profile.")
@@ -1004,6 +1097,12 @@ def resolve_public_tournament_partner_profile(
         supabase, club_id=str(club_id), first_name=first_name,
         last_name=last_name, email=email, allow_partial_name=True,
     )
+    candidates = _with_registered_partners(
+        supabase, club_id=str(club_id), tournament_id=str(page["tournament"]["id"]),
+        name=name, email=email, candidates=candidates,
+    )
+    if candidates and match_kind != "email_exact":
+        match_kind = "name_exact" if all(_normalized_name(row["display_name"]) == _normalized_name(name) for row in candidates) else "name_partial"
     return {
         "ok": True,
         "profile_match_kind": match_kind,
@@ -1129,8 +1228,9 @@ def _registered_partner_profile(
     partner_email: str,
     primary_registration_id: str | None,
     primary_player_id: Any,
+    registration: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    registration = get_registration_by_email(supabase, str(tournament_id), partner_email)
+    registration = registration or get_registration_by_email(supabase, str(tournament_id), partner_email)
     if not registration:
         return None
     if primary_registration_id and str(registration.get("id") or "") == str(primary_registration_id):
@@ -1211,8 +1311,22 @@ def validate_and_clean_tournament_selection(
     partner_profile: dict[str, Any] | None = None
     partner_gender = clean_selection.get("partner_gender")
     if partner_mode == "HAS_PARTNER":
+        selected_registration = None
         partner_name = _clean_text(clean_selection.get("partner_name"), limit=160)
         partner_email = _clean_email(clean_selection.get("partner_email"))
+        partner_key = _clean_text(raw_selection.get("partner_registration_key"), limit=160)
+        if partner_key:
+            matches = [row for row in _partner_registration_rows(supabase, tournament_id=str(tournament_id))
+                       if public_tournament_reference_matches(partner_key, tournament_id=str(tournament_id),
+                                                              namespace="partner-registration", source_id=str(row["id"]))]
+            if len(matches) != 1:
+                raise ValueError("Your partner's registration is no longer available. Choose their profile again.")
+            selected_registration = matches[0]
+            # Always resolve the current saved values, never trust browser flags.
+            partner_name = _partner_registration_name(selected_registration) or partner_name
+            partner_email = _clean_email(selected_registration.get("email")) or partner_email
+            clean_selection["partner_name"] = partner_name
+            clean_selection["partner_email"] = partner_email
         if not partner_name:
             raise ValueError(f"{_event_label(event)}: partner name is required.")
         if not partner_email or not _EMAIL_RE.match(partner_email):
@@ -1227,6 +1341,7 @@ def validate_and_clean_tournament_selection(
             partner_email=partner_email,
             primary_registration_id=primary_registration_id,
             primary_player_id=player_profile.get("player_id"),
+            registration=selected_registration,
         )
         if registered_partner:
             submitted_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")

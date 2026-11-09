@@ -67,6 +67,7 @@ type EventSelectionDraft = Omit<
   partner_profile_choice_made?: boolean;
   partner_profile_lookup_pending?: boolean;
   partner_profile_choice_required?: boolean;
+  partner_registered_details?: TournamentPartnerDetailsValue["registeredPartner"];
 };
 
 const cardStyle = {
@@ -578,6 +579,7 @@ export default function EditTournamentRegistrationForm({
         partner_mode: mode,
         partner_name: String(draft.partner_name || "").trim(),
         partner_email: String(draft.partner_email || "").trim(),
+        partner_registration_key: draft.partner_registration_key,
         partner_phone: String(draft.partner_phone || "").trim(),
         partner_dupr_id: String(draft.partner_dupr_id || "").trim(),
         partner_skill: draft.partner_skill ?? null,
@@ -937,6 +939,7 @@ export default function EditTournamentRegistrationForm({
           age: String(prior?.partner_age ?? ""),
           gender: prior?.partner_gender || "",
           profileId: prior?.partner_profile_id || "",
+          registeredPartner: prior?.partner_registered_details,
           profileHasRating: prior?.partner_profile_has_rating,
           profileChoiceMade: prior?.partner_profile_choice_made,
           profileLookupPending: prior?.partner_profile_lookup_pending,
@@ -1034,6 +1037,7 @@ export default function EditTournamentRegistrationForm({
                       ...(patch.age !== undefined ? { partner_age: numericState(patch.age) } : {}),
                       ...(patch.gender !== undefined ? { partner_gender: patch.gender } : {}),
                       ...(patch.profileId !== undefined ? { partner_profile_id: patch.profileId } : {}),
+                      ...(patch.registeredPartner !== undefined ? { partner_registered_details: patch.registeredPartner, partner_registration_key: patch.registeredPartner?.key || null } : {}),
                       ...(patch.profileHasRating !== undefined ? { partner_profile_has_rating: patch.profileHasRating } : {}),
                       ...(patch.profileChoiceMade !== undefined ? { partner_profile_choice_made: patch.profileChoiceMade } : {}),
                       ...(patch.profileLookupPending !== undefined ? { partner_profile_lookup_pending: patch.profileLookupPending } : {}),
