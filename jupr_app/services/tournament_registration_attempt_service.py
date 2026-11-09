@@ -103,8 +103,8 @@ def audited_registration_call(supabase: Any, *, club_id: str, payload: dict[str,
                                     source="SERVER", event="SERVER_REJECTED", stage=stage, message=msg)
         raise
     record_registration_attempt(supabase, club_id=club_id, payload=audit_payload, source="SERVER",
-                                event="SAVED" if result.get("registration_id") else "PROFILE_READY", stage=stage,
-                                message="Registration withdrawn." if result.get("withdrawn") else None,
+                                event="PROGRESS" if result.get("mode") == "existing_registration" else "SAVED" if result.get("registration_id") else "PROFILE_READY", stage=stage,
+                                message=result.get("message") if result.get("mode") == "existing_registration" else "Registration withdrawn." if result.get("withdrawn") else None,
                                 registration_id=result.get("registration_id"))
     return result
 
