@@ -546,7 +546,7 @@ def test_public_profile_resolution_returns_separate_official_singles_rating() ->
     assert result["profile_candidates"][0]["singles_skill"] == 3.5
 
 
-def test_public_profile_resolution_hands_existing_email_to_recovery_without_id() -> None:
+def test_public_profile_resolution_lets_existing_email_finish_form_without_id() -> None:
     storage = fake_storage()
     storage["tournament_registrations"] = [
         {"id": "private-registration-id", "tournament_id": "t1", "email": "avery@example.com"}
@@ -565,8 +565,8 @@ def test_public_profile_resolution_hands_existing_email_to_recovery_without_id()
         },
     )
 
-    assert result["status"] == "existing_registration"
-    assert result["can_start_new"] is False
+    assert result["status"] == "ready"
+    assert result["can_start_new"] is True
     assert result["masked_email"] == "a***y@example.com"
     assert "private-registration-id" not in str(result)
 
