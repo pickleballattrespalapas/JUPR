@@ -179,7 +179,7 @@ def _season_races(ctx, start_date, end_date):
         for cutoff in (end_date, (date.fromisoformat(start_date) - timedelta(days=1)).isoformat()):
             subset = [m for m in all_matches if played_day(m.get("date")) <= cutoff]
             enriched, *_ = _award_inputs(ctx.supabase, club_id=str(ctx.club_id), league_name=name, metadata=meta,
-                league_rows=[r for r in leagues if clean(r.get("league")) == name], match_rows=subset, player_rows=players, team_rows=[], fixture_rows=[])
+                league_rows=[r for r in leagues if clean(r.get("league_name")) == name], match_rows=subset, player_rows=players, team_rows=[], fixture_rows=[])
             snapshots.append(enriched.get("_analytics") or {})
         current, previous = snapshots
         catalog = {s["key"]: s for s in current.get("catalog", [])}

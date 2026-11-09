@@ -246,13 +246,23 @@ def test_season_races_are_snapshots_and_show_progress_before_eligibility():
     matches = [match(i) for i in range(1, 5)] + [match(9,date='2026-11-01T12:00:00+00:00',score_t1=2,score_t2=11)]
     ctx = SimpleNamespace(supabase=DB(),club_id='club',df_matches=pd.DataFrame(matches),
         df_players_all=pd.DataFrame([{'id':i,'name':f'P{i}','rating':1200} for i in range(1,5)]),
-        df_leagues=pd.DataFrame([{'league':'Fall','player_id':i,'rating':1200,'is_active':True} for i in range(1,5)]),
+        df_leagues=pd.DataFrame([{'league_name':'Fall','player_id':i,'rating':1200,'is_active':True} for i in range(1,5)]),
         df_meta=pd.DataFrame([{'league_name':'Fall','club_id':'club','league_type':'ladder','match_format':'doubles','awards_config':{'categories':{'most_wins':{'enabled':True,'min_games':5}}}}]))
     races = _season_races(ctx,'2026-10-12','2026-10-18')
     assert races and any('4 of 5 games to qualify' in line for line in races[0]['lines'])
     ctx.df_meta.iloc[0]['awards_config']['categories']['most_wins']['min_games'] = 4
     races = _season_races(ctx,'2026-10-12','2026-10-18')
     assert any('P1 — 4' in line for line in races[0]['lines'])
+
+    # A member from another league cannot stand in for an inactive member of
+    # this league. The production roster column is league_name, not league.
+    ctx.df_leagues.loc[ctx.df_leagues.player_id == 1, 'is_active'] = False
+    ctx.df_leagues = pd.concat([ctx.df_leagues, pd.DataFrame([
+        {'league_name': 'Other', 'player_id': 1, 'rating': 1200, 'is_active': True},
+    ])], ignore_index=True)
+    races = _season_races(ctx,'2026-10-12','2026-10-18')
+    assert races and any('P2 — 4' in line for line in races[0]['lines'])
+    assert all('P1 —' not in line for race in races for line in race['lines'])
 
 
 def test_refresh_preserves_editorial_and_omits_unavailable_spotlight_selection(monkeypatch):
