@@ -129,7 +129,7 @@ class _ClientTimingProxy:
 
     def __getattr__(self, name: str):
         value = getattr(self._client, name)
-        if name in {"table", "from_", "rpc"}:
+        if name in {"table", "from_", "rpc"} and callable(value):
             def query(*args, **kwargs):
                 # table()/from_() return a root builder with no execute method
                 # until select/insert/etc. chooses an operation.

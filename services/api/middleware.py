@@ -9,6 +9,7 @@ import uuid
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.routing import Match
 
 from scripts.staging_write_waves import wave_allows_request
 from jupr_app.observability.request_timing import RequestTiming, current_timing
@@ -35,11 +36,25 @@ class StructuredRequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def _request_route_template(request):
+    matched = getattr(request.scope.get("route"), "path", None)
+    if matched:
+        return matched
+    # Guards can reject a request before the router has populated scope.route.
+    # Match only registered route metadata; never call the endpoint or echo a
+    # raw URL (which could contain an unknown capability or private value).
+    for route in getattr(request.app, "routes", ()):
+        match, _ = route.matches(request.scope)
+        if match == Match.FULL:
+            return getattr(route, "path", None) or "<unmatched>"
+    return "<unmatched>"
+
+
 def _log_request(event, request, timing, start, status_code, exception_type=None):
     try:
         # Matched route templates exclude player IDs, capability paths and names.
         # Unmatched/early-denied paths are not echoed back into the logs.
-        route = getattr(request.scope.get("route"), "path", None) or "<unmatched>"
+        route = _request_route_template(request)
         machine = os.getenv("FLY_MACHINE_ID", "")
         logger.info(event, extra={
             "method": request.method,

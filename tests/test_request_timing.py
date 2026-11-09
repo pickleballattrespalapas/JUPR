@@ -18,6 +18,7 @@ from jupr_app.observability.request_timing import (
 )
 from services.api.logging_config import RequestJSONFormatter
 from services.api.middleware import StructuredRequestLoggingMiddleware
+from services.api.middleware import StagingWriteWaveMiddleware
 
 
 def test_real_sdk_chains_count_success_and_error_without_retaining_query_data(monkeypatch):
@@ -159,3 +160,35 @@ def test_broken_log_sink_does_not_change_success_or_exception(monkeypatch):
                 await client.get("/failed")
         assert current_timing.get() is None
     asyncio.run(exercise())
+
+
+def test_adapter_does_not_invent_unsupported_rpc_capability():
+    raw = SimpleNamespace(rpc=None)
+    token = current_timing.set(RequestTiming("no-rpc"))
+    try:
+        assert instrument_supabase_client(raw).rpc is None
+    finally:
+        current_timing.reset(token)
+
+
+def test_early_denials_log_registered_template_without_private_values(monkeypatch, caplog):
+    app = FastAPI()
+    app.add_middleware(StagingWriteWaveMiddleware)
+    app.add_middleware(StructuredRequestLoggingMiddleware)
+
+    @app.post("/players/{player_id}")
+    def update_player(player_id: str):
+        pytest.fail("Denied requests must not execute the endpoint")
+
+    monkeypatch.setenv("JUPR_ENV", "production")
+    monkeypatch.setenv("JUPR_PRODUCTION_WRITE_POLICY", "read_only")
+    caplog.set_level(logging.INFO, logger="jupr.api.request")
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
+            for path in ("/players/PRIVATE_NAME?token=PRIVATE_SECRET", "/unknown/PRIVATE_CAPABILITY"):
+                assert (await client.post(path)).status_code == 403
+    asyncio.run(exercise())
+    records = [r for r in caplog.records if r.name == "jupr.api.request"]
+    assert [r.path for r in records] == ["/players/{player_id}", "<unmatched>"]
+    assert all("PRIVATE" not in RequestJSONFormatter().format(r) for r in records)

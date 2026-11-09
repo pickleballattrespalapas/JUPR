@@ -5,6 +5,9 @@ record includes a request ID, matched route template, machine ID when on Fly,
 status, and overall elapsed milliseconds. Query strings, dynamic path values,
 SQL, Supabase filters, request bodies, and responses are not added to these
 records. Unmatched routes use `<unmatched>`.
+Requests rejected before routing use the registered route template when one
+matches, without executing the endpoint. Non-SDK compatibility clients supplied
+by local tools/tests retain their identity and capabilities.
 
 ## Measurements
 
