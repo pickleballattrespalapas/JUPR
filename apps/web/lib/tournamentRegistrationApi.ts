@@ -612,8 +612,8 @@ export async function getClubTournamentRegistration(
 export async function resolveClubTournamentRegistrationProfile(
   clubSlug: string,
   payload: PublicRegistrationProfileResolutionPayload
-): Promise<ApiResult<PublicRegistrationProfileResolutionResponse>> {
-  return fetchJson<PublicRegistrationProfileResolutionResponse>(
+): Promise<ApiResult<PublicRegistrationProfileResolutionResponse | PublicRegistrationRecoveryResponse>> {
+  return fetchJson<PublicRegistrationProfileResolutionResponse | PublicRegistrationRecoveryResponse>(
     `/clubs/${clubSlug}/tournament-registration/profile-resolution`,
     {
       method: "POST",
