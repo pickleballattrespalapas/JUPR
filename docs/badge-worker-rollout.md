@@ -110,3 +110,29 @@ Keep the additive database columns/RPCs. Stop the isolated worker gracefully,
 verify no in-flight processing remains, then restore embedded mode with the
 worker-aware code. Do not deploy a legacy consumer while leased processing jobs
 remain active. Reconciliation of unresolved claims is a separate reviewed action.
+
+## Hosted staging verification (November 9 UTC / November 8 Mazatlan)
+
+The reviewed SQL was applied only to staging project `sijpxjxvdtrehmqvirfi`,
+recorded by the management connection as migration `20261109000605`, logical
+name `badge_queue_worker_leases`. The source migration keeps its generated
+`20261108234006` filename; logical-name and SQL-content matching are necessary
+when comparing this hosted ledger. The preceding hosted head was
+`20261103141122`; later-dated repository files are historical source copies,
+not permission to apply them again.
+
+Verified against the hosted database as `service_role`:
+
+- all three RPCs are invoker functions, callable by service role, not anon or
+  authenticated; queue RLS remains enabled;
+- claim, heartbeat and completion succeed only for the current unexpired token;
+- a second active claim is refused, expired ownership cannot complete, and
+  legacy/expired processing rows are not replayed;
+- two concurrent service-role claim calls against two isolated synthetic jobs
+  returned one claim and zero claims; both synthetic rows were removed;
+- the transactional behavior fixture was rolled back;
+- security-advisor groups were unchanged and showed no new-function findings.
+
+No worker was provisioned and no activation flags changed. End-to-end worker
+progress, graceful shutdown and public latency still need validation with a
+separately provisioned staging worker before production isolation approval.
