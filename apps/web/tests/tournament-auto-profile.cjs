@@ -40,10 +40,11 @@ const result = (candidates = [player]) => ({ data: { can_start_new: true, profil
 let resolveResponse = async () => result();
 const requests = [];
 const submissions = [];
+let submitResponse = async () => ({ error: "Test stops before writing" });
 const api = {
   resolveClubTournamentRegistrationProfile: async (_club, payload) => { requests.push(payload); return resolveResponse(payload); },
   resolveClubTournamentPartnerProfile: async (_club, payload) => { requests.push(payload); return resolveResponse(payload); },
-  submitClubTournamentRegistration: async (_club, payload) => { submissions.push(payload); return { error: "Test stops before writing" }; },
+  submitClubTournamentRegistration: async (_club, payload) => { submissions.push(payload); return submitResponse(); },
   submitClubTournamentRegistrationEdit: async (_club, payload) => { submissions.push(payload); return { error: "Test stops before writing" }; }
 };
 const shared = {
@@ -276,6 +277,37 @@ async function testNameSuggestionsBeforeContactDetails() {
   resolveResponse = async () => result([]);
   await settle();
 }
+async function testExistingRegistrationHandoff() {
+  resolveResponse = async () => result();
+  for (const [status, message] of [
+    ["sent", "We recognize that you’re already registered. We’ve sent an email to the address you entered."],
+    ["unavailable", "We couldn’t confirm that your edit-link email was sent."],
+    ["locked", "Please contact the organizer to add events or make changes."],
+    ["dry_run", "Your edit-link email was prepared in test mode; no email was sent to the player."]
+  ]) {
+    submitResponse = async () => ({ data: { ok: true, mode: "existing_registration", edit_link_status: status, message } });
+    await startNew();
+    assert.ok(button("Continue to events"), "An existing registration still completes the normal form");
+    await act(async () => button("Continue to events").props.onClick());
+    await act(async () => field("Singles Open").props.onChange({ target: { checked: true } }));
+    await act(async () => button("Review registration").props.onClick());
+    await act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "checkbox").props.onChange({ target: { checked: true } }));
+    await act(async () => button("Submit registration").props.onClick());
+    const notice = renderer.root.findByProps({ "data-testid": "registration-existing-handoff" });
+    assert.ok(text(notice).includes(message));
+    assert.equal(text(notice).includes("Check your email"), status === "sent");
+    assert.equal(renderer.root.findAllByProps({ "data-testid": "registration-new-wizard" }).length, 0);
+    assert.equal(global.window.location.href, undefined, "Recovery never opens a new-registration confirmation");
+    assert.equal(submissions.length, 1, "The handoff requires no second registration request");
+    assert.equal(submissions[0].selections[0].event_option_id, "singles");
+    if (status !== "locked") {
+      assert.match(text(notice), /haven’t been saved/);
+      await act(async () => button("Request another edit link").props.onClick());
+      assert.ok(renderer.root.findByProps({ initialEmail: "fixture@example.invalid" }));
+    }
+  }
+  submitResponse = async () => ({ error: "Test stops before writing" });
+}
 async function main() {
   const originalWindow = global.window;
   const originalFormData = global.FormData;
@@ -284,7 +316,7 @@ async function main() {
     const input = renderer.root.findAll(node => ["input", "select", "textarea"].includes(node.type) && node.props.name === name)[0];
     return input?.props.value ?? input?.props.defaultValue ?? null;
   } };
-  try { await testNew(); await testEdit(); await testMissingProfileRatings(); await testStaleEditLookup(); await testNameSuggestionsBeforeContactDetails(); console.log("Automatic profiles: new/edit typeahead, selection, save payloads, duplicates, opt out, existing links, stale responses and manual fallback passed."); }
+  try { await testNew(); await testExistingRegistrationHandoff(); await testEdit(); await testMissingProfileRatings(); await testStaleEditLookup(); await testNameSuggestionsBeforeContactDetails(); console.log("Automatic profiles: new/edit typeahead, selection, save payloads, duplicates, opt out, existing links, stale responses and manual fallback passed."); }
   finally { if (renderer) await act(async () => renderer.unmount()); global.window = originalWindow; global.FormData = originalFormData; }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
