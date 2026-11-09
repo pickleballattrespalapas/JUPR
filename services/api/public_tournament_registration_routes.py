@@ -249,21 +249,37 @@ def install_public_tournament_registration_routes(
     def resolve_club_tournament_registration_profile(
         club_slug: str,
         payload: PublicTournamentRegistrationProfileResolutionRequest,
+        response: Response,
     ) -> dict[str, Any]:
         require_public_intake_or_403()
         try:
             require_production_tournament_writes()
         except (PermissionError, RuntimeError) as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        response.headers["Cache-Control"] = "no-store, private"
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
         try:
+            request_payload = _dump_model(payload)
+
+            def resolve_or_recover() -> dict[str, Any]:
+                try:
+                    return resolve_public_tournament_registration_profile(
+                        supabase, club_id=club_id, payload=request_payload,
+                    )
+                except DuplicateTournamentRegistrationError:
+                    _require_registration_edit_service_role()
+                    return recover_existing_public_tournament_registration(
+                        supabase, club_id=club_id, club_slug=club_slug, payload=request_payload,
+                    )
+
             result = audited_registration_call(
-                supabase, club_id=club_id, payload=_dump_model(payload), stage="profile",
-                operation=lambda: resolve_public_tournament_registration_profile(
-                    supabase, club_id=club_id, payload=_dump_model(payload)),
+                supabase, club_id=club_id, payload=request_payload, stage="profile",
+                operation=resolve_or_recover,
             )
+        except PublicRegistrationEditUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}
