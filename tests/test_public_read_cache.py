@@ -60,3 +60,15 @@ def test_failure_does_not_replace_expired_data_or_poison_retry():
         cache.get("same", failed)
     assert not cache._pending
     assert cache.get("same", lambda: "fresh") == "fresh"
+
+
+def test_oversized_values_can_be_returned_without_retaining_them():
+    cache = PublicReadCache()
+    loads = []
+    def load():
+        loads.append(1)
+        return list(range(10))
+    assert cache.get("large", load, cache_if=lambda value: len(value) < 5) == list(range(10))
+    assert not cache._values
+    cache.get("large", load, cache_if=lambda value: len(value) < 5)
+    assert len(loads) == 2

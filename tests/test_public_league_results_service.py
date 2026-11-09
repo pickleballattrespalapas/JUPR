@@ -353,7 +353,7 @@ def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
     ]
     assert payload["selected_week"] == 2
     week_two = [row for row in payload["weekly_results"] if row["week_num"] == 2]
-    assert {row["player_name"] for row in week_two} == {"Alex", "Blair", "Casey"}
+    assert {row["player_name"] for row in week_two} == {"Alex", "Blair", "Casey", "Devon"}
     blair_week_two = next(row for row in week_two if row["player_name"] == "Blair")
     assert blair_week_two["rank"] == 2
     assert blair_week_two["rank_delta"] == 0
@@ -365,7 +365,7 @@ def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
     assert payload["season_highlights"]["scope"] == "season"
     assert payload["season_highlights"]["min_games"] == 4
     assert payload["season_highlights"]["best_win_pct"][0]["player_name"] == "Alex"
-    assert len(payload["players"]) == 3
+    assert len(payload["players"]) == 4
     assert payload["selected_player_id"] == 1
     assert payload["player_summary"]["player_name"] == "Alex"
     assert (
@@ -641,3 +641,93 @@ def test_season_stat_rankings_match_season_preview_and_ignore_selected_week():
         ]
         assert "this week" not in ranking["qualification"]
     assert rankings["best_win_pct"]["qualification"] == "At least 4 games this league season."
+
+
+def test_completed_week_keeps_all_fifty_two_participants_without_reactivating_them(monkeypatch):
+    """Two 50-player rounds with substitutions must not shrink to 34 active people."""
+    import jupr_app.services.public_league_results_service as service
+
+    db = fake_supabase()
+    db._tables["players"] = [
+        {"id": pid, "club_id": "club", "name": f"Participant {pid}", "rating": 1500,
+         "active": pid > 18, "inactive_at": "2026-10-01" if pid <= 18 else None}
+        for pid in range(1, 53)
+    ]
+    db._tables["league_ratings"] = [
+        {"club_id": "club", "player_id": pid, "league_name": "Open", "rating": 1500,
+         "starting_rating": 1500, "wins": 4, "losses": 4, "matches_played": 8,
+         "is_active": pid > 18, "inactive_at": "2026-10-01" if pid <= 18 else None}
+        for pid in range(1, 53)
+    ]
+    template = db._tables["matches"][0]
+    matches = []
+    for round_index in range(2):
+        participants = list(range(1, 51)) if round_index == 0 else [*range(1, 49), 51, 52]
+        for index in range(50):
+            slots = dict(zip(("t1_p1", "t1_p2", "t2_p1", "t2_p2"),
+                             [participants[(index + shift) % 50] for shift in range(4)]))
+            matches.append(dict(template, id=1000 + round_index * 50 + index,
+                                week_tag="Week 4", **slots))
+    db._tables["matches"] = matches
+    award_inputs = {}
+    monkeypatch.setattr(service, "_public_award_progress", lambda *_args, **kwargs:
+                        award_inputs.update(kwargs) or {"awards": [], "award_count": 0})
+
+    payload = build_public_league_results(db, club_id="club", league_name="Open",
+                                         week_num=4, player_id=1)
+
+    weekly = payload["weekly_results"]
+    assert len(weekly) == 52
+    assert {row["player_id"] for row in weekly} == set(range(1, 53))
+    assert sum(row["games"] for row in weekly) == 400
+    assert {row["player_id"]: row["games"] for row in weekly if row["player_id"] >= 49} == {
+        49: 4, 50: 4, 51: 4, 52: 4,
+    }
+    assert payload["weekly_stat_rankings"]["record_games"]["total_qualified"] == 52
+    assert len(payload["players"]) == 52
+    assert payload["selected_player_id"] == 1
+    assert payload["player_summary"]["games"] == 8
+    assert payload["player_summary"]["rank"] is None
+    assert len(payload["player_weekly"]) == 1
+    # Correcting event history must not silently change current eligibility or awards.
+    assert {row["player_id"] for row in payload["standings"]} == set(range(19, 53))
+    assert {row["player_id"] for row in award_inputs["league_rows"]} == set(range(19, 53))
+    assert {row["id"] for row in award_inputs["player_rows"]} == set(range(19, 53))
+    assert db._tables["players"][0]["active"] is False
+    assert db.table_calls.count("players") == 2  # one complete paged read, no second eligibility fetch
+
+
+@pytest.mark.parametrize("inactive_source", ["profile", "league", "both"])
+def test_later_inactivity_does_not_rewrite_a_played_week(inactive_source):
+    db = fake_supabase()
+    before = build_public_league_results(db, club_id="club", league_name="Open",
+                                        week_num=1, weekly_min_games=1)
+    if inactive_source in {"profile", "both"}:
+        db._tables["players"][0].update(active=False, inactive_at="2026-11-08")
+    if inactive_source in {"league", "both"}:
+        db._tables["league_ratings"][0].update(is_active=False, inactive_at="2026-11-08")
+
+    after = build_public_league_results(db, club_id="club", league_name="Open",
+                                       week_num=1, player_id=1, weekly_min_games=1)
+
+    assert after["weekly_results"] == before["weekly_results"]
+    assert after["weekly_highlights"] == before["weekly_highlights"]
+    assert after["weekly_stat_rankings"] == before["weekly_stat_rankings"]
+    assert after["selected_player_id"] == 1
+    assert after["player_weekly"]
+    assert 1 not in {row["player_id"] for row in after["standings"]}
+
+
+def test_weekly_history_keeps_identity_and_tenant_boundaries():
+    db = fake_supabase()
+    db._tables["players"][3].update(name="Former identity (merged into 1)", active=False)
+    db._tables["players"].append({"id": 99, "club_id": "other", "name": "Other club", "active": False})
+    template = db._tables["matches"][0]
+    db._tables["matches"].append(dict(template, id=99, club_id="other", t1_p1=99))
+
+    payload = build_public_league_results(db, club_id="club", league_name="Open")
+
+    assert {row["player_id"] for row in payload["weekly_results"]} == {1, 2, 3}
+    assert {row["player_id"] for row in payload["players"]} == {1, 2, 3}
+    assert "Other club" not in str(payload)
+    assert "Former identity" not in str(payload)

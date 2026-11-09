@@ -84,6 +84,8 @@ kill_timeout = 300
     path = "/health"
 
 [[vm]]
-  memory = "1gb"
-  cpu_kind = "shared"
+  # Sustained CPU and memory headroom for the observed Nov 8 workload.
+  # Keep this in source so later deploys preserve the reviewed capacity.
+  memory = "2gb"
+  cpu_kind = "performance"
   cpus = 1

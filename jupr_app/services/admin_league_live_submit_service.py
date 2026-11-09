@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -13,6 +14,8 @@ from jupr_app.domain.league_live_publish import (
     rows_to_safe_csv,
     stable_payload_fingerprint,
 )
+from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+from jupr_app.domain.matches.side_effects import ensure_notification_badge_job
 from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.services.admin_league_live_service import (
     LeagueLiveConflictError,
@@ -280,6 +283,44 @@ def list_admin_league_live_publish_operations(
         (_operation_public_payload(row) for row in rows),
         key=lambda row: int(row.get("round_number") or 0),
     )
+
+
+def process_published_round_badges(supabase: Any, club_id: str, result: dict[str, Any]) -> None:
+    """Advance the durable award job after the official scores have been returned."""
+    match_ids = _as_list(result.get("published_match_ids"))
+    saved_round = _as_dict(result.get("round"))
+    matches = _as_list(saved_round.get("matches_json"))
+    if not match_ids or len(matches) != len(match_ids):
+        return
+    try:
+        job = _first_row(
+            supabase.table("badge_eval_queue").select("status")
+            .eq("club_id", club_id).eq("event_type", "match_recorded")
+            .eq("match_id", str(match_ids[0])).limit(1).execute()
+        )
+        if job is None:
+            # A previous request may have stopped just after the atomic match write.
+            # Eligibility comes from the committed games, including their rating scope.
+            games = _safe_rows(
+                supabase.table("matches").select("id,context_id,match_format,rating_scope,t1_p1,t1_p2,t2_p1,t2_p2")
+                .eq("club_id", club_id).eq("context_type", "league_live_session")
+                .is_("deleted_at", None).in_("id", match_ids).execute()
+            )
+            expected = {str(mid): match.get("context_id") for mid, match in zip(match_ids, matches)}
+            actual = {str(game["id"]): game.get("context_id") for game in games}
+            if actual != expected or not all(expected.values()):
+                return
+            if not any(game.get("match_format", "doubles") != "singles" and game.get("rating_scope") != "unrated" for game in games):
+                return
+            ensure_notification_badge_job(
+                supabase=supabase, club_id=club_id, match_ids=match_ids,
+                player_ids=_player_ids(games), retry_failed=False,
+            )
+        elif job.get("status") != "pending":
+            return
+        process_badge_eval_queue(supabase, club_id, max_jobs=1, time_budget_seconds=2)
+    except Exception:
+        logging.getLogger(__name__).exception("Deferred League Live badge check failed for club %s", club_id)
 
 
 def _completed_response(

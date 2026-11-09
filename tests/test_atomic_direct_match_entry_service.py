@@ -157,7 +157,7 @@ def _receipt(*, idempotent: bool = False) -> dict:
     }
 
 
-def _submit(monkeypatch, supabase, processor=CALCULATED, *, queue_player_notifications=True):
+def _submit(monkeypatch, supabase, processor=CALCULATED, *, queue_player_notifications=True, defer_badge_evaluation=False):
     monkeypatch.setattr(
         "jupr_app.services.direct_match_entry_service.process_matches",
         processor
@@ -178,6 +178,7 @@ def _submit(monkeypatch, supabase, processor=CALCULATED, *, queue_player_notific
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
         queue_player_notifications=queue_player_notifications,
+        defer_badge_evaluation=defer_badge_evaluation,
     )
 
 
@@ -213,6 +214,23 @@ def test_session_approval_can_defer_email_until_all_batches_commit(monkeypatch):
     assert result["result"]["player_update_queue"]["mode"] == "deferred_to_session"
     assert result["notification_evidence"]["player_updates"] == PLAYER_UPDATES
     assert result["operation"]["match_ids"] == ["101"]
+
+
+def test_league_publish_queues_exact_badge_job_without_running_awards(monkeypatch):
+    from jupr_app.services import direct_match_entry_service as direct
+
+    jobs = []
+    def enqueue(**kwargs):
+        jobs.append(kwargs)
+        return "101"
+
+    monkeypatch.setattr(direct, "ensure_notification_badge_job", enqueue)
+    monkeypatch.setattr(direct, "run_badge_side_effects", lambda **kwargs: pytest.fail("Awards blocked score publishing"))
+    db = RpcSupabase(_receipt())
+    result = _submit(monkeypatch, db, queue_player_notifications=False, defer_badge_evaluation=True)
+    assert result["match_write_committed"]
+    assert result["result"]["badge_summary"]["notification_badge_refs"] == ["101"]
+    assert jobs == [dict(supabase=db, club_id="club", match_ids=["101"], player_ids=[1, 2, 3, 4], retry_failed=False)]
 
 
 def test_direct_email_carries_receipt_ids_and_blocks_unrecoverable_award_failure(monkeypatch):

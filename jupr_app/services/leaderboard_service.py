@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from jupr_app.data.paged_reads import read_all_rows
-from jupr_app.data.public_read_cache import public_read_cache, public_source_key
+from jupr_app.data.public_read_cache import PublicReadCache, public_read_cache, public_source_key
 from jupr_app.domain.player_search import matches_player_search
 from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.domain.player_activity import is_player_leaderboard_active
@@ -18,6 +18,8 @@ from jupr_app.domain.leaderboard_metrics import (
 )
 
 import re
+import hashlib
+import json
 from datetime import date, datetime, time, timedelta, timezone
 from math import isfinite
 from typing import Any
@@ -184,6 +186,97 @@ def _overall_matches(
         seen.add(match_id)
         result.append({**match, "date": when.isoformat(), "score_t1": s1, "score_t2": s2})
     return sorted(result, key=lambda item: (_match_time(item["date"]), _safe_int(item["id"], 0), str(item["id"])))
+
+
+# Histories are substantially larger than display projections. Keep these caches
+# separate and small; the durable revision, not the TTL, invalidates saved results.
+_overall_history_cache = PublicReadCache(ttl=30, capacity=2)
+_overall_calculation_cache = PublicReadCache(ttl=30, capacity=8)
+
+
+class _LeaderboardSourceChanged(RuntimeError):
+    pass
+
+
+def _leaderboard_source_revision(supabase: Any, club_id: str) -> int | None:
+    """Existing database triggers cover match/player inserts, edits and deletes.
+
+    Read on every request, including on other API machines. Older installations
+    without the source-revision table retain uncached behavior. Never serve a
+    cache entry when its invalidation token cannot be verified.
+    """
+    try:
+        rows = supabase.table("badge_program_state").select("revision").eq("club_id", club_id).execute().data or []
+        value = rows[0].get("revision") if rows else None
+        return int(value) if value is not None and not isinstance(value, bool) else None
+    except Exception:
+        return None
+
+
+def _fingerprint(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str, separators=(",", ":")).encode()).hexdigest()
+
+
+def _overall_statistics(
+    supabase: Any, *, club_id: str, period: dict[str, Any],
+    base_rows: list[dict[str, Any]], extended: bool, partnership_minimum: int,
+    now: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Share source reads/calculation across statistics, status and page variants.
+
+    Scope/publication/settings and player eligibility are still read by the
+    caller each time. A fingerprint of those fresh player inputs is part of the
+    calculation key; no access decision is reused from a prior request.
+    """
+    revision = _leaderboard_source_revision(supabase, club_id)
+    key = (public_source_key(supabase), club_id, revision, _fingerprint(period))
+    cacheable = revision is not None
+
+    def load_history():
+        # Include a short look-ahead, then enforce the exact request timestamp
+        # below. Already stored future games become eligible without a write or
+        # waiting for cache expiry. This horizon exceeds the 30-second TTL.
+        through = now + timedelta(seconds=60)
+        rows = _overall_matches(supabase, club_id=club_id, period=period, now=through)
+        if _leaderboard_source_revision(supabase, club_id) != revision:
+            raise _LeaderboardSourceChanged()
+        return {"matches": rows, "through": through}
+
+    try:
+        if cacheable:
+            history = _overall_history_cache.get(key, load_history,
+                                                cache_if=lambda value: len(value["matches"]) <= 10000)
+            if now > history["through"]:
+                # A very slow initial load may outlive its look-ahead horizon.
+                raise _LeaderboardSourceChanged()
+            matches = [row for row in history["matches"] if _match_time(row["date"]) <= now]
+            if _leaderboard_source_revision(supabase, club_id) != revision:
+                raise _LeaderboardSourceChanged()
+        else:
+            matches = _overall_matches(supabase, club_id=club_id, period=period, now=now)
+    except _LeaderboardSourceChanged:
+        # A write overlapped the read. Do not attach mixed history to a revision
+        # or retry in a loop; use the normal fresh path for this request.
+        cacheable = False
+        matches = _overall_matches(supabase, club_id=club_id, period=period, now=now)
+
+    # Normalized history is chronological. Revision + eligible prefix identifies
+    # its exact content, including future-game boundaries, edits and deletions.
+    prefix = (len(matches), str(matches[-1]["id"]) if matches else None)
+    _, end = _period_bounds(period)
+    row_key = (*key, "rows", prefix, end is None or now < end, _fingerprint(base_rows))
+    def period_rows():
+        return _period_rows(supabase, base_rows, club_id=club_id, period=period, matches=matches, now=now)
+    rows = (_overall_calculation_cache.get(row_key, period_rows) if cacheable else period_rows()) if period["id"] is not None else base_rows
+    metrics: dict[str, dict[str, Any]] = {}
+    if extended:
+        names = {str(row["player_id"]): row["player_name"] for row in rows}
+        def calculate_metrics():
+            return compute_overall_metrics(matches, names=names, timezone=period["timezone"],
+                                           partnership_minimum=partnership_minimum)
+        metric_key = (*key, "metrics", prefix, _fingerprint(names), partnership_minimum)
+        metrics = _overall_calculation_cache.get(metric_key, calculate_metrics) if cacheable else calculate_metrics()
+    return matches, rows, metrics
 
 
 def _period_rows(
@@ -696,13 +789,11 @@ def build_public_leaderboard(
         min_games = settings["min_games"]
         extended = stat in EXTENDED_CARD_KEYS if stat is not None else bool(EXTENDED_CARD_KEYS.intersection(settings["cards"]))
         as_of = datetime.now(timezone.utc)
-        matches = _overall_matches(supabase, club_id=cid, period=period, now=as_of) if cid and (period["id"] is not None or extended) else []
-        if period["id"] is not None:
-            base_rows = _period_rows(supabase, base_rows, club_id=cid, period=period, matches=matches, now=as_of)
-        if extended:
-            metrics = compute_overall_metrics(
-                matches, names={str(row["player_id"]): row["player_name"] for row in base_rows},
-                timezone=period["timezone"],
+        matches = []
+        if cid and (period["id"] is not None or extended):
+            matches, base_rows, metrics = _overall_statistics(
+                supabase, club_id=cid, period=period, base_rows=base_rows,
+                extended=extended, now=as_of,
                 partnership_minimum=(settings.get("card_options", {}).get("best_partnership") or {}).get("minimum", 0),
             )
     elif selected:
