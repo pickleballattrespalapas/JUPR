@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } f
 import {
   type PublicPartnerProfileResolutionResponse,
   PublicRegistrationPlayer,
+  type RegisteredTournamentPartner,
   resolveClubTournamentPartnerProfile
 } from "@/lib/tournamentRegistrationApi";
 import {
@@ -27,6 +28,7 @@ export type TournamentPartnerDetailsValue = {
   profileChoiceMade?: boolean;
   profileLookupPending?: boolean;
   profileChoiceRequired?: boolean;
+  registeredPartner?: RegisteredTournamentPartner | null;
 };
 
 export type TournamentPartnerProfileResolver = (identity: { name: string; email: string | null }) => Promise<{
@@ -62,6 +64,7 @@ export default function TournamentPartnerDetails({
   const choiceId = useId();
   const canSearch = value.name.trim().length >= 2;
   const skillReadOnly = Boolean(value.profileId && value.profileHasRating);
+  const registeredPartner = value.profileId ? value.registeredPartner : null;
   const requestId = useRef(0);
   const detailsVersion = useRef(0);
   const lookupTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -80,7 +83,7 @@ export default function TournamentPartnerDetails({
     onChange({
       ...(value.profileId && patch.name !== undefined ? { skill: "", duprId: "" } : {}),
       ...patch, profileId: patch.name !== undefined ? "" : value.profileId,
-      ...(patch.name !== undefined ? { profileHasRating: false, profileChoiceMade: false, profileLookupPending: patch.name.trim().length >= 2, profileChoiceRequired: false } : {})
+      ...(patch.name !== undefined ? { registeredPartner: null, profileHasRating: false, profileChoiceMade: false, profileLookupPending: patch.name.trim().length >= 2, profileChoiceRequired: false } : {})
     });
   }
 
@@ -113,6 +116,9 @@ export default function TournamentPartnerDetails({
       const candidate = automaticRegistrationProfile(rows, value.name, result.data.profile_match_kind);
       onChangeRef.current(candidate && version === detailsVersion.current ? {
         profileId: candidate.id, profileHasRating: candidate.doubles_skill != null, profileChoiceMade: true, profileChoiceRequired: false,
+        name: candidate.display_name,
+        registeredPartner: candidate.registered_partner || null,
+        ...(candidate.registered_partner ? { email: "", age: "", gender: "", phone: "" } : {}),
         skill: candidate.doubles_skill == null ? "" : String(candidate.doubles_skill),
         duprId: String(candidate.dupr_id || "")
       } : { profileChoiceMade: rows.length === 0, profileChoiceRequired: rows.length > 0 });
@@ -146,16 +152,19 @@ export default function TournamentPartnerDetails({
     setError(null);
     onChange(candidate ? {
       profileId: candidate.id, profileHasRating: candidate.doubles_skill != null, profileChoiceMade: true, profileLookupPending: false, profileChoiceRequired: false,
+      registeredPartner: candidate.registered_partner || null,
+      ...(candidate.registered_partner ? { email: "", age: "", gender: "", phone: "" } : {}),
       name: candidate.display_name,
       skill: candidate.doubles_skill == null ? "" : String(candidate.doubles_skill),
       duprId: String(candidate.dupr_id || "")
-    } : { profileId: "", profileHasRating: false, ...(value.profileId ? { skill: "", duprId: "" } : {}), profileChoiceMade: true, profileLookupPending: false, profileChoiceRequired: false });
+    } : { profileId: "", registeredPartner: null, profileHasRating: false, ...(value.profileId ? { skill: "", duprId: "" } : {}), profileChoiceMade: true, profileLookupPending: false, profileChoiceRequired: false });
   }
 
   return (
     <div style={{ display: "grid", gap: "0.75rem" }}>
       <p style={{ color: "#475569", margin: 0 }}>
         Start typing your partner’s first or last name, then choose their profile from the suggestions.
+        If they’ve already registered, we’ll use their saved details.
         If they don’t have a profile, enter their full name and details below.
         They don’t need to register separately.
       </p>
@@ -179,6 +188,7 @@ export default function TournamentPartnerDetails({
                     onChange={() => selectProfile(candidate)} />
                   <span><strong>{candidate.display_name}</strong><br />
                     {candidate.doubles_skill == null ? "Doubles rating not set" : `Doubles ${formatRegistrationRating(candidate.doubles_skill)}`}
+                    {candidate.registered_partner ? " · Already registered" : ""}
                   </span>
                 </label>
               ))}
@@ -191,11 +201,11 @@ export default function TournamentPartnerDetails({
           <p role="status" style={{ margin: 0, color: "#475569" }}>No matching profile found. Try their first or last name, or enter their full name and details below.</p>
         ) : null}
         </div>
-        <label>Partner email *<br />
+        {!registeredPartner?.has_email ? <label>Partner email *<br />
           <input required aria-label={`${labelPrefix} partner email`} type="email" placeholder="name@example.com"
             value={value.email} onChange={(event) => changeIdentity({ email: event.target.value })}
             onBlur={() => { if (!candidates && !pending) void findProfile(); }} style={inputStyle} />
-        </label>
+        </label> : null}
       </div>
       {!value.profileId ? (
         <button type="button" onClick={() => { void findProfile(true); }} disabled={pending || !canSearch} style={buttonStyle}>
@@ -203,22 +213,26 @@ export default function TournamentPartnerDetails({
         </button>
       ) : (
         <p role="status" style={{ margin: 0, color: "#166534" }}>
-          Profile selected: <strong>{value.name}</strong>. Check their details below.
+          Profile selected: <strong>{value.name}</strong>. {registeredPartner
+            ? "Already registered — we’ll use their saved details."
+            : "Check their details below."}
           {" "}<button type="button" onClick={() => selectProfile(null)} style={buttonStyle}>Change profile</button>
         </p>
       )}
       {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
       <div style={gridStyle}>
-        <label>Partner age{requireDemographics ? " *" : ""}<br /><input required={requireDemographics} aria-label={`${labelPrefix} partner age`} type="number" min={requireDemographics ? "1" : "5"} max="120" value={value.age} onChange={(event) => onChange({ age: event.target.value })} style={inputStyle} /></label>
-        <label>Partner gender{requireDemographics ? " *" : ""}<br /><select required={requireDemographics} aria-label={`${labelPrefix} partner gender`} value={value.gender} onChange={(event) => onChange({ gender: event.target.value })} style={inputStyle}><option value="">{requireDemographics ? "Select" : "Not specified"}</option>{registrationGenderOptions(value.gender).map((gender) => <option key={gender} value={gender}>{gender}</option>)}</select></label>
+        {!registeredPartner?.has_age ? <label>Partner age{requireDemographics ? " *" : ""}<br /><input required={requireDemographics} aria-label={`${labelPrefix} partner age`} type="number" min={requireDemographics ? "1" : "5"} max="120" value={value.age} onChange={(event) => onChange({ age: event.target.value })} style={inputStyle} /></label> : null}
+        {!registeredPartner?.has_gender ? <label>Partner gender{requireDemographics ? " *" : ""}<br /><select required={requireDemographics} aria-label={`${labelPrefix} partner gender`} value={value.gender} onChange={(event) => onChange({ gender: event.target.value })} style={inputStyle}><option value="">{requireDemographics ? "Select" : "Not specified"}</option>{registrationGenderOptions(value.gender).map((gender) => <option key={gender} value={gender}>{gender}</option>)}</select></label> : null}
         {/* Club ratings retain their full precision; a hundredth-step rejects valid profile autofill. */}
-        <label>Partner starting skill *<br /><input required aria-label={`${labelPrefix} partner skill`} type="number" min="1" max="7" step="any" inputMode="decimal" value={value.skill} readOnly={skillReadOnly} onChange={(event) => { if (skillReadOnly) return; detailsVersion.current += 1; onChange({ skill: event.target.value }); }} style={{ ...inputStyle, ...(skillReadOnly ? { background: "#f1f5f9" } : {}) }} /></label>
+        {registeredPartner && skillReadOnly
+          ? <p style={{ margin: 0 }}>Doubles rating: <strong>{formatRegistrationRating(Number(value.skill))}</strong></p>
+          : <label>Partner starting skill *<br /><input required aria-label={`${labelPrefix} partner skill`} type="number" min="1" max="7" step="any" inputMode="decimal" value={value.skill} readOnly={skillReadOnly} onChange={(event) => { if (skillReadOnly) return; detailsVersion.current += 1; onChange({ skill: event.target.value }); }} style={{ ...inputStyle, ...(skillReadOnly ? { background: "#f1f5f9" } : {}) }} /></label>}
       </div>
-      {skillReadOnly ? <p style={{ margin: 0, color: "#475569" }}>Your partner’s club profile rating can’t be changed here.</p> : null}
-      <div style={gridStyle}>
+      {skillReadOnly && !registeredPartner ? <p style={{ margin: 0, color: "#475569" }}>Your partner’s club profile rating can’t be changed here.</p> : null}
+      {!registeredPartner ? <div style={gridStyle}>
         <label>Partner phone<br /><input aria-label={`${labelPrefix} partner phone`} type="tel" value={value.phone} onChange={(event) => onChange({ phone: event.target.value })} style={inputStyle} /></label>
         {!value.profileId ? <label>Partner DUPR ID<br /><input aria-label={`${labelPrefix} partner DUPR ID`} value={value.duprId} onChange={(event) => { detailsVersion.current += 1; onChange({ duprId: event.target.value }); }} style={inputStyle} /></label> : null}
-      </div>
+      </div> : null}
     </div>
   );
 }
