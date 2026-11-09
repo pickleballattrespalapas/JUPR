@@ -1,4 +1,5 @@
 from __future__ import annotations
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 
 import json
 
@@ -16,6 +17,10 @@ BADGE_AUDIT_REPORT_STATE_KEY = "badge_audit_report"
 
 
 def render(ctx):
+    if not badges_enabled():
+        st.info("This page is no longer available.")
+        return
+
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("🧾 Badge Audit", "Audit and repair badge awards against the current engine.", mode_label=mode_label)
 

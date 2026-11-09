@@ -268,16 +268,15 @@ global.fetch = async (url, options = {}) => {
   assert.equal(requests.at(-1).options.status, "active");
   assert.match(markup, /data-testid="leaderboard-status-active"/);
 
-  assert.doesNotMatch(markup, /Badges are temporarily unavailable/);
-  data.badges_available = false;
-  markup = await render();
-  assert.match(markup, /role="status"[^>]*>Badges are temporarily unavailable\. Rankings are still shown\./);
-  assert.match(markup, /data-testid="leaderboard-table"|<table/);
-  assert.match(markup, />Stu</, "Badge lookup failure preserves ranked players");
-  assert.doesNotMatch(markup, /Leaderboards are unavailable right now/);
-  assert.doesNotMatch(await render({}, { badges: false }), /Badges are temporarily unavailable/, "Hidden badge sections do not show optional badge notices");
-  data.badges_available = true;
-  assert.doesNotMatch(await render(), /Badges are temporarily unavailable/, "Successful badge reads clear the notice");
+  for (const available of [true, false]) {
+    data.badges_available = available;
+    data.leaderboard[0].badges = [{ badge_id: "retired", name: "Old participation badge" }];
+    markup = await render({}, { badges: true });
+    assert.doesNotMatch(markup, /Badges|Old participation badge|leaderboard-badges|badge-codex/, "Retired badges stay hidden even with legacy payloads and display flags");
+    assert.match(markup, /data-testid="leaderboard-table"|<table/);
+    assert.match(markup, />Stu</, "Retiring badges preserves ranked players");
+    assert.doesNotMatch(markup, /Leaderboards are unavailable right now/);
+  }
 
   process.env.JUPR_API_BASE_URL = "https://api.test";
   let requestedUrl;

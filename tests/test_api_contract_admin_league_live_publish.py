@@ -149,7 +149,7 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     assert first.status_code == 200, first.text
     payload = first.json()
     assert payload["publish_operation"]["status"] == "completed"
-    assert events == ["sent", "badges"]
+    assert events == ["sent"]
     assert payload["rating_review"]["status"] == "verified_readback"
     assert len(payload["published_match_ids"]) == 1
     assert payload["player_update_queue"]["queued"] == 1
@@ -182,7 +182,7 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
         json=request,
     )
     assert replay.status_code == 200, replay.text
-    assert events == ["sent", "badges", "sent", "badges"]
+    assert events == ["sent", "sent"]
     assert replay.json()["idempotent_replay"] is True
     assert replay.json()["player_update_queue"]["already_queued"] == 1
     assert len(tables["player_profile_update_outbox"]) == 1
@@ -1104,7 +1104,7 @@ def test_guest_completion_audit_failure_reports_existing_player_uncertainty_and_
     assert {row["entity_id"] for row in guest_audits} == {tables["league_live_guest_players"][0]["id"]}
 
 
-def test_deferred_league_badges_recover_the_exact_job_and_preserve_claims(monkeypatch):
+def test_deferred_league_badges_recover_the_exact_job_and_preserve_claims(monkeypatch, legacy_badges_enabled):
     from jupr_app.services import admin_league_live_submit_service as live
     from tests.test_badge_worker import FakeSupabase as BadgeDB
 

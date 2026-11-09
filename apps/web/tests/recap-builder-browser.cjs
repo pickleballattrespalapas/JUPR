@@ -181,12 +181,8 @@ async function confirm(page, label, text) {
       })
       .uncheck();
     assert.equal(await evidence.getByTestId("recap-evidence-numbers").count(), 0);
-    const achievements = evidence.getByLabel("Include New achievements", { exact: true });
-    await achievements.uncheck();
+    assert.equal(await evidence.getByLabel("Include New achievements", { exact: true }).count(), 0);
     assert.equal(await evidence.getByTestId("recap-evidence-achievements").count(), 0);
-    await achievements.check();
-    await evidence.getByTestId("recap-evidence-achievements").waitFor();
-    await achievements.uncheck();
     const events = evidence;
     await events
       .getByTestId("recap-evidence-rr")

@@ -262,6 +262,8 @@ def test_scheduler_records_heartbeat_without_exposing_cursor(monkeypatch):
 
 
 def test_automatic_worker_advances_awards_then_waits_for_next_poll(delivery, monkeypatch):
+    from jupr_app.domain.gamification import badge_policy
+    monkeypatch.setattr(badge_policy, "BADGES_ENABLED", True)
     db, _, _ = delivery
     calls = []
     monkeypatch.setattr(worker, "send_pending_player_update_emails", lambda *_a, **_kw: {"waiting_for_awards": 2})
@@ -359,3 +361,11 @@ def test_shutdown_during_award_read_does_not_claim_next_email(delivery, monkeypa
     result = scheduler.deliver_pending_updates(should_stop=stop.is_set)
     assert result["attempted"] == 0 and not sent
     assert row["send_status"] == "pending" and not row.get("attempt_count")
+
+
+def test_retired_badges_never_start_work_from_email_scheduler(delivery, monkeypatch):
+    monkeypatch.setattr(worker, "send_pending_player_update_emails", lambda *_a, **_kw: {"waiting_for_awards": 2})
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.process_badge_eval_queue",
+        lambda *_a, **_kw: pytest.fail("Retired badge worker must not run"))
+    result = worker.run_player_update_email_worker("club", outbox_items=[], advance_waiting_awards=True)
+    assert result["badge_jobs_processed"] == result["badge_job_errors"] == 0

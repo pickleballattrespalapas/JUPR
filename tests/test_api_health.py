@@ -119,6 +119,31 @@ def test_staging_health_does_not_project_non_origin_web_url(monkeypatch):
     assert sensitive_marker not in str(payload)
 
 
+def test_badge_retirement_health_ignores_stale_worker_flags(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_BADGE_WORKER_MODE", "external")
+    monkeypatch.setenv("JUPR_BADGE_WORKER_CLUB_ID", "tres_palapas")
+    monkeypatch.setenv("JUPR_BADGE_QUEUE_LEASES", "1")
+    payload = TestClient(app).get("/health").json()
+    assert payload["badges_enabled"] is False
+    assert payload["badge_worker_mode"] == "disabled"
+    assert payload["badge_worker_club_id"] == ""
+    assert payload["badge_queue_leases_enabled"] is False
+
+
+def test_cached_leaderboard_projection_cannot_expose_retired_badges():
+    from services.api.main import _normalize_public_leaderboard_projection
+    payload = _normalize_public_leaderboard_projection({
+        "badges_available": True,
+        "leaderboard": [{"player_id": 1, "player_name": "Player", "rating": 4.0,
+                         "badge_count": 8, "badges": [{"badge_id": "participation", "name": "Old badge"}]}],
+    })
+    assert payload["badges_available"] is False
+    assert payload["leaderboard"][0]["badges"] == []
+    assert payload["leaderboard"][0]["badge_count"] == 0
+    assert payload["leaderboard"][0]["rating"] == 4.0
+
+
 def test_production_health_attests_exact_read_only_deployment_identity(monkeypatch):
     sha = "b" * 40
     project_ref = "abcdefghijklmnopqrst"

@@ -17,11 +17,11 @@ def test_rating_rules_and_faq_are_cross_linked_and_regression_guarded():
         "What counts as rated",
         "What stays unrated",
         "Correcting a result",
-        "How badges are awarded",
         "Why JUPR can differ",
         'href="/faq"',
     ):
         assert expected in rules
+    assert "How badges are awarded" not in rules
     assert 'href="/how-ratings-work"' in faq
     assert "Can my rating go up after a loss?" in faq
     assert "Can my rating go down after a win?" in faq

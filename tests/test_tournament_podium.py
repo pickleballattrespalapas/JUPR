@@ -32,6 +32,7 @@ class FakeTable:
         self.name = name
         self.filters = []
         self.ordering = None
+        self.page_bounds = None
 
     def select(self, _cols):
         return self
@@ -52,7 +53,11 @@ class FakeTable:
         self.ordering = (column, desc)
         return self
 
-    def upsert(self, rows, on_conflict=None):
+    def range(self, start, end):
+        self.page_bounds = (int(start), int(end))
+        return self
+
+    def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
         existing = self.storage.setdefault(self.name, [])
         keys = [c.strip() for c in str(on_conflict or "").split(",") if c.strip()]
         existing_keys = {tuple(row.get(k) for k in keys) for row in existing} if keys else set()
@@ -60,7 +65,9 @@ class FakeTable:
             key = tuple(row.get(k) for k in keys) if keys else None
             if key is not None and key in existing_keys:
                 continue
-            existing.append(dict(row))
+            stored = dict(row)
+            stored.setdefault("id", len(existing) + 1)
+            existing.append(stored)
             if key is not None:
                 existing_keys.add(key)
         return self
@@ -78,6 +85,9 @@ class FakeTable:
         if self.ordering:
             column, desc = self.ordering
             data = sorted(data, key=lambda row: row.get(column), reverse=bool(desc))
+        if self.page_bounds is not None:
+            start, end = self.page_bounds
+            data = data[start:end + 1]
         return SimpleNamespace(data=data)
 
 class FakeSupabase:
@@ -110,7 +120,7 @@ def test_award_tournament_trophies_from_podium_is_idempotent_and_profile_compati
                 "schemaname": "public",
                 "tablename": "player_badges",
                 "indexname": "player_badges_unique",
-                "indexdef": "CREATE UNIQUE INDEX player_badges_unique ON public.player_badges USING btree (club_id, player_id, badge_id, context_id)",
+                "indexdef": "CREATE UNIQUE INDEX player_badges_unique ON public.player_badges USING btree (club_id, player_id, badge_id, context_type, context_id)",
             }
         ],
         "tournament_podium": [
@@ -145,7 +155,7 @@ def test_mint_tournament_podium_badges_is_idempotent_and_profile_compatible():
                 "schemaname": "public",
                 "tablename": "player_badges",
                 "indexname": "player_badges_unique",
-                "indexdef": "CREATE UNIQUE INDEX player_badges_unique ON public.player_badges USING btree (club_id, player_id, badge_id, context_id)",
+                "indexdef": "CREATE UNIQUE INDEX player_badges_unique ON public.player_badges USING btree (club_id, player_id, badge_id, context_type, context_id)",
             }
         ],
         "tournament_podium": [

@@ -194,7 +194,7 @@ def test_public_players_are_sanitized_and_searchable():
     assert "club_id" not in rows[0]
 
 
-def test_player_cabinet_keeps_distinct_ids_for_repeated_partner_achievements():
+def test_player_cabinet_keeps_distinct_ids_for_repeated_partner_achievements(legacy_badges_enabled):
     supabase = FakeSupabase()
     supabase.rows_by_table["badges"].append({
         "badge_id": "matches_together_10", "name": "10 Matches Together", "is_active": True,
@@ -217,7 +217,7 @@ def test_player_cabinet_keeps_distinct_ids_for_repeated_partner_achievements():
     ]
 
 
-def test_trophy_case_uses_league_award_rank_and_keeps_progression_in_cabinet():
+def test_trophy_case_uses_league_award_rank_and_hides_retired_progression():
     supabase = FakeSupabase()
     base = {"club_id": "club-1", "player_id": 1, "earned_at": "2026-07-05T00:00:00Z", "context_type": "league"}
     awards = [
@@ -242,8 +242,8 @@ def test_trophy_case_uses_league_award_rank_and_keeps_progression_in_cabinet():
         "top_performer_most_improved": 2, "top_performer_best_win_pct": 3,
     }
     assert next(row for row in result["trophies"] if row["badge_id"] == "top_performer_most_wins")["context_label"] == "Summer"
-    assert {row["badge_id"]: row["count"] for row in result["badges"]} == {"first_win": 1, "mountain_climber": 3}
-    assert result["badge_award_count"] == 4
+    assert result["badges"] == []
+    assert result["badge_award_count"] == 0
     assert len(supabase.rows_by_table["player_badges"]) == 8  # Display filtering preserves the earned records.
 
 
@@ -277,7 +277,7 @@ def test_public_trophy_case_requires_a_top_three_award(badge_id, context_type, e
     awards = get_public_player_profile(supabase, club_id="club-1", player_id=1)["awards"]
     assert [row["placement"] for row in awards["trophies"]] == ([] if expected is None else [expected])
     assert awards["trophy_count"] == len(awards["trophies"])
-    assert awards["badge_award_count"] == int(expected is None and not evidence.get("revoked_at"))
+    assert awards["badge_award_count"] == 0
 
 
 def test_public_directory_includes_inactive_profiles_even_for_legacy_status_filters():
@@ -394,10 +394,10 @@ def test_public_profile_closes_rating_award_relationship_social_and_privacy_pari
     assert profile["rating_summary"]["starting_rating_jupr"] == 3.8
     assert profile["rating_summary"]["highest_rating_jupr"] == 4.0
     assert profile["rating_summary"]["lowest_rating_jupr"] == 3.8
-    assert profile["awards"]["badge_count"] == 1
-    assert profile["awards"]["badge_award_count"] == 1
+    assert profile["awards"]["badge_count"] == 0
+    assert profile["awards"]["badge_award_count"] == 0
     assert profile["awards"]["trophy_count"] == 1
-    assert [row["name"] for row in profile["awards"]["badges"]] == ["First Win"]
+    assert profile["awards"]["badges"] == []
     assert profile["awards"]["trophies"][0]["context_label"] == "Summer Cup"
     assert profile["relationships"]["best_partner"]["player_name"] == "Blair"
     assert profile["relationships"]["rival"]["player_name"] in {"Casey", "Devon"}

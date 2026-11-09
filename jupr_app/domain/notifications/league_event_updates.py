@@ -5,6 +5,7 @@ from datetime import date
 from typing import Any
 
 from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.gamification.badge_policy import badges_enabled
 from jupr_app.domain.matches.side_effects import ensure_notification_badge_job
 from jupr_app.domain.notifications.player_profile_update_repo import (
     normalize_session_match_ids,
@@ -113,6 +114,9 @@ def resolve_league_event_update(supabase: Any, *, club_id: str, session_id: str)
     actual = {str(row["id"]): str(row.get("context_id")) for row in games if not row.get("deleted_at")}
     if actual != expected or len(games) != len(expected):
         raise ValueError("The league event's complete published games could not be verified.")
+    if not badges_enabled():
+        scope["badge_refs"] = []
+        return scope
     by_id = {str(row["id"]): row for row in games}
     refs = []
     for operation in operations:

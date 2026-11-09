@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import logging
 import re
 from datetime import datetime, timezone
@@ -288,6 +290,8 @@ def list_admin_league_live_publish_operations(
 
 def process_published_round_badges(supabase: Any, club_id: str, result: dict[str, Any]) -> None:
     """Advance the durable award job after the official scores have been returned."""
+    if not badges_enabled():
+        return
     match_ids = _as_list(result.get("published_match_ids"))
     saved_round = _as_dict(result.get("round"))
     matches = _as_list(saved_round.get("matches_json"))

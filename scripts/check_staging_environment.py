@@ -558,6 +558,12 @@ def _check_api(
             }
             gate_name = status_gate_names.get(path)
             expected_enabled = expected_surface_flag(gate_name) if gate_name else True
+            if path == f"/admin/clubs/{club_id}/badges/status":
+                # Badge retirement supersedes historical write-wave flags.
+                expected_enabled = False
+                if expect_full_next_admin and payload.get("status") != "retired":
+                    results[path]["status"] = "error"
+                    summary["errors"].append("Badge status must attest retired processing.")
             if expect_full_next_admin and enabled is not expected_enabled:
                 results[path]["status"] = "error"
                 summary["errors"].append(

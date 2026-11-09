@@ -7,6 +7,8 @@ from hashlib import sha256
 import json
 import re
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from .weekly_report_public import safe_url, report_href, text
 
 SECTIONS = {
@@ -133,8 +135,9 @@ def catalog(recap):
             add("spotlight", s.get("key") or s.get("label"), title=s.get("label"), text=s.get("description"), lines=s.get("players"), kind=s.get("key"))
     for race in report.get("season_races") or []:
         add("races", (race.get("title"), race.get("href")), title=race.get("title"), lines=race.get("lines"), href=race.get("href"))
-    for line in report.get("achievements") or []:
-        add("achievements", line, text=line)
+    if badges_enabled():
+        for line in report.get("achievements") or []:
+            add("achievements", line, text=line)
     for name in report.get("new_faces") or []:
         add("welcome", name, text=name)
     add("notes", "notes", text=report.get("event_notes", ""))
@@ -172,6 +175,8 @@ def normalize_config(raw, *, template=False):
     raw = raw if isinstance(raw, dict) else {}
     raw_order = raw.get("order") if isinstance(raw.get("order"), list) else []
     order = list(dict.fromkeys([key for key in raw_order if isinstance(key, str) and key in SECTIONS] + list(SECTIONS)))
+    if not badges_enabled():
+        order = [key for key in order if key != "achievements"]
     configs = raw.get("sections") if isinstance(raw.get("sections"), dict) else {}
     sections = {}
     for key in SECTIONS:
@@ -181,6 +186,8 @@ def normalize_config(raw, *, template=False):
         for selection in ("item_ids", "email_item_ids"):
             if (not template or key in {"numbers", "spotlight"}) and isinstance(src.get(selection), list):
                 section[selection] = list(dict.fromkeys(text(v, 120) for v in src[selection][:150]))
+        if key == "achievements" and not badges_enabled():
+            section.update(enabled=False, email_enabled=False)
         sections[key] = section
     custom = raw.get("custom_blocks") if isinstance(raw.get("custom_blocks"), list) else []
     blocks = [] if template else [clean_item(item) for item in custom[:12] if isinstance(item, dict)]
@@ -189,6 +196,8 @@ def normalize_config(raw, *, template=False):
               "step": 0 if template else max(0, min(5, int(raw.get("step", 0) or 0)))}
     if isinstance(raw.get("email_order"), list):
         result["email_order"] = list(dict.fromkeys([key for key in raw["email_order"] if isinstance(key, str) and key in SECTIONS] + order))
+    if not badges_enabled() and "email_order" in result:
+        result["email_order"] = [key for key in result["email_order"] if key != "achievements"]
     if not template:
         if isinstance(raw.get("text_overrides"), dict):
             result["text_overrides"] = {key: clean_text_override(patch) for key, patch in list(raw["text_overrides"].items())[:1500] if isinstance(key, str) and len(key) <= 5000 and isinstance(patch, dict)}
@@ -277,7 +286,8 @@ def public_edition_report(raw):
     for channel in ("edition", "email_edition"):
         result[channel] = [{"key": block["key"], "title": text(block.get("title"), 100),
                             "items": [clean_item(item) for item in block.get("items", [])[:150]]}
-                           for block in raw.get(channel, [])[:len(SECTIONS)] if isinstance(block, dict) and block.get("key") in SECTIONS]
+                           for block in raw.get(channel, [])[:len(SECTIONS)] if isinstance(block, dict) and block.get("key") in SECTIONS
+                           and (badges_enabled() or block.get("key") != "achievements")]
     return result
 
 
@@ -288,6 +298,8 @@ def edition_lines(report):
     if scope:
         lines.append(scope)
     for block in report.get("edition", []):
+        if block.get("key") == "achievements" and not badges_enabled():
+            continue
         lines.extend(["", block["title"]])
         for item in block["items"]:
             if item["title"]:

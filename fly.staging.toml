@@ -8,7 +8,6 @@ kill_timeout = 300
 
 [processes]
   app = "uvicorn services.api.main:app --host 0.0.0.0 --port 8080 --proxy-headers --log-config services/api/logging.json"
-  badge_worker = "env JUPR_BADGE_QUEUE_LEASES=1 python -m jupr_app.workers.isolated_badge_worker --club-id tres_palapas"
 
 [build]
   dockerfile = "Dockerfile.api"
@@ -16,8 +15,8 @@ kill_timeout = 300
 [env]
   PORT = "8080"
   JUPR_ENV = "staging"
-  JUPR_BADGE_WORKER_MODE = "external"
-  JUPR_BADGE_WORKER_CLUB_ID = "tres_palapas"
+  JUPR_BADGE_WORKER_MODE = "disabled"
+  JUPR_BADGE_WORKER_CLUB_ID = ""
   JUPR_BADGE_QUEUE_LEASES = "0"
   JUPR_EMAIL_MODE = "dry_run"
   JUPR_STAGING_WRITE_WAVE = "none"
@@ -96,11 +95,5 @@ kill_timeout = 300
 [[vm]]
   processes = ["app"]
   memory = "1gb"
-  cpu_kind = "shared"
-  cpus = 1
-
-[[vm]]
-  processes = ["badge_worker"]
-  memory = "2gb"
   cpu_kind = "shared"
   cpus = 1

@@ -178,6 +178,7 @@ export function buildWeeklyReportEmail(
       ? report.email_edition || report.edition
       : report.edition;
     for (const block of blocks) {
+      if (block.key === "achievements") continue;
       const content = block.key === "numbers"
         ? `<table role="presentation" data-number-cards width="100%" cellspacing="0" cellpadding="0">${Array.from({ length: Math.ceil(block.items.length / 3) }, (_, row) => `<tr>${block.items.slice(row * 3, row * 3 + 3).map(item => `<td width="33%" valign="top" style="padding:0 12px 12px 0;">${story(item, options, block.key)}</td>`).join("")}</tr>`).join("")}</table>`
         : block.items.map((item) => story(item, options, block.key)).join("");
@@ -258,12 +259,6 @@ export function buildWeeklyReportEmail(
             `<h3 style="${h}">${esc(r.title)}</h3>${list(compact ? r.lines.slice(0, 2) : r.lines)}`,
         )
         .join(""),
-    );
-  if (report.achievements?.length)
-    rows += section(
-      "NEW ACHIEVEMENTS",
-      list(report.achievements.slice(0, compact ? 3 : 100)),
-      true,
     );
   if (report.new_faces?.length)
     rows += section("WELCOME TO THE COURTS", p(report.new_faces.join(", ")));

@@ -300,7 +300,9 @@ def test_leaderboard_badge_map_reads_nested_name_and_fallback_prestige():
     assert all(badge.name != "Badge" for badge in badge_map[403])
 
 
-def test_player_profile_summary_unlocked_badges_from_selected_player_rows():
+def test_player_profile_summary_unlocked_badges_from_selected_player_rows(monkeypatch):
+    # Archived badge display behavior remains testable without enabling it in PCS.
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_policy.BADGES_ENABLED", True)
     class _PlayerCtx:
         df_player_badges = pd.DataFrame(
             [

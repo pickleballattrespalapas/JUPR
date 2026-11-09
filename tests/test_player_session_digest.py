@@ -12,6 +12,13 @@ from jupr_app.domain.player_rating_series import build_player_overall_rating_ser
 from jupr_app.domain.notifications.player_update_email_template import build_player_update_email_html, build_player_update_email_text
 
 
+@pytest.fixture
+def historical_badges(monkeypatch):
+    """Exercise retained legacy badge contracts with an explicit test-only opt-in."""
+    from jupr_app.domain.gamification import badge_policy
+    monkeypatch.setattr(badge_policy, "BADGES_ENABLED", True)
+
+
 class Query:
     def __init__(self, db, name):
         self.db, self.name, self.filters, self.ordering = db, name, [], []
@@ -97,7 +104,7 @@ def test_reported_session_excludes_backfilled_badges_and_other_same_day_rr_in_ac
     assert db.rows == before, 'Email filtering never mutates historic profile awards or matches'
 
 
-def test_current_shutout_and_streak_trigger_count_even_if_awarded_days_after_play():
+def test_current_shutout_and_streak_trigger_count_even_if_awarded_days_after_play(historical_badges):
     db = DB([game(10,score=(11,0)), game(11), game(12)], [
         badge('pickle_perfection', mid=10, earned='2026-10-20T12:00:00Z'),
         badge('hot_streak', mid=11, context='league', value={'tier':3}),
@@ -161,7 +168,7 @@ def test_other_players_games_are_verified_but_not_added_to_personal_session_reco
     assert result['meta']['match_ids']==['1']
 
 
-def test_receipt_proves_lifetime_milestone_but_not_old_backfilled_threshold():
+def test_receipt_proves_lifetime_milestone_but_not_old_backfilled_threshold(historical_badges):
     db=DB([game(1)], [badge('dedicated_participant_50',context='overall',context_id='overall',value={'games':56}),
          badge('high_roller',context='overall',context_id='lifetime_wins_100',value={'wins':123})])
     proof={'player_updates':[{'player_id':1,'rating_mode':'doubles',
@@ -171,7 +178,7 @@ def test_receipt_proves_lifetime_milestone_but_not_old_backfilled_threshold():
     assert compute(db,[1])['badges_earned']==[]
 
 
-def test_draft_master_is_attributed_only_to_fifth_partner_win_not_other_same_day_rr():
+def test_draft_master_is_attributed_only_to_fifth_partner_win_not_other_same_day_rr(historical_badges):
     games=[game(i,partner=10+i) for i in range(6,11)]
     award=badge('draft_master',context='week',context_id='2026-W41',value={'week':'2026-W41','partners':5})
     db=DB(games,[award])
@@ -179,7 +186,7 @@ def test_draft_master_is_attributed_only_to_fifth_partner_win_not_other_same_day
     assert [row['badge_id'] for row in compute(db,[10])['badges_earned']]==['draft_master']
 
 
-def test_weekly_admin_digest_retains_date_range_badge_selection():
+def test_weekly_admin_digest_retains_date_range_badge_selection(historical_badges):
     db=DB([game(1)], [badge('pickle_perfection',mid=2023),badge('pickle_perfection',mid=2423)])
     result=digest.compute_player_weekly_digest(context(db),1,date(2026,10,11),date(2026,10,11))
     assert len(result['badges_earned'])==2
@@ -187,7 +194,7 @@ def test_weekly_admin_digest_retains_date_range_badge_selection():
     assert result['meta'].get('scope') is None
 
 
-def test_legacy_alias_history_cannot_make_an_old_partner_milestone_look_new():
+def test_legacy_alias_history_cannot_make_an_old_partner_milestone_look_new(historical_badges):
     legacy=[]
     for mid in (1,2):
         row=game(mid,partner=10+mid)
@@ -207,7 +214,7 @@ def test_malformed_selected_game_cannot_disappear_from_the_session(patch):
         compute(db,[1,2])
 
 
-def test_receipt_evidence_keeps_new_wins_and_rating_milestones():
+def test_receipt_evidence_keeps_new_wins_and_rating_milestones(historical_badges):
     db=DB([game(1)], [badge('high_roller',context='overall',context_id='lifetime_wins_100',value={'wins':100}),
         badge('level_up',context='league',context_id='milestone:4.0',value={'league':'Monday','milestone':4.0}),
         badge('level_up',context='league',context_id='milestone:3.5',value={'league':'Monday','milestone':3.5})])
@@ -225,3 +232,35 @@ def test_session_does_not_reconstruct_missing_overall_snapshots_from_singles():
     assert result['summary']['overall_jupr_before'] is None
     assert result['summary']['overall_jupr_after'] is None
     assert all(point['overall_after'] is None for point in result['chart']['points'])
+
+
+def test_retired_badges_skip_award_reads_and_evaluators_but_keep_trophies(monkeypatch):
+    db = DB([game(1)])
+    read = db.table
+    def table(name):
+        assert name not in {"player_badges", "badges"}, "Retired badge reads are forbidden"
+        return read(name)
+    db.table = table
+    trophy = {"tournament_name": "Baja Classic", "earned_at": "2026-10-11T19:00:00Z",
+              "match_id": 1, "placement": 1}
+    monkeypatch.setattr(digest, "get_player_tournament_trophies", lambda *_args: [trophy])
+    monkeypatch.setattr(digest, "_session_fact_milestones", lambda *_args: pytest.fail("No badge evaluation"))
+    result = compute(db, [1])
+    assert result["badges_earned"] == result["badges_grouped"] == []
+    assert result["summary"]["matches_played"] == 1
+    assert result["summary"]["overall_delta"] == .01
+    assert result["trophies_earned"] == [trophy]
+    assert next(card for card in result["numbers_cards"] if card["key"] == "awards") == {
+        "key": "awards", "label": "Trophies", "value": 1}
+
+
+def test_retired_badges_hidden_even_in_previously_saved_email_digest():
+    saved = {"player_name": "Joe", "summary": {"matches_played": 1, "overall_jupr_before": 4,
+        "overall_jupr_after": 4.01, "overall_delta": .01},
+        "badges_grouped": [{"name": "Retired Superstar", "prestige": 100}],
+        "badges_earned": [{"name": "Retired Superstar", "prestige": 100}],
+        "trophies_earned": [{"tournament_name": "Baja Classic"}],
+        "matches_played_rows": [{"summary": "W 11-5 — with Joel"}]}
+    for rendered in (build_player_update_email_html(saved, None), build_player_update_email_text(saved)):
+        assert "Retired Superstar" not in rendered and "Prestige badges" not in rendered
+        assert "Baja Classic" in rendered and "W 11-5" in rendered and "4.010" in rendered

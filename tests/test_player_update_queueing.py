@@ -353,26 +353,30 @@ def test_automatic_queue_never_falls_back_to_dates_without_exact_match_ids(match
     assert sb.tables["player_profile_update_outbox"] == []
 
 
-@pytest.mark.parametrize("status,after", [("error", "pending"), ("done", "done"), ("processing", "processing")])
-def test_session_badge_recovery_requeues_only_its_exact_failed_job(status, after):
+@pytest.mark.parametrize("status", ["error", "done", "processing"])
+def test_retired_badge_recovery_neither_reads_nor_requeues_jobs(monkeypatch, status):
+    from copy import deepcopy
     from jupr_app.domain.matches.side_effects import ensure_notification_badge_job
     sb = _Supabase()
     sb.tables["badge_eval_queue"] = [
         {"id": 1, "club_id": "club", "event_type": "match_recorded", "match_id": "101", "status": status},
         {"id": 2, "club_id": "other", "event_type": "match_recorded", "match_id": "101", "status": "error"}]
-    assert ensure_notification_badge_job(supabase=sb, club_id="club", match_ids=[101, 102], player_ids=[1]) == "101"
-    assert sb.tables["badge_eval_queue"][0]["status"] == after
-    assert sb.tables["badge_eval_queue"][1]["status"] == "error"
+    original = deepcopy(sb.tables)
+    monkeypatch.setattr(sb, "table", lambda *_: pytest.fail("Retired badge recovery must not touch the database"))
+    assert ensure_notification_badge_job(supabase=sb, club_id="club", match_ids=[101, 102], player_ids=[1]) == ""
+    assert sb.tables == original
 
 
-def test_confirmed_inline_badge_fallback_does_not_wait_on_failed_queue_job(monkeypatch):
+def test_retired_badge_side_effects_skip_queue_inline_fallback_and_email_dependency(monkeypatch):
     from jupr_app.domain.matches import side_effects
-    monkeypatch.setattr(side_effects, "enqueue_badge_eval", lambda *args, **kwargs: {"queued": True})
-    monkeypatch.setattr(side_effects, "process_badge_eval_queue", lambda *args, **kwargs: {"errored": 1})
-    monkeypatch.setattr(side_effects, "run_live_badge_awards", lambda *args, **kwargs: {"mode": "inline", "awarded_count": 1})
+    def forbidden(*args, **kwargs):
+        pytest.fail("Retired badge processing must not run from a match save")
+    monkeypatch.setattr(side_effects, "enqueue_badge_eval", forbidden)
+    monkeypatch.setattr(side_effects, "process_badge_eval_queue", forbidden)
+    monkeypatch.setattr(side_effects, "run_live_badge_awards", forbidden)
     summary = side_effects.run_badge_side_effects(supabase=object(), club_id="club",
         has_badge_eligible_match=True, affected_players={1}, db_matches=[{}], match_payloads=[], dedupe_match_id="101")
-    assert summary["mode"] == "inline" and not summary.get("notification_badge_refs")
+    assert summary["mode"] == "disabled" and not summary.get("notification_badge_refs")
 
 
 def test_delete_pending_outbox_row_allows_pending_and_blocks_sent():

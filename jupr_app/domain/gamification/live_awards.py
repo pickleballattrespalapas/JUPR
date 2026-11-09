@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from typing import Any
 
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_player
@@ -16,6 +18,8 @@ def run_live_badge_awards(
     ctx: Any | None = None,
     match_limit: int = 5000,
 ) -> dict[str, Any]:
+    if not badges_enabled():
+        return {"awarded_count": 0, "candidate_count": 0, "badge_ids": [], "mode": "disabled"}
     normalized_player_ids = sorted({int(pid) for pid in (player_ids or [])})
     if not normalized_player_ids:
         return {"awarded_count": 0, "candidate_count": 0, "badge_ids": [], "mode": "inline"}

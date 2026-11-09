@@ -109,3 +109,8 @@ def test_stale_badge_evidence_returns_conflict_without_scheduling_work(monkeypat
     assert result.status_code == 409
     assert result.json()['detail'] == 'Results changed. Refresh before saving.'
     assert checks == []
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

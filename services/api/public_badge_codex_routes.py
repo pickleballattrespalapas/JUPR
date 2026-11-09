@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from typing import Any
 
 from fastapi import HTTPException, Query
@@ -23,6 +25,8 @@ def install_public_badge_codex_routes(
 
     @app.get("/clubs/{club_slug}/badges")
     def get_club_badge_codex(club_slug: str) -> dict[str, Any]:
+        if not badges_enabled():
+            raise HTTPException(status_code=404, detail="Not found")
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -39,6 +43,8 @@ def install_public_badge_codex_routes(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=25, ge=1, le=100),
     ) -> dict[str, Any]:
+        if not badges_enabled():
+            raise HTTPException(status_code=404, detail="Not found")
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
@@ -40,6 +42,8 @@ def run_badge_recompute(
     ctx: Any | None = None,
     include_non_live: bool = False,
 ) -> dict[str, Any]:
+    if not badges_enabled():
+        raise PermissionError("Badges are retired.")
     if mode not in {"dry-run", "append-only", "strict"}:
         raise ValueError(f"Unsupported mode: {mode}")
 

@@ -93,3 +93,8 @@ def test_main_rejects_anon_only_config(monkeypatch, capsys):
     assert rc == 2
     assert "SUPABASE_SERVICE_ROLE_KEY" in out
     assert "cannot use SUPABASE_ANON_KEY" in out
+
+
+# Retained archival behavior is tested explicitly; retirement is covered separately.
+import pytest
+pytestmark = pytest.mark.usefixtures("legacy_badges_enabled")

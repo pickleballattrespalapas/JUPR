@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+
+import pytest
 from types import SimpleNamespace
 
 from scripts import check_staging_environment as cse
@@ -273,6 +275,8 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
             True,
         )
         payload = {"enabled": enabled}
+        if path.endswith("/badges/status"):
+            payload.update(enabled=False, status="retired")
         if path.endswith(
             (
                 "/player-updates/status",
@@ -554,3 +558,23 @@ def test_full_next_flag_check_can_defer_to_required_live_api(monkeypatch):
     assert summary["errors"] == []
     assert len(summary["warnings"]) == 1
     assert "live API status checks are authoritative" in summary["warnings"][0]
+
+
+@pytest.mark.parametrize("wave", ["none", "open", "badge-diagnostics"])
+@pytest.mark.parametrize("badge_status,valid", [
+    ({"enabled": False, "status": "retired"}, True),
+    ({"enabled": True, "status": "retired"}, False),
+    ({"enabled": False, "status": "idle"}, False),
+])
+def test_badge_retirement_attestation_overrides_historical_wave_flags(monkeypatch, wave, badge_status, valid):
+    path = "/admin/clubs/tres_palapas/badges/status"
+    monkeypatch.setattr(cse, "ADMIN_STATUS_PATHS", ("/admin/clubs/{club_id}/badges/status",))
+    monkeypatch.setattr(cse, "_http_get_json", lambda url: (200, badge_status if url.endswith(path) else {}, None))
+    summary = {"errors": [], "warnings": []}
+    cse._check_api(
+        summary, "https://staging.invalid", "tres-palapas", "tres_palapas",
+        expect_full_next_admin=True, expected_write_wave=wave,
+        expected_git_sha="a" * 40, expected_fly_app_name="juprleagues-api-staging",
+        expected_supabase_project_ref="sijpxjxvdtrehmqvirfi", expected_web_origin="https://staging.invalid",
+    )
+    assert (summary["checked_endpoints"][path]["status"] == "ok") is valid

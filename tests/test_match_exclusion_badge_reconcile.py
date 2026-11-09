@@ -27,6 +27,13 @@ from jupr_app.domain.gamification.match_exclusion_reconcile import (
 )
 
 
+@pytest.fixture(autouse=True)
+def historical_badge_engine_contract(monkeypatch):
+    # Frozen-contract algorithm regressions remain useful for old evidence;
+    # deployed retirement behavior has separate no-evaluation tests.
+    monkeypatch.setattr("jupr_app.domain.gamification.match_exclusion_reconcile.badges_enabled", lambda: True)
+
+
 class _CountQuery:
     def __init__(self, exact_count: int | None):
         self.exact_count = exact_count

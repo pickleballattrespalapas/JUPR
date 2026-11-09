@@ -86,8 +86,11 @@ def test_templates_keep_statistics_and_drop_week_specific_stories():
 
 def test_shared_client_server_projection_fixture():
     shared = json.loads(Path('apps/web/tests/fixtures/weekly-recap-builder.json').read_text())
-    assert catalog(fixture()) == shared['catalog']
-    assert build_editions(fixture(), shared['config']) == shared['expected']
+    expected_catalog = {**shared["catalog"], "achievements": []}
+    expected_editions = {channel: [block for block in blocks if block["key"] != "achievements"]
+                         for channel, blocks in shared["expected"].items()}
+    assert catalog(fixture()) == expected_catalog
+    assert build_editions(fixture(), shared["config"]) == expected_editions
 
 
 def test_tournament_draws_with_same_legacy_title_keep_their_own_podiums():
@@ -329,3 +332,43 @@ def test_text_overrides_allow_blank_text_but_cannot_change_identity_or_urls():
     assert item['href'] == event['href'] and item['image_url'] == event['image_url']
     assert public['report']['display_text'] == {'date': '', 'scope': '', 'footer_link': ''}
     assert normalize_config({'text_overrides': {'item': {'lines': ['bad'], 'title': {}, 'link_labels': 5}}})['text_overrides'] == {'item': {}}
+
+
+def test_retired_badge_achievements_cannot_be_reenabled_by_saved_builder_config():
+    raw = fixture()
+    raw["report"]["achievements"] = ["PRIVATE RETIRED BADGE"]
+    raw["report"]["event_results"] = [{"title": "Baja Classic", "kind": "Tournament",
+        "details": ["Gold: Alex and Bea"], "summary": "Published podium"}]
+    config = {"order": ["achievements", "events"], "email_order": ["achievements", "events"],
+        "email_order_mode": "custom", "sections": {"achievements": {"enabled": True, "email_enabled": True}}}
+    normalized = normalize_config(config)
+    assert "achievements" not in normalized["order"]
+    assert "achievements" not in normalized["email_order"]
+    assert not normalized["sections"]["achievements"]["enabled"]
+    assert not normalized["sections"]["achievements"]["email_enabled"]
+    assert catalog(raw)["achievements"] == []
+    projected = build_editions(raw, config)
+    assert "PRIVATE RETIRED BADGE" not in json.dumps(projected)
+    assert "Gold: Alex and Bea" in json.dumps(projected)
+
+
+@pytest.mark.parametrize("saved_edition", [False, True])
+def test_saved_public_recaps_and_pdf_omit_badges_preserve_trophies_and_narratives(saved_edition):
+    from jupr_app.domain.recaps.weekly_report_public import sanitize_report
+    raw = {"version": 1, "headline": "Tournament week", "opening": "A great week of play",
+        "achievements": ["PRIVATE RETIRED BADGE"],
+        "event_results": [{"title": "Baja Classic", "details": ["Gold: Alex and Bea"]}]}
+    if saved_edition:
+        raw["edition"] = [{"key": "opening", "title": "News", "items": [{"text": raw["opening"]}]},
+            {"key": "achievements", "title": "Badge news", "items": [{"text": "PRIVATE RETIRED BADGE"}]},
+            {"key": "events", "title": "Results", "items": [{"title": "Baja Classic", "lines": ["Gold: Alex and Bea"]}]}]
+        raw["email_edition"] = deepcopy(raw["edition"])
+    before = deepcopy(raw)
+    public = sanitize_report(raw)
+    assert "PRIVATE RETIRED BADGE" not in json.dumps(public)
+    assert "Gold: Alex and Bea" in json.dumps(public) and "A great week of play" in json.dumps(public)
+    recap = sanitize_public_recap_json({"report": raw}, week_start="2026-10-05", week_end="2026-10-11")
+    pdf_lines = _weekly_recap_pdf_lines(recap, week_start="2026-10-05", week_end="2026-10-11")
+    assert "PRIVATE RETIRED BADGE" not in "\n".join(pdf_lines)
+    assert "Gold: Alex and Bea" in "\n".join(pdf_lines)
+    assert raw == before, "Publication filtering must preserve the historical snapshot"

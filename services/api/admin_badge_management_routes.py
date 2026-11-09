@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from datetime import date, datetime, timezone
 import logging
 from uuid import UUID
@@ -60,7 +62,7 @@ class BadgeSeasonRequest(BaseModel):
 
 def install_admin_badge_management_routes(app, *, get_supabase_client):
     def authorize(club_id, authorization):
-        if not is_admin_badge_diagnostics_enabled():
+        if not badges_enabled() or not is_admin_badge_diagnostics_enabled():
             raise HTTPException(403, "Badge management is not enabled.")
         user = authenticate_bearer(authorization)
         supabase = get_supabase_client()

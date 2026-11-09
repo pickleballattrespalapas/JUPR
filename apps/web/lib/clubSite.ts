@@ -8,7 +8,6 @@ export const DISPLAY_LABELS = {
   last_played: "Last played date",
   player_status: "Active/inactive status",
   qualification: "Leaderboard qualification",
-  badges: "Badges and prestige",
   profile_ratings: "Profile: rating history",
   profile_positions: "Profile: league positions",
   profile_trophies: "Profile: trophy case",
@@ -19,7 +18,8 @@ export const DISPLAY_LABELS = {
   registration_description: "Registration: event description",
   registration_schedule: "Registration: event schedule",
 } as const;
-export type DisplayKey = keyof typeof DISPLAY_LABELS;
+// Retain the legacy key when reading saved site documents, without offering it.
+export type DisplayKey = keyof typeof DISPLAY_LABELS | "badges";
 export function accentTextColor(hex: string): string {
   const rgb = [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16) / 255);
   const linear = rgb.map((c) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
@@ -196,7 +196,7 @@ export function validClubSlug(slug: string) {
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) && slug.length <= 100;
 }
 export function visible(display: DisplaySettings | undefined, key: DisplayKey) {
-  return display?.[key] !== false;
+  return key !== "badges" && display?.[key] !== false;
 }
 export const clubPageHref = (slug: string, page: string) =>
   `/clubs/${encodeURIComponent(slug)}${page === "home" ? "" : `/pages/${encodeURIComponent(page)}`}`;
@@ -209,12 +209,12 @@ export const CLUB_LINKS = [
   ["Play", "play"],
   ["Match Explorer", "match-explorer"],
   ["Weekly recap", "weekly-recap"],
-  ["Badges & trophies", "badge-codex"],
   ["Club trophy case", "trophies"],
   ["Interclub leagues", "interclub"],
 ] as const;
 
-export type ClubPageKey = (typeof CLUB_LINKS)[number][1];
+// Older site documents may still contain a badge-codex visibility setting.
+export type ClubPageKey = (typeof CLUB_LINKS)[number][1] | "badge-codex";
 export type PageVisibility = "public" | "private";
 export type PageNavigationSettings = Pick<SiteDocument, "page_visibility"> & {
   pages: Pick<SitePage, "slug" | "in_navigation">[];
@@ -260,12 +260,14 @@ export function clubPageSection(href: string, slug: string): string | null {
 }
 export function publicClubPage(doc: PageNavigationSettings, slug: string, href: string) {
   const section = clubPageSection(href, slug);
+  if (section === "badge-codex") return false;
   if (section?.startsWith("pages/")) {
     return doc.pages.find((p) => p.slug === section.slice(6))?.in_navigation !== false;
   }
   return doc.page_visibility?.[section as ClubPageKey] !== "private";
 }
 export function canLinkClubPage(doc: PageNavigationSettings, slug: string, href: string, currentPath = "") {
+  if (clubPageSection(href, slug) === "badge-codex") return false;
   return publicClubPage(doc, slug, href) ||
     (!!currentPath && clubPageSection(href, slug) === clubPageSection(currentPath, slug));
 }

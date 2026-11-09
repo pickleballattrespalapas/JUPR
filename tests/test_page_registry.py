@@ -35,7 +35,6 @@ def test_existing_public_pages_remain_in_shared_public_nav():
         "📊 League Results",
         "🎯 Match Explorer",
         "🔍 Player Search",
-        "📼 Badge Codex",
         "🪜 Challenge Ladder",
         "🔴 JUPR Live",
         "📝 Tournament Registration",
@@ -58,7 +57,6 @@ def test_restored_public_route_keys_are_visible_in_public_nav():
     restored_keys = {
         "league_results",
         "match_explorer",
-        "badge_codex",
         "challenge_ladder",
         "jupr_live",
         "tournament_partner_board",

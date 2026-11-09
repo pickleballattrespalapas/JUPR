@@ -49,7 +49,7 @@ export default async function ProfilePrivacyPage(props: { searchParams?: Promise
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Need a data correction instead?</h2>
           <p style={{ color: "#475569" }}>
-            Use the correction form for wrong scores, duplicate matches, player names, tournament entries, badges, or league records.
+            Use the correction form for wrong scores, duplicate matches, player names, tournament entries, or league records.
           </p>
           <Link href={clubSlug ? `/data-corrections?${new URLSearchParams({ club: clubSlug })}` : "/data-corrections"}>Open data correction form</Link>
         </article>

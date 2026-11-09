@@ -11,6 +11,7 @@ import streamlit as st
 import pandas as pd
 from streamlit.components.v1 import html as st_html
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled, FORMAL_TROPHY_BADGE_IDS
 from jupr_app.domain.gamification.badge_copy import build_badge_copy_plain
 from jupr_app.ui.components.badge_cards import render_inline_badge_text
 from jupr_app.ui.badge_data import normalize_player_badges_frame
@@ -141,13 +142,15 @@ def fetch_player_match_count(_supabase, club_id: str, pid: int, league_name: str
 @st.cache_data(ttl=60)
 def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
     try:
-        resp = (
+        query = (
             _supabase.table("player_badges")
             .select("player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json")
             .eq("club_id", str(club_id))
             .eq("player_id", int(pid))
-            .execute()
         )
+        if not badges_enabled():
+            query = query.in_("badge_id", sorted(FORMAL_TROPHY_BADGE_IDS))
+        resp = query.execute()
         pb_df = pd.DataFrame(resp.data or [])
     except Exception:
         logger.exception("Failed to load player_badges")
@@ -155,6 +158,8 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
 
     if pb_df.empty or "badge_id" not in pb_df.columns:
         return pd.DataFrame()
+    if not badges_enabled():
+        pb_df = pb_df[pb_df["badge_id"].isin(FORMAL_TROPHY_BADGE_IDS)].copy()
 
     badge_ids = pb_df["badge_id"].dropna().astype(str).unique().tolist()
     if not badge_ids:
@@ -192,6 +197,8 @@ def fetch_player_tournament_trophies(_supabase, club_id: str, pid: int) -> list[
 
 @st.cache_data(ttl=120)
 def fetch_badge_definitions(_supabase) -> pd.DataFrame:
+    if not badges_enabled():
+        return pd.DataFrame()
     try:
         resp = (
             _supabase.table("badges")
@@ -242,6 +249,10 @@ def badge_icon(badge_id: str, category: str | None = None) -> str:
 def resolve_player_badges_for_profile(ctx, _supabase, club_id: str, pid: int) -> pd.DataFrame:
     shared_badges = getattr(ctx, "df_player_badges", None)
     normalized_shared = normalize_player_badges_frame(shared_badges)
+    if not badges_enabled() and not normalized_shared.empty:
+        normalized_shared = normalized_shared[
+            normalized_shared["badge_id"].isin(FORMAL_TROPHY_BADGE_IDS)
+        ].copy()
     if not normalized_shared.empty:
         if "club_id" in normalized_shared.columns:
             normalized_shared = normalized_shared[
@@ -263,6 +274,10 @@ def resolve_player_badges_for_profile(ctx, _supabase, club_id: str, pid: int) ->
         return pd.DataFrame()
 
     normalized_fetched = normalize_player_badges_frame(fetched)
+    if not badges_enabled() and not normalized_fetched.empty:
+        normalized_fetched = normalized_fetched[
+            normalized_fetched["badge_id"].isin(FORMAL_TROPHY_BADGE_IDS)
+        ].copy()
     if normalized_fetched.empty:
         return pd.DataFrame()
     return normalized_fetched[normalized_fetched["player_id"] == int(pid)].copy()
@@ -1517,14 +1532,14 @@ def render(ctx):
     with tape_tab:
         debug_render = False
         if bool(getattr(ctx, "admin_logged_in", False)):
-            debug_render = st.toggle("Debug badge render", value=False)
+            debug_render = st.toggle("Debug trophy render", value=False)
 
         def _debug_html_warning(label: str, fn_name: str, text: str) -> None:
             if not debug_render:
                 return
             if "<div" in text or "badge-card" in text:
                 snippet = textwrap.shorten(text.replace("\n", " "), width=140, placeholder="…")
-                st.warning(f"Badge render debug ({label}) via {fn_name}: {snippet}")
+                st.warning(f"Trophy render debug ({label}) via {fn_name}: {snippet}")
 
         def badge_markdown(text: str, *, label: str) -> None:
             _debug_html_warning(label, "markdown", text)
@@ -1753,19 +1768,7 @@ def render(ctx):
 </html>"""
             resolved_height = height if height is not None else _estimate_badge_height(cleaned)
             st_html(doc, height=resolved_height, scrolling=False)
-        badge_defs = getattr(ctx, "df_badges", None)
-        if badge_defs is None or (isinstance(badge_defs, pd.DataFrame) and badge_defs.empty):
-            badge_defs = fetch_badge_definitions(_supabase)
-
         player_badges = resolve_player_badges_for_profile(ctx, _supabase, club_id, pid)
-
-        summary = build_gamification_summary(pid, badge_defs, player_badges)
-        prestige_total = summary.get("prestige_total", 0)
-        collected_unique = summary.get("collected_unique_count", 0)
-        total_active = summary.get("total_active_badge_types", 0)
-
-        unlocked_badges = summary.get("unlocked_badges", [])
-        locked_badges = summary.get("locked_badges", [])
 
         df_matches = getattr(ctx, "df_matches", None)
         inactive_leagues = build_inactive_league_options(df_meta, df_leagues, df_matches)
@@ -1902,244 +1905,6 @@ def render(ctx):
                 height=height,
             )
 
-        top_prestige_key = f"top_prestige_{pid}"
-        if top_prestige_key in st.session_state:
-            top_prestige = st.session_state[top_prestige_key]
-        else:
-            prestige_sorted = sorted(
-                unlocked_badges,
-                key=lambda b: (
-                    int(b.get("prestige", 0) or 0),
-                    pd.to_datetime(b.get("last_earned_at"), utc=True, errors="coerce"),
-                ),
-                reverse=True,
-            )
-            top_prestige = prestige_sorted[:5]
-            st.session_state[top_prestige_key] = top_prestige
-
-        chip_items = []
-        for badge in top_prestige:
-            icon = badge_icon(badge.get("badge_id"), badge.get("category"))
-            stack = badge.get("stack_count", 1)
-            stack_text = f" ×{stack}" if stack and stack > 1 else ""
-            chip_items.append(
-                f"<span class='badge-chip'><span>{html.escape(icon)}</span>"
-                f"<span class='truncate-1'>{html.escape(str(badge.get('name', 'Badge')))}{stack_text}</span></span>"
-            )
-
-        summary_html = f"""
-        <div class="badge-summary">
-            <div class="badge-stat">
-                <div class="badge-stat-label">Prestige</div>
-                <div class="badge-stat-value">{int(prestige_total)}</div>
-            </div>
-            <div class="badge-stat">
-                <div class="badge-stat-label">Collection</div>
-                <div class="badge-stat-value">{collected_unique}/{total_active}</div>
-            </div>
-            <div class="badge-stat" style="flex:1; min-width: 220px;">
-                <div class="badge-stat-label">Top Prestige</div>
-                <div class="badge-chip-row">{''.join(chip_items) or "<span class='badge-subtext'>No reels yet.</span>"}</div>
-            </div>
-        </div>
-    """
-        render_badge_html(summary_html, label="badges.summary")
-
-        if not unlocked_badges and not locked_badges:
-            badge_caption("No badges available yet.", label="badges.empty")
-        else:
-            badge_markdown("#### Featured Cuts", label="badges.featured.header")
-            featured = select_featured_cuts(unlocked_badges, limit=3)
-            if not featured:
-                badge_caption(
-                    "The trophy room is quiet—new reels arrive after the next run.",
-                    label="badges.featured.empty",
-                )
-            else:
-                featured_cards = []
-                for badge in featured:
-                    copy_plain = build_badge_copy_plain(badge)
-                    icon = badge_icon(badge.get("badge_id"), badge.get("category"))
-                    stack = badge.get("stack_count", 1)
-                    stack_text = f" ×{stack}" if stack and stack > 1 else ""
-                    requirements_html = render_inline_badge_text(copy_plain.req_text)
-                    featured_cards.append(
-                        f"""
-                    <div class="badge-card">
-                        <div class="badge-card-header">
-                            <span>{html.escape(icon)}</span>
-                            <span class="truncate-1">{html.escape(str(badge.get('name', 'Badge')))}{stack_text}</span>
-                        </div>
-                        <div class="badge-subtext">Prestige {int(badge.get('prestige', 0) or 0)}</div>
-                        <div class="badge-subtext truncate-2">{requirements_html}</div>
-                    </div>
-                    """
-                    )
-                render_badge_html(
-                    f"<div class='badge-grid featured-grid'>{''.join(featured_cards)}</div>",
-                    label="badges.featured.grid",
-                )
-
-            with st.expander("Open Cabinet", expanded=False):
-                filter_cols = st.columns(2)
-                show_unlocked = filter_cols[0].checkbox("Unlocked", value=True, key="badge_filter_unlocked")
-                show_locked = filter_cols[0].checkbox("Locked", value=True, key="badge_filter_locked")
-
-                all_badges = []
-                for badge in unlocked_badges:
-                    badge_copy = dict(badge)
-                    badge_copy["status"] = "unlocked"
-                    all_badges.append(badge_copy)
-                for badge in locked_badges:
-                    badge_copy = dict(badge)
-                    badge_copy["status"] = "locked"
-                    all_badges.append(badge_copy)
-
-                categories = sorted({b.get("category") or "Other" for b in all_badges})
-                rarities = sorted({b.get("rarity") or "common" for b in all_badges})
-                selected_categories = filter_cols[1].multiselect(
-                    "Category",
-                    categories,
-                    default=categories,
-                    key="badge_filter_categories",
-                )
-                selected_rarities = filter_cols[1].multiselect(
-                    "Rarity",
-                    rarities,
-                    default=rarities,
-                    key="badge_filter_rarities",
-                )
-
-                def _visible(badge: dict) -> bool:
-                    category = badge.get("category") or "Other"
-                    rarity = badge.get("rarity") or "common"
-                    if badge.get("status") == "unlocked" and not show_unlocked:
-                        return False
-                    if badge.get("status") == "locked" and not show_locked:
-                        return False
-                    if category not in selected_categories:
-                        return False
-                    if rarity not in selected_rarities:
-                        return False
-                    return True
-
-                visible_badges = [b for b in all_badges if _visible(b)]
-                if not visible_badges:
-                    badge_caption("No badges match the filters.", label="badges.filters.empty")
-                else:
-                    card_items = []
-                    for badge in visible_badges:
-                        status = badge.get("status")
-                        copy_plain = build_badge_copy_plain(badge)
-                        name = html.escape(str(badge.get("name", "Badge")))
-                        prestige = int(badge.get("prestige", 0) or 0)
-                        icon = badge_icon(badge.get("badge_id"), badge.get("category"))
-                        stack = badge.get("stack_count", 1)
-                        stack_text = f" ×{stack}" if stack and stack > 1 else ""
-                        if status == "locked":
-                            requirements_html = render_inline_badge_text(copy_plain.req_text)
-                            card_items.append(
-                                f"""
-                            <div class="badge-card silhouette">
-                                <div class="badge-card-header">
-                                    <span>⬛</span>
-                                    <span class="truncate-1">{name}{stack_text}</span>
-                                </div>
-                                <div class="badge-subtext">Prestige {prestige}</div>
-                                <div class="badge-subtext truncate-2">{requirements_html}</div>
-                            </div>
-                            """
-                            )
-                        else:
-                            requirements_html = render_inline_badge_text(copy_plain.req_text)
-                            card_items.append(
-                                f"""
-                            <div class="badge-card">
-                                <div class="badge-card-header">
-                                    <span>{html.escape(icon)}</span>
-                                    <span class="truncate-1">{name}{stack_text}</span>
-                                </div>
-                                <div class="badge-subtext">Prestige {prestige}</div>
-                                <div class="badge-subtext truncate-2">{requirements_html}</div>
-                            </div>
-                            """
-                            )
-                    render_badge_html(
-                        f"<div class='badge-grid'>{''.join(card_items)}</div>",
-                        label="badges.cabinet.grid",
-                    )
-
-                details_view = st.toggle("Details view", value=False, key="badge_details_view")
-                if details_view and unlocked_badges:
-                    summary_df = pd.DataFrame(unlocked_badges)
-                    summary_df["last_earned_at_dt"] = pd.to_datetime(
-                        summary_df.get("last_earned_at", None), utc=True, errors="coerce"
-                    )
-                    summary_df = summary_df.sort_values(
-                        ["last_earned_at_dt", "prestige"], ascending=[False, False]
-                    )
-                    show_df = summary_df[
-                        ["name", "category", "prestige", "stack_count", "last_earned_at_dt"]
-                    ].rename(
-                        columns={
-                            "name": "Badge",
-                            "category": "Category",
-                            "prestige": "Prestige",
-                            "stack_count": "Count",
-                            "last_earned_at_dt": "Last Earned",
-                        }
-                    )
-                    st.dataframe(
-                        show_df,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Prestige": st.column_config.NumberColumn(format="%d"),
-                            "Last Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-                        },
-                    )
-
-                    admin_debug = False
-                    if bool(getattr(ctx, "admin_logged_in", False)):
-                        admin_debug = st.toggle("Show debug columns", value=False, key="badge_debug_columns")
-
-                    if isinstance(player_badges, pd.DataFrame) and not player_badges.empty:
-                        pb_df = player_badges.copy()
-                        pb_df = pb_df[pb_df.get("player_id") == int(pid)].copy()
-                        pb_df["earned_at_dt"] = pd.to_datetime(
-                            pb_df.get("earned_at", None), utc=True, errors="coerce"
-                        )
-                        for badge in summary_df.itertuples(index=False):
-                            badge_id = getattr(badge, "badge_id", "")
-                            badge_name = getattr(badge, "name", "Badge")
-                            stack = getattr(badge, "stack_count", 1)
-                            stack_text = f" x{stack}" if stack and stack > 1 else ""
-                            icon = badge_icon(badge_id, getattr(badge, "category", None))
-                            with st.expander(f"{icon} {badge_name}{stack_text}", expanded=False):
-                                requirements = display_requirement_text(
-                                    getattr(badge, "requirements", None)
-                                )
-                                st.markdown(requirements)
-                                rows = pb_df[pb_df.get("badge_id") == badge_id].copy()
-                                rows = rows.sort_values("earned_at_dt", ascending=False)
-                                cols = ["earned_at_dt", "match_id"]
-                                if admin_debug:
-                                    cols.append("context_id")
-                                show_rows = rows[cols].rename(
-                                    columns={
-                                        "earned_at_dt": "Earned",
-                                        "match_id": "Match",
-                                        "context_id": "Context",
-                                    }
-                                )
-                                st.dataframe(
-                                    show_rows,
-                                    use_container_width=True,
-                                    hide_index=True,
-                                    column_config={
-                                        "Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-                                    },
-                                )
     def render_ratings_tab():
         df_recent = _ensure_rating_series_frame(
             build_player_overall_rating_series(_supabase, club_id, pid, limit=60)
@@ -2395,37 +2160,15 @@ def render(ctx):
                 column_config={"EXPLAIN": st.column_config.LinkColumn("Explain", display_text="Explain")},
             )
 
-        st.markdown("### Featured Badges & Trophy Preview")
+        st.markdown("### Trophy Preview")
         trophy_list = fetch_player_tournament_trophies(_supabase, club_id, pid)
         if trophy_list:
             trophy_df = pd.DataFrame(trophy_list).head(3)
             trophy_cols = [c for c in ["icon", "title", "league_name", "season_label", "placement"] if c in trophy_df.columns]
             st.dataframe(trophy_df[trophy_cols], use_container_width=True, hide_index=True)
-            st.caption("See Trophy Room for full trophy and badge details.")
+            st.caption("See Trophy Room for full trophy details.")
         else:
             st.caption("No tournament trophies yet.")
-        badge_defs = getattr(ctx, "df_badges", None)
-        if badge_defs is None or (isinstance(badge_defs, pd.DataFrame) and badge_defs.empty):
-            badge_defs = fetch_badge_definitions(_supabase)
-        player_badges = resolve_player_badges_for_profile(ctx, _supabase, club_id, pid)
-        summary_badges = build_gamification_summary(pid, badge_defs, player_badges)
-        unlocked = _aggregate_repeating_badges(summary_badges.get("unlocked_badges", []))
-        featured_badges = select_featured_cuts(unlocked, limit=4)
-        if featured_badges:
-            compact_badges = pd.DataFrame(
-                [
-                    {
-                        "Badge": f"{badge_icon(b.get('badge_id'), b.get('category'))} {str(b.get('name') or 'Badge')}",
-                        "Prestige": int(b.get("prestige", 0) or 0),
-                        "Count": f"x{int(b.get('stack_count', 1) or 1)}",
-                        "Earned for": str(b.get("description") or b.get("requirements") or "—"),
-                        "Last earned": _month_day(pd.to_datetime(b.get("last_earned_at"), utc=True, errors="coerce")),
-                    }
-                    for b in featured_badges
-                ]
-            )
-            st.dataframe(compact_badges, use_container_width=True, hide_index=True)
-
         partners_map: dict[int, dict] = {}
         rivals_map: dict[int, dict] = {}
         for _, match in df.iterrows():

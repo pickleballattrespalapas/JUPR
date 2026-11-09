@@ -75,7 +75,7 @@ def test_rounds_share_one_pending_update_including_departures_late_arrivals_and_
     assert rows[0]["send_status"] == "sent" and len(rows) == 5
     resolved = _resolve(sb)
     assert set(resolved["match_ids"]) == {"100", "101", "102", "200", "201", "202"}
-    assert resolved["badge_refs"] == ["100", "200"]
+    assert resolved["badge_refs"] == []
     assert len(resolved["session_evidence"]["player_updates"]) == 8
 
 
@@ -126,11 +126,12 @@ def test_incomplete_or_wrong_event_receipts_never_send_partial_results(problem):
         _resolve(sb)
 
 
-def test_automatic_resolution_preserves_exhausted_badge_jobs_for_sender_recovery_limit():
+def test_automatic_resolution_ignores_and_preserves_retired_badge_jobs(monkeypatch):
+    monkeypatch.setattr(events, "ensure_notification_badge_job", lambda **_: pytest.fail("No badge job creation or retry"))
     sb = _database(rounds=2)
     sb.tables["badge_eval_queue"][0].update(status="error", attempts=3)
     scope = _resolve(sb)
-    assert scope["badge_refs"] == ["100", "200"]
+    assert scope["badge_refs"] == []
     assert sb.tables["badge_eval_queue"][0]["status"] == "error"
     assert sb.tables["badge_eval_queue"][0]["attempts"] == 3
 

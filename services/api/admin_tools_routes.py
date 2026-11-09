@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from typing import Any
 
 from fastapi import HTTPException, Query
@@ -349,6 +351,8 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
         payload: AdminBadgeQueueRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        if not badges_enabled():
+            raise HTTPException(status_code=403, detail="Badges are retired.")
         if not is_admin_tools_enabled():
             raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
         supabase = get_supabase_client()
@@ -375,6 +379,8 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
         payload: AdminBadgeRecomputeRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        if not badges_enabled():
+            raise HTTPException(status_code=403, detail="Badges are retired.")
         if not is_admin_tools_enabled():
             raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
         supabase = get_supabase_client()

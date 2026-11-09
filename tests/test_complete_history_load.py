@@ -92,7 +92,7 @@ def test_complete_shared_load_crosses_server_and_old_5000_cap(large_club):
     assert len(result[3]) == 6203
     assert result[3].id.tolist() == list(range(6203, 0, -1))
     assert len(result[4]) == 1002
-    assert len(result[6]) == 1102
+    assert result[6].empty  # Retired badge history is not loaded.
     assert result[8][1202] == 'Player 1202'
     assert 9002 not in result[8]
     assert not result[9]
@@ -127,7 +127,7 @@ def test_empty_complete_table_and_invalid_bounds():
     with pytest.raises(ValueError): read_counted_rows(query, limit=0)
 
 
-def test_badge_plan_retains_oldest_win_beyond_previous_cap(large_club):
+def test_badge_plan_retains_oldest_win_beyond_previous_cap(large_club, legacy_badges_enabled):
     from jupr_app.domain.gamification.match_exclusion_reconcile import (
         build_match_exclusion_badge_plan, resolve_match_exclusion_badge_ids,
     )

@@ -33,7 +33,6 @@ export function WeeklyReportProgress({ report, clubSlug }: { report: WeeklyRepor
   return <>
     {report.event_notes ? <section><h2>Around the club</h2><p style={{ ...card, whiteSpace: "pre-line" }}>{report.event_notes}</p></section> : null}
     {report.season_races?.length ? <section data-testid="weekly-report-season-races"><h2>Season awards race</h2><p style={{ color: "#536c64" }}>Standings through the end of this report. Changes compare with the start of the period.</p><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,280px),1fr))", gap: "1rem" }}>{report.season_races.map((race, i) => <article style={{ ...card, background: "#f8f3e9" }} key={i}><h3>{race.title}</h3><ul style={{ paddingLeft: "1.2rem", lineHeight: 1.7 }}>{race.lines.map((line, idx) => <li key={idx}>{line}</li>)}</ul>{reportPath(clubSlug, race.href) ? <Link href={reportPath(clubSlug, race.href)} style={{ color: "#17665c" }}>View season standings</Link> : null}</article>)}</div></section> : null}
-    {report.achievements?.length ? <section><h2>New achievements</h2><ul style={{ ...card, paddingLeft: "2.5rem", lineHeight: 1.8 }}>{report.achievements.map((line, i) => <li key={i}>{line}</li>)}</ul></section> : null}
     {report.new_faces?.length ? <section><h2>Welcome to the courts</h2><p style={card}>{report.new_faces.join(", ")}</p></section> : null}
   </>;
 }

@@ -3,7 +3,6 @@ import PublicControls from "@/components/PublicControls";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
 import { getClubLeagueResults, getClubPlayerProfile, type LeagueAwardProgressRow, type LeagueResultsResponse, type PublicMatch, type PublicRatingHistoryPoint, type PublicRelationship, type PublicTrophy } from "@/lib/api";
-import { publicBadgeRarityLabel } from "@/lib/badgeApi";
 import { publicSocialEventTypeLabel } from "@/lib/publicMatchLabels";
 
 type PlayerProfilePageProps = {
@@ -11,7 +10,7 @@ type PlayerProfilePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-type SectionKey = "overview" | "ratings" | "positions" | "trophies" | "social" | "matches" | "badges";
+type SectionKey = "overview" | "ratings" | "positions" | "trophies" | "social" | "matches";
 type HistoryKey = "recent" | "all";
 const HISTORY_PAGE_SIZE = 50;
 type PlayerAwardPlacement = LeagueAwardProgressRow & { eligible_count?: number | null };
@@ -53,7 +52,7 @@ function firstParam(searchParams: Awaited<PlayerProfilePageProps["searchParams"]
 
 function normalizeSection(value: string | null): SectionKey {
   if (value === "awards") return "trophies";
-  if (value === "ratings" || value === "positions" || value === "trophies" || value === "social" || value === "matches" || value === "badges") return value;
+  if (value === "ratings" || value === "positions" || value === "trophies" || value === "social" || value === "matches") return value;
   return "overview";
 }
 
@@ -230,7 +229,6 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
         <Display field="records"><article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.wins ?? 0}-{player.losses ?? 0}</div><small>{pctLabel(player.wins, player.losses)}</small></article></Display>
         <Display field="singles"><article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.singles_wins ?? 0}-{player.singles_losses ?? 0}</div><small>{pctLabel(player.singles_wins, player.singles_losses)}</small></article></Display>
         <Display field="profile_trophies"><article style={cardStyle}><strong>Major honors</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{trophies.length}</div><small>Trophy case</small></article></Display>
-        <Display field="badges"><article style={cardStyle}><strong>Badges earned</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.badge_award_count}</div><small>{awards.prestige_total} prestige</small></article></Display>
         <Display field="last_played"><article style={cardStyle}><strong>Last played</strong><div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{formatDate(player.last_game_at)}</div><small>{player.is_active === false ? "Inactive" : "Active"}</small></article></Display>
       </div>
   );
@@ -239,7 +237,7 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
     <section data-testid="player-profile">
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>{data.club?.name ?? clubSlug} · Player profile</p>
       <h1 style={{ marginTop: 0 }}>{data.identity.display_name}</h1>
-      <PublicControls navigation resetKey={`${section}:${selectedLeague}:${historyView}`} context={[section === "positions" ? "League positions" : section === "trophies" ? "Trophy case" : section === "badges" ? "Badge cabinet" : section[0].toUpperCase() + section.slice(1), section === "matches" ? historyView === "all" ? "Full history" : "Recent matches" : "", section === "matches" ? selectedLeague || "All leagues" : ""].filter(Boolean).join(" · ")}>
+      <PublicControls navigation resetKey={`${section}:${selectedLeague}:${historyView}`} context={[section === "positions" ? "League positions" : section === "trophies" ? "Trophy case" : section[0].toUpperCase() + section.slice(1), section === "matches" ? historyView === "all" ? "Full history" : "Recent matches" : "", section === "matches" ? selectedLeague || "All leagues" : ""].filter(Boolean).join(" · ")}>
 <p style={{ color: "#475569", maxWidth: "820px" }}>View this player&apos;s ratings, match history, awards, frequent partners and opponents, and Club Social results.</p>
 
       <article data-testid="player-public-identity" style={{ ...cardStyle, background: "#eff6ff", marginBottom: "1rem" }}>
@@ -250,9 +248,9 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
       </article>
 
       <nav aria-label="Player profile sections" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-        {(["overview", "ratings", "positions", "trophies", "social", "matches", "badges"] as SectionKey[]).map((item) => (
-          <Display key={item} field={item === "overview" ? "result_summary" : item === "badges" ? "badges" : `profile_${item}`}><Link data-testid={`player-section-${item}`} aria-current={item === section ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: item, league: selectedLeague, history: historyView })} style={{ ...pillStyle, background: item === section ? "#dbeafe" : "white", fontWeight: item === section ? 800 : 600 }}>
-            {item === "overview" ? "Overview" : item === "positions" ? "League positions" : item === "trophies" ? "Trophy case" : item === "badges" ? "Badge cabinet" : item[0].toUpperCase() + item.slice(1)}
+        {(["overview", "ratings", "positions", "trophies", "social", "matches"] as SectionKey[]).map((item) => (
+          <Display key={item} field={item === "overview" ? "result_summary" : `profile_${item}`}><Link data-testid={`player-section-${item}`} aria-current={item === section ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: item, league: selectedLeague, history: historyView })} style={{ ...pillStyle, background: item === section ? "#dbeafe" : "white", fontWeight: item === section ? 800 : 600 }}>
+            {item === "overview" ? "Overview" : item === "positions" ? "League positions" : item === "trophies" ? "Trophy case" : item[0].toUpperCase() + item.slice(1)}
           </Link></Display>
         ))}
         <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Request verified updates</Link>
@@ -280,13 +278,12 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Player overview</h2>
             <p style={{ color: "#475569", marginBottom: 0 }}>
-              Browse ratings, league positions, major honors, Club Social results, match history, and badges without leaving this player&apos;s profile.
+              Browse ratings, league positions, major honors, Club Social results, and match history without leaving this player&apos;s profile.
             </p>
           </article>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "0.75rem" }}>
             <article style={cardStyle}><strong>League positions</strong><p style={{ color: "#475569" }}>Award standings, league rating, record, and qualification status for each league.</p><Link href={pageHref({ clubSlug, playerId, section: "positions" })}>Open league positions</Link></article>
             <article style={cardStyle}><strong>Trophy case</strong><p style={{ color: "#475569" }}>Top-three tournament podiums and end-of-league awards.</p><Link href={pageHref({ clubSlug, playerId, section: "trophies" })}>Open trophy case</Link></article>
-            <article style={cardStyle}><strong>Badge cabinet</strong><p style={{ color: "#475569" }}>Achievements for participation, improvement, partnerships, and match results.</p><Link href={pageHref({ clubSlug, playerId, section: "badges" })}>Open badge cabinet</Link></article>
           </div>
         </section>
       ) : null}
@@ -360,18 +357,8 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
         <section id="trophies" data-testid="player-trophies" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Trophy case</h2>
-            <p style={{ color: "#475569" }}>Top-three tournament podiums and end-of-league awards. Other achievements live in the Badge Cabinet.</p>
+            <p style={{ color: "#475569" }}>Top-three tournament podiums and end-of-league awards.</p>
             {trophies.length === 0 ? <p style={{ color: "#475569" }}>No top-three tournament or end-of-league awards yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>{trophies.map((trophy, index) => <div key={`${trophy.badge_id}-${trophy.earned_at ?? index}`} data-testid="player-trophy" style={{ border: "1px solid #f59e0b", borderRadius: "12px", padding: "0.85rem", background: "#fffbeb" }}><strong>🏆 {trophy.title}</strong><p style={{ margin: "0.35rem 0" }}>{`Place #${trophy.placement}`}{trophy.context_label ? ` · ${trophy.context_label}` : ""}</p><small>{formatDate(trophy.earned_at)}</small>{trophy.results_href ? <p style={{ marginBottom: 0 }}><Link href={trophy.results_href}>{trophy.results_href.includes("final-results") ? "View final season results" : "View league results"}</Link></p> : null}</div>)}</div>}
-          </article>
-        </section>
-      ) : null}</Display>
-
-<Display field="badges">      {sectionVisible(section, "badges") ? (
-        <section id="badges" data-testid="player-badges" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
-          <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Badge cabinet</h2>
-            <p style={{ color: "#475569" }}>Achievements for activity, momentum, participation, and skill. Some can be earned more than once.</p>
-            {awards.badges.length === 0 ? <p style={{ color: "#475569" }}>No badges earned yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>{awards.badges.map((badge) => <article key={badge.badge_id} data-testid="player-badge" style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem" }}><strong>🏅 {badge.name}{badge.count > 1 ? ` ×${badge.count}` : ""}</strong><p style={{ margin: "0.35rem 0", color: "#475569" }}>{badge.category}{badge.category !== "Inter-Club" ? ` · ${badge.prestige} prestige` : ""}{badge.rarity ? ` · ${publicBadgeRarityLabel(badge.rarity)}` : ""}</p><p style={{ margin: "0.35rem 0" }}><strong>How to earn it:</strong> {badge.requirements ?? "Requirements are unavailable."}</p><small>Last earned {formatDate(badge.last_earned_at)}</small>{badge.achievements?.length ? <details style={{ marginTop: ".5rem" }}><summary>Earned achievements</summary><ul>{badge.achievements.map(achievement => <li key={achievement.id}>{achievement.detail} <small>· {formatDate(achievement.earned_at)}</small>{achievement.results_href ? <> · <Link href={achievement.results_href}>View results</Link></> : null}</li>)}</ul></details> : null}</article>)}</div>}
           </article>
         </section>
       ) : null}</Display>

@@ -34,7 +34,7 @@ test("player directory includes all profiles and keeps search plus stable links 
   await verifyInactivePlayerVisibility(page);
 });
 
-test("player profile keeps positions, trophies, badges, relationships, and history in player scope", async ({ page }) => {
+test("player profile keeps positions, trophies, relationships, and history in player scope", async ({ page }) => {
   await page.goto(`/clubs/${clubSlug}/players`, { waitUntil: "domcontentloaded" });
   const profileLink = page.getByTestId("players-row").first().locator("td").first().getByRole("link");
   const profileHref = await profileLink.getAttribute("href");
@@ -63,8 +63,8 @@ test("player profile keeps positions, trophies, badges, relationships, and histo
   await expect(page.getByTestId("player-trophies")).toContainText(/top-three tournament podiums/i);
 
   await openPublicControls(page);
-  await page.getByTestId("player-section-badges").click();
-  await expect(page.getByTestId("player-badges")).toBeVisible();
+  await expect(page.getByTestId("player-section-badges")).toHaveCount(0);
+  await expect(page.getByTestId("player-badges")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Badge codex" })).toHaveCount(0);
 
   await openPublicControls(page);

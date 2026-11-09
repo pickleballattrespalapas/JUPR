@@ -11,7 +11,7 @@ from tests.test_public_leaderboard_projection import _fixture, _Query
 from tests.test_public_player_service import FakeSupabase, FakeQuery
 
 
-def test_badges_only_load_response_players_and_reuse_across_clients(monkeypatch):
+def test_retired_badges_never_load_across_leaderboard_clients(monkeypatch):
     monkeypatch.setattr(leaderboards, "public_read_cache", PublicReadCache())
     sb = _fixture()
     sb.supabase_url = "https://database.example"
@@ -32,15 +32,15 @@ def test_badges_only_load_response_players_and_reuse_across_clients(monkeypatch)
     sb.table = lambda name: Query(sb.store, name)
     first = leaderboards.build_public_leaderboard(sb, club_id="club-1", limit=1)
     badge_reads = [read for read in reads if read[0] == "player_badges"]
-    assert len(badge_reads) == 2  # scoped data page plus exhaustion check
-    assert all(read[1]["club_id"] == "club-1" and read[2]["player_id"] == {"1", "2"} for read in badge_reads)
+    assert badge_reads == []
+    assert not any(read[0] == "badges" for read in reads)
     assert not any(read[0] == "league_ratings" for read in reads)
-    assert first["leaderboard"][0]["badge_count"] == 4
+    assert first["leaderboard"][0]["badge_count"] == 0
     second = _fixture()
     second.supabase_url = sb.supabase_url
     second.table = lambda name: Query(sb.store, name)
     leaderboards.build_public_leaderboard(second, club_id="club-1", limit=1)
-    assert len([read for read in reads if read[0] == "player_badges"]) == 2
+    assert not any(read[0] in {"player_badges", "badges"} for read in reads)
 
 
 def test_share_metadata_loads_only_one_player_and_strips_private_fields():
@@ -84,7 +84,7 @@ def test_profile_and_match_names_are_scoped_to_participants():
 
 
 @pytest.mark.parametrize("failed_table", ["player_badges", "badges"])
-def test_badge_outage_preserves_ranking_and_recovers_without_cached_failure(monkeypatch, failed_table):
+def test_retired_badge_availability_cannot_affect_rankings(monkeypatch, failed_table):
     monkeypatch.setattr(leaderboards, "public_read_cache", PublicReadCache())
     sb = _fixture()
     unavailable = [True]
@@ -106,9 +106,9 @@ def test_badge_outage_preserves_ranking_and_recovers_without_cached_failure(monk
     assert "private database failure" not in str(partial)
     unavailable[0] = False
     recovered = leaderboards.build_public_leaderboard(sb, club_id="club-1", player_id=1)
-    assert recovered["badges_available"] is True
-    assert recovered["leaderboard"][0]["badge_count"] == 4
-    assert recovered["snapshot"]["badges"]
+    assert recovered["badges_available"] is False
+    assert recovered["leaderboard"][0]["badge_count"] == 0
+    assert recovered["snapshot"]["badges"] == []
 
 
 def test_optional_badge_recovery_does_not_swallow_core_player_failure():

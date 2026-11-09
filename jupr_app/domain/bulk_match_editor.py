@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 from typing import Any, Dict, List, Optional, Set, Tuple
 import json
 import logging
@@ -376,7 +378,7 @@ def apply_bulk_match_edits(
 
     badge_summary: Dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
     deferred_failures: list[dict[str, Any]] = []
-    if updated_ids and supabase is not None and badge_eligible_players:
+    if badges_enabled() and updated_ids and supabase is not None and badge_eligible_players:
         for match_id in updated_ids:
             enqueue_result = enqueue_badge_eval(
                 supabase,

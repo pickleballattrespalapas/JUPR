@@ -1,6 +1,8 @@
 """Dedicated badge process; activation is separate from deploying its code."""
 from __future__ import annotations
 
+from jupr_app.domain.gamification.badge_policy import badges_enabled
+
 import argparse
 import logging
 import logging.config
@@ -22,6 +24,8 @@ logger = logging.getLogger("jupr.badge.worker")
 
 
 def validate_worker_target(club_id: str) -> None:
+    if not badges_enabled():
+        raise ValueError("Badges are retired; the dedicated worker must remain stopped.")
     if os.getenv("JUPR_BADGE_WORKER_MODE") != "external" or not leases_enabled():
         raise ValueError("Dedicated badge worker requires external mode and queue leases.")
     if external_worker_club_id() != club_id:

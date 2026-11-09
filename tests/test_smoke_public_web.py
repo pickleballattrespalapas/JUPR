@@ -216,6 +216,15 @@ def test_web_checks_opt_in_to_vercel_bypass_without_exposing_secret(monkeypatch)
     }.issubset(urls)
 
 
+def test_retired_badge_pages_must_be_absent():
+    api = smoke._api_get_checks("https://juprleagues-api-staging.fly.dev", "tres-palapas", "tres_palapas", allow_live_unconfigured=True)
+    web = smoke._web_get_checks("https://jupr-git-staging-team.vercel.app", "tres-palapas")
+    for checks in (api, web):
+        retired = [check for check in checks if "retired badge codex" in check.name]
+        assert len(retired) == 1
+        assert retired[0].expected_statuses == (404,)
+
+
 def test_new_feature_browser_smoke_is_strictly_read_only():
     spec = (
         Path("apps/web/e2e/staging.smoke.spec.ts")
