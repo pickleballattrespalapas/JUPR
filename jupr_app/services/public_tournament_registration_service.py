@@ -33,7 +33,6 @@ from jupr_app.domain.tournament_registration_confirmation_tokens import (
     verify_registration_confirmation_token,
 )
 from jupr_app.domain.tournament_registration_repo import (
-    build_public_tournament_roster_state,
     get_public_tournament_bundle,
     get_registration_confirmation_bundle,
     get_registration_by_email,
@@ -45,6 +44,7 @@ from jupr_app.domain.tournament_registration_repo import (
     save_registration,
     stored_registration_status,
 )
+from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_projection
 from jupr_app.services.public_tournament_commerce_service import (
     build_public_tournament_commerce_catalog,
     build_public_tournament_commerce_order,
@@ -851,7 +851,7 @@ def build_public_tournament_registration_page(
     ]
     public_events.sort(key=lambda item: (item.get("registration_day_id") or "", str(item.get("event_family_label") or ""), str(item.get("division_name") or "")))
 
-    roster_state = build_public_tournament_roster_state(supabase, tournament, settings, days_raw, events_raw)
+    roster_state = build_public_tournament_roster_projection(supabase, tournament, settings, days_raw, events_raw)
     commerce = None
     if is_tournament_commerce_enabled() and registration_open:
         commerce = build_public_tournament_commerce_catalog(

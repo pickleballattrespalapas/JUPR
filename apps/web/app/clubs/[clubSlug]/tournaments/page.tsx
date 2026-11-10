@@ -363,9 +363,14 @@ export default async function PublicTournamentsPage(props: Props) {
           {selectableEvents.length}
         </article>
         <article style={cardStyle}>
-          <strong>Registrations</strong>
+          <strong>Players</strong>
           <br />
-          {data?.roster_summary?.total_registrations ?? 0}
+          {data?.roster_summary?.total_players ?? 0}
+        </article>
+        <article style={cardStyle}>
+          <strong>Individual event entries</strong>
+          <br />
+          {data?.roster_summary?.total_event_entries ?? "—"}
         </article>
         <article style={cardStyle}>
           <strong>Players needing partners</strong>

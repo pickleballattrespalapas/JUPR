@@ -4,7 +4,10 @@ import json
 from datetime import datetime, timedelta, timezone
 import pytest
 
-from jupr_app.services.public_tournament_registration_service import submit_public_tournament_registration
+from jupr_app.services.public_tournament_registration_service import (
+    build_public_tournament_registration_page,
+    submit_public_tournament_registration,
+)
 from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_page
 from jupr_app.domain.tournament_partner_service import accept_partner_request, create_partner_request
 from tests.test_public_tournament_registration_service import FakeSupabase, fake_storage
@@ -35,6 +38,12 @@ def test_accepted_guest_appears_as_pending_registration_without_becoming_a_regis
     assert roster["confirmed_teams"] == []
     assert roster["partner_board_entries"] == [] and roster["players_needing_partners"] == []
     assert payload["summary"]["total_players"] == 1 and payload["summary"]["total_registrations"] == 1
+    assert payload["summary"]["total_event_entries"] == 1
+    assert entry["members"][0]["event_entry_key"].startswith("tr_")
+    assert "event_entry_key" not in entry["members"][1]
+    home = build_public_tournament_registration_page(FakeSupabase(reserved_roster_storage), club_id="club-1", registration_slug="tres-open")
+    assert home["roster_summary"] == payload["summary"]
+    assert home["roster_summary"]["players_needing_partners"] == 0
     serialized = json.dumps(roster)
     for private in ["casey.private@example.com", "alex.private@example.com", "private-invitation", "reserved-selection", "A private message"]:
         assert private not in serialized
@@ -52,6 +61,9 @@ def test_only_current_accepted_reservations_show_on_roster(reserved_roster_stora
     payload = build_public_tournament_roster_page(FakeSupabase(reserved_roster_storage), club_id="club-1", registration_slug="tres-open")
     assert "Casey Guest" not in json.dumps(payload["roster"])
     assert payload["roster"]["registrations_by_event"][0]["status"] == "Needs Partner"
+    home = build_public_tournament_registration_page(FakeSupabase(reserved_roster_storage), club_id="club-1", registration_slug="tres-open")
+    assert home["roster_summary"] == payload["summary"]
+    assert home["roster_summary"]["players_needing_partners"] == 1
 
 
 def test_completed_registration_replaces_pending_display_with_one_confirmed_team(reserved_roster_storage):
@@ -74,6 +86,7 @@ def test_completed_registration_replaces_pending_display_with_one_confirmed_team
     assert all(not member.get("registration_pending") for member in entries[0]["members"])
     assert len(after["roster"]["confirmed_teams"]) == 1
     assert after["summary"]["total_registrations"] == 2 and after["summary"]["total_players"] == 2
+    assert after["summary"]["total_event_entries"] == 2
 
 
 @pytest.mark.parametrize("name", ["Guest guest.private@example.com", "+1 555 012 3456", ""])
@@ -98,6 +111,7 @@ def test_public_roster_counts_only_active_registrations(event_type, partner_mode
     payload = build_public_tournament_roster_page(FakeSupabase(storage), club_id="club-1", registration_slug="tres-open")
     assert payload["summary"]["total_registrations"] == 1
     assert payload["summary"]["total_players"] == 1
+    assert payload["summary"]["total_event_entries"] == 1
     assert len(payload["roster"]["registrations_by_event"]) == 1
     assert "Cancelled Player" not in json.dumps(payload["roster"])
 
