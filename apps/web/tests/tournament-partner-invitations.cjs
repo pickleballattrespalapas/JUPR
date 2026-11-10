@@ -104,6 +104,7 @@ async function main() {
     "next/navigation": { redirect: () => { throw Error("Unexpected redirect"); } },
     "@/components/PublicTournamentSponsors": { __esModule: true, default: () => null },
     "@/components/PublicTournamentModuleHeader": { __esModule: true, default: () => null },
+    "@/lib/tournamentRosterCounts": load("lib/tournamentRosterCounts.ts"),
     "@/lib/tournamentRegistrationApi": { getClubTournamentRoster: async () => ({ data: {
       tournament: { id: "fixture", name: "Fixture Tournament" }, settings: { registration_slug: "fixture-tournament" },
       summary: { total_registrations: 1, total_players: 1 },
@@ -117,7 +118,7 @@ async function main() {
   await act(async () => { renderer = create(rosterPage); });
   assert.match(content(renderer.root), /Alex Player/);
   assert.match(content(renderer.root), /Sam Sender · Pending registration/);
-  assert.match(content(renderer.root), /Showing 1 of 1 entries/);
+  assert.match(content(renderer.root), /Showing 1 of 1 individual event entries/);
   assert.ok(renderer.root.findAllByType("option").some(node => content(node) === "Pending registration"));
   await act(async () => renderer.unmount());
   console.log("Partner invitations: private form, retry identity, read-only email landing, explicit acceptance, roster confirmation and registration handoff passed.");

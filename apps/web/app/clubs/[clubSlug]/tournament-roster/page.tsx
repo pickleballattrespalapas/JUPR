@@ -2,6 +2,7 @@ import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "@/components/PublicClubLink";
 import { redirect } from "next/navigation";
 import PublicTournamentModuleHeader from "@/components/PublicTournamentModuleHeader";
+import { countIndividualEventEntries } from "@/lib/tournamentRosterCounts";
 import {
   getClubTournamentRoster,
   type PublicTournamentRosterEntry,
@@ -117,6 +118,11 @@ function memberLabel(member: PublicTournamentRosterMember): string {
     : member.display_name;
 }
 
+function playerEntryLabel(entries: PublicTournamentRosterEntry[]): string {
+  const count = countIndividualEventEntries(entries);
+  return `${count} player ${count === 1 ? "entry" : "entries"}`;
+}
+
 export default async function TournamentRosterPage(props: Props) {
   const searchParams = await props.searchParams;
   const params = await props.params;
@@ -162,6 +168,7 @@ export default async function TournamentRosterPage(props: Props) {
 
   const roster = data?.roster;
   const entries = roster?.registrations_by_event || [];
+  const totalEventEntries = data?.summary?.total_event_entries ?? countIndividualEventEntries(entries);
   const filteredEntries = entries.filter((entry) => {
     const dayOk = !selectedDay || entry.event_day_label === selectedDay;
     const eventOk = !selectedEvent || entry.event_family === selectedEvent;
@@ -243,12 +250,15 @@ export default async function TournamentRosterPage(props: Props) {
             marginTop: "1rem"
           }}
         >
-          <div><strong>Sign-ups</strong><br />{data?.summary?.total_registrations ?? 0}</div>
           <div><strong>Players</strong><br />{data?.summary?.total_players ?? 0}</div>
-          <div><strong>Total entries</strong><br />{entries.length}</div>
+          <div><strong>Individual event entries</strong><br />{totalEventEntries}</div>
           <div><strong>Looking for partners</strong><br />{data?.summary?.players_needing_partners ?? 0}</div>
           <div><strong>Registration deadline</strong><br />{dateTimeLabel(settings?.registration_close_at)}</div>
         </div>
+        <p style={{ marginBottom: 0, color: "#475569" }}>
+          Each player counts once in the tournament. Each event they enter counts separately;
+          a registered doubles pair contributes two event entries. Partners awaiting registration are not included.
+        </p>
       </article>
 
       {entries.length ? (
@@ -315,7 +325,7 @@ export default async function TournamentRosterPage(props: Props) {
             </button>
             <Link href={`/clubs/${params.clubSlug}/tournament-roster${queryPrefix}`}>Clear filters</Link>
             <span aria-live="polite" style={{ color: "#475569" }}>
-              Showing {filteredEntries.length} of {entries.length} entries.
+              Showing {countIndividualEventEntries(filteredEntries)} of {totalEventEntries} individual event entries.
             </span>
           </div>
         </form>
@@ -336,7 +346,7 @@ export default async function TournamentRosterPage(props: Props) {
               >
                 <h2 style={{ margin: 0 }}>{label}</h2>
                 <span style={{ color: "#64748b" }}>
-                  {rows.length === 1 ? "1 entry" : `${rows.length} entries`}
+                  {playerEntryLabel(rows)}
                 </span>
               </div>
               <div
