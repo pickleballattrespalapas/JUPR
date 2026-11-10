@@ -11,6 +11,7 @@ export type MoneyballExpectationFormat = {
   targetScore?: number;
   modelNote?: string;
   conversionNote?: string;
+  scoringSummary?: string;
 };
 
 function signed(value: number): string {
@@ -48,7 +49,7 @@ export default function GeneratorMoneyballExpectations({ rows, locked = false, f
           </table>
         </div>
         <p>These are averages, so decimals are normal. For example, 2.6 expected wins means 3 wins would beat your win expectation.</p>
-        <p style={{ marginBottom: 0 }}>Moneyball ranks your point performance against expectations. Wins are a guide, with no separate win bonus. Point difference is points scored minus points conceded; a higher result is better, even if it is still negative. Beating an expectation does not guarantee the prize.</p>
+        <p style={{ marginBottom: 0 }}>{format?.scoringSummary || "Moneyball ranks your point performance against expectations. Wins are a guide, with no separate win bonus."} Point difference is points scored minus points conceded; a higher result is better, even if it is still negative. Beating an expectation does not guarantee the prize.</p>
       </> : <p style={{ marginBottom: 0 }}>Generate a new preview to see each player’s full-event expectations.</p>}
     </section>
   );

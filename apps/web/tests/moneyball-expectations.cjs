@@ -36,6 +36,7 @@ const Expectations = load("@/components/GeneratorMoneyballExpectations").default
 const text = node => typeof node === "string" ? node : (node?.children || []).map(text).join("");
 const button = (tree,label) => tree.root.findAllByType("button").find(node => text(node) === label);
 const reply = body => ({ok:true,status:200,json:async()=>body});
+const scoringSummary = "Your score combines 70% win performance and 30% point-differential performance against expectations, balanced before play for this lineup.";
 (async () => {
   for (const Workspace of [PublicWorkspace,AdminWorkspace]) {
     for (const [playerCount, roundCount, games] of [[8, 7, 7], [6, 6, 4], [6, 9, 6]]) {
@@ -51,7 +52,7 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
       if (url.includes("/players?")) return reply({players});
       if (!options.body) return reply({sessions:[]});
       calls.push(JSON.parse(options.body));
-      return reply({preview:{generatorKind:"round_robin",playFormat:"doubles",eventFormat:"moneyball_expectations",name:"Moneyball",totalRounds:roundCount,courtCount:playerCount === 6 ? 1 : 2,participants:[],rounds:[],previewFingerprint:"frozen",moneyballExpectations:expectations}});
+      return reply({preview:{generatorKind:"round_robin",playFormat:"doubles",eventFormat:"moneyball_expectations",name:"Moneyball",totalRounds:roundCount,courtCount:playerCount === 6 ? 1 : 2,participants:[],rounds:[],previewFingerprint:"frozen",moneyball:{scoringSummary},moneyballExpectations:expectations}});
     };
     let tree;
     await act(async()=>{tree=create(React.createElement(Workspace,{apiBase:"https://api.test",clubId:"club",generatorKind:"round_robin",status:{enabled:true,writes_enabled:true}}));});
@@ -96,7 +97,8 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
     assert.ok(expectationText.includes("full event") && expectationText.includes("Expected losses"));
     assert.ok(expectationText.includes("2.63") && expectationText.includes((games-2.63).toFixed(2)));
     assert.ok(expectationText.includes("-11.88") && expectationText.includes("+11.88"));
-    assert.ok(expectationText.includes("3 wins would beat your win expectation") && expectationText.includes("no separate win bonus"));
+    assert.ok(expectationText.includes("3 wins would beat your win expectation") && expectationText.includes(scoringSummary));
+    assert.ok(!expectationText.includes("no separate win bonus"));
     const expectationRows = expectationSection.findByType("tbody").findAllByType("tr");
     assert.equal(expectationRows.length, playerCount);
     for (let i = 0; i < playerCount; i++) {
@@ -143,6 +145,10 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
   const body=JSON.stringify(tree.toJSON());
   assert.ok(body.includes("54.25") && body.includes("Expected wins") && body.includes("Expected point diff."));
   assert.ok(!body.includes("Prize") && !body.includes("starting order"));
+  assert.ok(body.includes("no separate win bonus")); // Previously frozen events retain their original explanation.
+  await act(async()=>tree.update(React.createElement(Table,{rows:rows.map(row=>({...row,moneyballScoringSummary:scoringSummary})),sortMode:"moneyball_expectations"})));
+  assert.ok(text(tree.toJSON()).includes(scoringSummary));
+  assert.ok(!text(tree.toJSON()).includes("no separate win bonus"));
   await act(async()=>{tree=create(React.createElement(Pool,{value:{entryFeeMxn:100,prizePoolMxn:800,completedGames:14,totalGames:14,final:true,winners:[{participantId:"p-1",name:"Example",payoutMxn:800}]}}));});
   assert.ok(JSON.stringify(tree.toJSON()).includes("Example: 800.00 pesos"));
   console.log("Moneyball: public/staff full-event preview expectations, six- and nine-round rotations, restored drafts, standard-format isolation, format selection, live standings and settlement passed.");
