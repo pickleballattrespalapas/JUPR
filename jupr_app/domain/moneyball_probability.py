@@ -7,6 +7,43 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+WINS_WEIGHTED_VERSION = 'fair-moneyball-event-v3'
+WINS_WEIGHTED_SCORING = {
+    'method': 'wins_margin_percentile_blend', 'wins_weight': .7, 'margin_weight': .3,
+}
+
+
+def scoring_weights(lock):
+    """Dispatch from the frozen version; never reinterpret a previously played event."""
+    version = lock['version']
+    if version in {'fair-moneyball-event-v1', 'fair-moneyball-event-v2'}:
+        if 'scoring' in lock:
+            raise ValueError('Legacy Moneyball cannot contain a new scoring formula.')
+        return None
+    scoring = lock.get('scoring', {})
+    if (version != WINS_WEIGHTED_VERSION or not isinstance(scoring, dict)
+            or scoring.get('method') != 'wins_margin_percentile_blend'):
+        raise ValueError('Unsupported frozen Moneyball scoring formula.')
+    win, margin = scoring.get('wins_weight'), scoring.get('margin_weight')
+    if (type(win) not in (int, float) or type(margin) not in (int, float)
+            or not 0 < margin < win < 1 or not math.isclose(win+margin, 1, abs_tol=1e-12)):
+        raise ValueError('Invalid frozen Moneyball scoring weights.')
+    return scoring
+
+
+def blended_percentile(margin_percentile, win_percentile, scoring):
+    if scoring is None:
+        return margin_percentile
+    return scoring['wins_weight']*win_percentile + scoring['margin_weight']*margin_percentile
+
+
+def scoring_summary(lock):
+    scoring = scoring_weights(lock)
+    if scoring is None:
+        return None
+    return (f"Your score combines {scoring['wins_weight']:.0%} win performance and "
+            f"{scoring['margin_weight']:.0%} point-differential performance against expectations, "
+            "balanced before play for this lineup.")
 
 
 def read_json(path):
@@ -179,7 +216,19 @@ def distributions(config,model):
     return a,support,probabilities,np.array(percentiles),np.array(pmfs),expected_pd
 
 
-def simulate(a,support,probabilities,percentiles,number,seed):
+def win_distributions(a, support, probabilities):
+    """Exact Poisson-binomial midpoint percentiles from each scheduled matchup."""
+    percentiles = []
+    for i in range(a.shape[1]):
+        pmf = np.array([1.])
+        for j in np.flatnonzero(a[:, i]):
+            chance = float(probabilities[j, support*a[j, i] > 0].sum())
+            pmf = np.convolve(pmf, [1-chance, chance])
+        percentiles.append(np.cumsum(pmf)-.5*pmf)
+    return np.array(percentiles)
+
+
+def simulate(a,support,probabilities,percentiles,number,seed, *, win_percentiles=None, scoring=None):
     rng = seed if isinstance(seed,np.random.Generator) else np.random.default_rng(seed)
     count = a.shape[1]
     totals = np.zeros((number,count),dtype=np.int16)
@@ -195,6 +244,8 @@ def simulate(a,support,probabilities,percentiles,number,seed):
     u = np.empty((number,count))
     for i in range(count):
         u[:,i] = percentiles[i,totals[:,i]+int(np.max(np.abs(support)))*np.count_nonzero(a[:,i])]
+        if scoring is not None:
+            u[:,i] = blended_percentile(u[:,i], win_percentiles[i,wins[:,i]], scoring)
     clipped = np.clip(u,1e-12,1-1e-12)
     z = np.log(clipped)-np.log1p(-clipped)
     return totals,wins,u,z
@@ -206,22 +257,29 @@ def winning_shares(scores):
     return np.mean(tied/tied.sum(axis=1)[:,None],axis=0)
 
 
-def balance(z,tolerance=.001,max_iterations=100):
+def balance(z,tolerance=.001,max_iterations=150):
     count = z.shape[1]
     target = 1/count
     offsets = np.zeros(count)
+    best_offsets = offsets.copy()
+    best_error = float('inf')
     history = []
     for iteration in range(max_iterations):
         chances = winning_shares(z+offsets)
         error = float(np.max(np.abs(chances-target)))
         history.append({'iteration':iteration,'max_first_place_deviation':error})
+        if error < best_error:
+            best_error, best_offsets = error, offsets.copy()
         if error <= tolerance:
             break
         # Inputs are simulated before scoring; adjustments never look at played results.
-        gain = (3.0 if iteration < 50 else 1.5)*count/8
+        # Win counts are discrete. Coarse updates can oscillate across a large
+        # probability mass in small groups; refine gently and retain the best
+        # calibration-only result. Independent audit outcomes never tune this.
+        gain = (3.0 if iteration < 50 else .2)*count/8
         offsets += gain*(target-chances)
         offsets -= offsets.mean()
-    return offsets,history
+    return best_offsets,history
 
 
 def public_chances(players,chances,simulations):
@@ -236,13 +294,15 @@ def prepare(event,model,calibration_sims=200000,audit_sims=300000,seed=202610140
     if config.get('goal_points', 11) != model['goal_points']:
         raise ValueError('The scoring model must match the event target score.')
     a,support,p,pct,pmfs,expected_pd = distributions(config,model)
+    win_pct = win_distributions(a, support, p)
+    scoring = dict(WINS_WEIGHTED_SCORING)
     count = len(config['players'])
     batch_size = 20000
     rng = np.random.default_rng(seed)
     z = np.empty((calibration_sims,count))
     for start in range(0,calibration_sims,batch_size):
         size = min(batch_size,calibration_sims-start)
-        z[start:start+size] = simulate(a,support,p,pct,size,rng)[3]
+        z[start:start+size] = simulate(a,support,p,pct,size,rng,win_percentiles=win_pct,scoring=scoring)[3]
     offsets,history = balance(z)
     base_chances = winning_shares(z)
     train_chances = winning_shares(z+offsets)
@@ -252,12 +312,13 @@ def prepare(event,model,calibration_sims=200000,audit_sims=300000,seed=202610140
     rng = np.random.default_rng(seed+1)
     for start in range(0,audit_sims,batch_size):
         size = min(batch_size,audit_sims-start)
-        totals,_,_,z = simulate(a,support,p,pct,size,rng)
+        totals,_,_,z = simulate(a,support,p,pct,size,rng,win_percentiles=win_pct,scoring=scoring)
         audit_chances += winning_shares(z+offsets)*size/audit_sims
         points_chances += winning_shares(totals-expected_pd)*size/audit_sims
     max_error = float(np.max(np.abs(audit_chances-1/count)))
     lock = {
-        'version':'fair-moneyball-event-v2','config':config,'config_sha256':digest(config),'model_sha256':digest(model),'model':model,
+        'version':WINS_WEIGHTED_VERSION,'scoring':scoring,'player_win_percentiles':win_pct.tolist(),
+        'config':config,'config_sha256':digest(config),'model_sha256':digest(model),'model':model,
         'seed':seed,'margin_probabilities':p.tolist(),'player_total_margin_pmf':pmfs.tolist(),
         'player_percentiles':pct.tolist(),'balance_logit_offsets':offsets.tolist(),'expected_point_differentials':expected_pd.tolist(),
         'entry_fee_mxn':100,'prizes_mxn':[100*count],
@@ -287,6 +348,7 @@ def score(event,lock):
         raise ValueError('This setup did not pass its simulation fairness check; do not use it as a balanced event.')
     if digest(canonical_config(event)) != lock['config_sha256']:
         raise ValueError('Players, ratings or schedule changed after setup was frozen.')
+    scoring = scoring_weights(lock)
     ids = [p['id'] for p in lock['config']['players']]
     index = {pid:i for i,pid in enumerate(ids)}
     count = len(ids)
@@ -321,6 +383,8 @@ def score(event,lock):
             expected_wins[index[pid]]+=1-team1_win_probability[j]
     for i,p in enumerate(lock['config']['players']):
         u=float(percentiles[i,totals[i]+goal*games[i]])
+        if scoring is not None:
+            u=blended_percentile(u,lock['player_win_percentiles'][i][wins[i]],scoring)
         u=float(np.clip(u,1e-12,1-1e-12))
         z=np.log(u)-np.log1p(-u)+lock['balance_logit_offsets'][i]
         fair_score=float(100/(1+np.exp(-z)))
@@ -348,7 +412,7 @@ def score(event,lock):
     if drift:
         rows[0]['prize_mxn']=round(rows[0]['prize_mxn']+drift,2)
         rows[0]['net_after_entry_mxn']=round(rows[0]['prize_mxn']-lock['entry_fee_mxn'],2)
-    return {'event_name':event['name'],'method':'Fair Play Moneyball v1','entry_fee_mxn':100,'prize_pool_mxn':sum(lock['prizes_mxn']),
+    return {'event_name':event['name'],'method':'Wins-weighted Moneyball v3' if scoring else 'Fair Play Moneyball v1','entry_fee_mxn':100,'prize_pool_mxn':sum(lock['prizes_mxn']),
             'standings':rows,'fairness':lock['fairness'],'holdout_validation':lock['model']['validation'],
             'setup_lock_sha256':lock['lock_sha256'],'experimental':True,'individual_ratings_displayed':False}
 

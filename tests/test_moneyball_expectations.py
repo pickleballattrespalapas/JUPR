@@ -1,6 +1,7 @@
 from collections import Counter
 from copy import deepcopy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -500,3 +501,134 @@ def test_six_player_rotation_choice_changes_the_frozen_preview(six_frozen, six_n
     assert six_nine_frozen["rounds"][:6] == six_frozen["rounds"]
     assert six_nine_frozen["previewFingerprint"] != six_frozen["previewFingerprint"]
     assert six_nine_frozen["moneyballPrivate"]["lock_sha256"] != six_frozen["moneyballPrivate"]["lock_sha256"]
+
+
+def test_legacy_frozen_results_and_payout_are_unchanged():
+    fixture = json.loads(Path(__file__).with_name("fixtures").joinpath("moneyball_v2_frozen.json").read_text())
+    event = fixture["event"]
+    before = deepcopy(event)
+    expected_rows = deepcopy(fixture["standings"])
+    # Python 3.12 improved sum() rounding. Only expectation totals may differ
+    # at machine precision; scores, ranks, results, and payouts remain exact.
+    for row in expected_rows:
+        for field in ("expectedWins", "expectedDifferential"):
+            row[field] = pytest.approx(row[field], abs=1e-12, rel=0)
+    rows = generator_event_standings(event)
+    assert rows == expected_rows
+    assert settlement(event, rows) == fixture["settlement"]
+    assert event == before
+    assert "scoringSummary" not in public_event(event)["moneyball"]
+    # An old, unfinished session also stays on its frozen points-only formula.
+    event["status"] = "active"
+    event["rounds"][-1]["status"] = "preview"
+    interim = generator_event_standings(event)
+    assert all(not row["moneyballFinal"] and "moneyballScoringSummary" not in row for row in interim)
+    event["rounds"][-1]["status"] = "saved"
+    event["status"] = "completed"
+    assert generator_event_standings(event) == expected_rows
+
+
+def test_new_formula_prefers_winning_games_over_fewer_blowout_wins():
+    event = preview(title="Wins priority")
+    event = freeze_moneyball(event, {p["id"]: 3.5 for p in event["participants"]})
+    assert event["moneyballPrivate"]["version"] == "fair-moneyball-event-v3"
+    assert event["moneyballPrivate"]["scoring"] == {
+        "method": "wins_margin_percentile_blend", "wins_weight": .7, "margin_weight": .3,
+    }
+    event = start_generator_event(event)
+    scores = iter([(11, 0), (6, 11), (11, 3), (11, 2), (11, 3), (7, 11), (11, 0),
+                   (8, 11), (11, 0), (8, 11), (11, 7), (6, 11), (11, 7), (8, 11)])
+    for row in event["rounds"]:
+        round_scores = []
+        for match in row["matches"]:
+            a, b = next(scores)
+            round_scores.append({"match_id": match["id"], "score_a": a, "score_b": b})
+        event = save_generator_round(event, round_number=row["number"], scores=round_scores)
+    event = complete_generator_event(event)
+    rows = generator_event_standings(event)
+    assert (rows[0]["name"], rows[0]["wins"], rows[0]["differential"]) == ("Player 3", 6, 19)
+    assert (rows[1]["name"], rows[1]["wins"], rows[1]["differential"]) == ("Player 0", 5, 42)
+    assert settlement(event, rows)["winners"][0]["name"] == "Player 3"
+    assert all(row["moneyballScoringSummary"] == public_event(event)["moneyball"]["scoringSummary"] for row in rows)
+    assert "70% win performance" in rows[0]["moneyballScoringSummary"]
+    # An extra point in a loss still improves the player's score without a win.
+    first = event["rounds"][0]
+    loser = first["matches"][0]["sideB"][0]
+    corrected = save_generator_round(event, round_number=1, scores=[
+        {"match_id": first["matches"][0]["id"], "score_a": 11, "score_b": 1},
+        {"match_id": first["matches"][1]["id"], "score_a": 6, "score_b": 11},
+    ])
+    before = next(row for row in rows if row["participantId"] == loser)
+    after = next(row for row in generator_event_standings(corrected) if row["participantId"] == loser)
+    assert after["wins"] == before["wins"]
+    assert after["moneyballScore"] > before["moneyballScore"]
+    assert corrected["moneyballPrivate"] == event["moneyballPrivate"]
+
+
+def test_exact_win_distribution_for_unequal_matchups():
+    # Three independent games with win chances .2, .5, .8 have masses
+    # [.08, .42, .42, .08] for 0, 1, 2, 3 wins, including for the opponents.
+    a = np.array([[1, -1], [1, -1], [1, -1]])
+    support = np.array([-2, 2])
+    probabilities = np.array([[.8, .2], [.5, .5], [.2, .8]])
+    actual = moneyball_probability.win_distributions(a, support, probabilities)
+    assert actual == pytest.approx(np.array([[.04, .29, .71, .96]] * 2))
+
+
+def test_simulation_and_final_scorer_use_identical_joint_outcomes(frozen):
+    lock = frozen["moneyballPrivate"]
+    config, model = lock["config"], lock["model"]
+    a, support, probabilities, pct, _, _ = moneyball_probability.distributions(config, model)
+    number, seed = 20, 9823
+    totals, wins, _, z = moneyball_probability.simulate(
+        a, support, probabilities, pct, number, seed,
+        win_percentiles=np.array(lock["player_win_percentiles"]), scoring=lock["scoring"])
+    # Reconstruct the sampled shared game outcomes independently, then feed
+    # completed scores through the actual event scorer.
+    rng = np.random.default_rng(seed)
+    margins = []
+    for probabilities_for_match in probabilities:
+        cdf = np.cumsum(probabilities_for_match)
+        cdf[-1] = 1
+        margins.append(support[np.searchsorted(cdf, rng.random(number), side="right")])
+    for sample in range(number):
+        played = deepcopy(config)
+        for j, match in enumerate(played["matches"]):
+            margin = int(margins[j][sample])
+            match.update(score1=11 if margin > 0 else 11+margin,
+                         score2=11-margin if margin > 0 else 11)
+        rows = {r["player_id"]: r for r in moneyball_probability.score(played, lock)["standings"]}
+        for i, player in enumerate(config["players"]):
+            row = rows[player["id"]]
+            assert row["wins"] == wins[sample, i]
+            assert row["actual_point_differential"] == totals[sample, i]
+            assert row["moneyball_score"] == pytest.approx(100/(1+np.exp(-z[sample, i]-lock["balance_logit_offsets"][i])))
+
+
+@pytest.mark.parametrize("version,scoring", [
+    ("fair-moneyball-event-v99", None), ("fair-moneyball-event-v3", None),
+    ("fair-moneyball-event-v3", {"method": "wins_margin_percentile_blend", "wins_weight": .3, "margin_weight": .7}),
+    ("fair-moneyball-event-v2", {"method": "wins_margin_percentile_blend", "wins_weight": .7, "margin_weight": .3}),
+])
+def test_invalid_scoring_versions_fail_closed(frozen, version, scoring):
+    event = deepcopy(frozen)
+    lock = event["moneyballPrivate"]
+    lock["version"] = version
+    lock.pop("scoring", None)
+    if scoring is not None:
+        lock["scoring"] = scoring
+    lock.pop("lock_sha256")
+    lock["lock_sha256"] = moneyball_probability.digest(lock)
+    with pytest.raises(ValueError, match="scoring"):
+        generator_event_standings(event)
+
+
+@pytest.mark.parametrize("target", [11, 15])
+def test_wide_rating_four_player_groups_pass_independent_balance_audit(target):
+    event = preview(participant_names=[f"Player {i}" for i in range(4)],
+                    player_ids=[1, 2, 3, 4], total_rounds=3)
+    frozen = freeze_moneyball(event, {p["id"]: 3+2*i/3 for i, p in enumerate(event["participants"])}, target_score=target)
+    audit = frozen["moneyballPrivate"]["fairness"]
+    assert audit["audit_simulations"] == 1000000
+    assert audit["max_audit_deviation_percentage_points"] <= .5
+    assert audit["simulation_fairness_check_passed"]
