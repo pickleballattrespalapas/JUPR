@@ -8,7 +8,7 @@ import Link from "@/components/PublicClubLink";
 import { useRouter } from "next/navigation";
 import { useAdminSession } from "@/lib/useAdminSession";
 import GeneratorRosterSetup, { normalizeRosterName, recommendedGeneratorSetup, recommendedMixedCourtSetup, rosterNamesFromText } from "@/components/GeneratorRosterSetup";
-import GeneratorMoneyballExpectations, { type MoneyballExpectation } from "@/components/GeneratorMoneyballExpectations";
+import GeneratorMoneyballExpectations, { type MoneyballExpectation, type MoneyballExpectationFormat } from "@/components/GeneratorMoneyballExpectations";
 import {
   clearPlayGeneratorDraft,
   closePreparedPdfWindow,
@@ -73,6 +73,7 @@ type PreviewEvent = {
   participants: Participant[];
   rounds: RoundRow[];
   moneyballExpectations?: MoneyballExpectation[];
+  moneyball?: MoneyballExpectationFormat;
 };
 
 type PreviewResponse = {
@@ -946,7 +947,7 @@ export default function GeneratorWorkspace({
             ) : null}
           </div>
 
-          {moneyball ? <GeneratorMoneyballExpectations rows={preview.moneyballExpectations} /> : null}
+          {moneyball ? <GeneratorMoneyballExpectations rows={preview.moneyballExpectations} format={preview.moneyball} /> : null}
 
           <div style={{ display: "grid", gap: "0.85rem" }}>
             {preview.rounds.map((round) => {
