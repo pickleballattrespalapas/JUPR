@@ -4039,7 +4039,9 @@ def build_public_tournament_roster_state(
     unresolved_partner_entries: list[dict[str, Any]] = []
     players_needing_partners: list[dict[str, Any]] = []
     partner_board_entries: list[dict[str, Any]] = []
-    unique_players: set[str] = set()
+    unique_players: set[tuple[str, str]] = set()
+    individual_event_entries: dict[tuple[str, tuple[str, str]], str] = {}
+    waitlisted_event_entries: set[str] = set()
     public_board_enabled = _coerce_bool(
         (state.get("settings") or settings or {}).get("partner_board_enabled", False)
     )
@@ -4081,16 +4083,29 @@ def build_public_tournament_roster_state(
             for index, member in enumerate(source_members):
                 identity = next(
                     (
-                        str(member.get(field) or "").strip()
+                        (field, str(member.get(field) or "").strip())
                         for field in ("player_id", "registration_id", "selection_id")
                         if str(member.get(field) or "").strip()
                     ),
-                    "",
+                    ("name", str(members[index].get("display_name") or "").strip().lower()),
                 )
-                if not identity:
-                    identity = str(members[index].get("display_name") or "").strip().lower()
-                if identity:
+                if identity[1]:
                     unique_players.add(identity)
+                    # A player may appear in both a pending pairing and their
+                    # individual row. Count that player once per event, while
+                    # still counting them again in every other event they enter.
+                    event_identity = (event_option_id, identity)
+                    if event_identity not in individual_event_entries:
+                        source = member.get("selection_id") or member.get("registration_id") or "|".join(identity)
+                        individual_event_entries[event_identity] = build_public_tournament_reference(
+                            tournament_id=str(tournament.get("id") or ""),
+                            namespace="roster-player-event",
+                            source_id=f"{event_option_id}|{source}",
+                        )
+                    event_entry_key = individual_event_entries[event_identity]
+                    members[index]["event_entry_key"] = event_entry_key
+                    if str(entry.get("status") or "").upper() == "WAITLIST":
+                        waitlisted_event_entries.add(event_entry_key)
 
             status = str(entry.get("status") or "").upper()
             selection_ids = sorted(
@@ -4185,9 +4200,10 @@ def build_public_tournament_roster_state(
         "summary": {
             "total_registrations": int(state.get("summary", {}).get("active_registrations", state.get("summary", {}).get("total_registrations")) or 0),
             "total_players": len(unique_players),
+            "total_event_entries": len(individual_event_entries),
             "players_needing_partners": len(unique_partner_player_keys),
             "partner_board_entries": len(partner_board_entries),
-            "waitlist": int(state.get("summary", {}).get("waitlist_entries") or 0),
+            "waitlist": len(waitlisted_event_entries),
         },
     }
 

@@ -6,6 +6,44 @@ from jupr_app.domain import tournament_registration_repo as repo
 from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 
 
+@pytest.mark.parametrize("team_size", [1, 2, 4])
+def test_counts_individual_players_and_event_entries_without_counting_repeated_rows(monkeypatch, team_size):
+    members = [
+        {"player_id": index + 1, "registration_id": f"reg-{index}",
+         "selection_id": f"private-selection-{index}", "display_name": "Alex Lee"}
+        for index in range(team_size)
+    ]
+    first_event = {
+        "event_option_id": "event-one",
+        "entries": [
+            {"status": "WAITLIST", "entry_type": "confirmed_team", "members": members},
+            # Pending requests can also show a player's individual selection.
+            {"status": "PENDING_PARTNER_REQUEST", "members": [members[0]]},
+        ],
+    }
+    second_event = {
+        "event_option_id": "event-two",
+        "entries": [{"status": "CONFIRMED", "members": [
+            {**members[0], "selection_id": "private-other-event-selection"},
+        ]}],
+    }
+    monkeypatch.setattr(repo, "build_registration_state", lambda *_: {
+        "event_rosters": [first_event, second_event],
+        "summary": {"active_registrations": team_size},
+    })
+
+    result = repo.build_public_tournament_roster_state(None, {"id": "test"}, {}, [], [])
+    assert result["summary"]["total_players"] == team_size, "Distinct people can share a display name"
+    assert result["summary"]["total_event_entries"] == team_size + 1
+    assert result["summary"]["waitlist"] == team_size
+    team, repeated, other_event = result["registrations_by_event"]
+    assert team["members"][0]["event_entry_key"] == repeated["members"][0]["event_entry_key"]
+    assert team["members"][0]["event_entry_key"] != other_event["members"][0]["event_entry_key"]
+    serialized = json.dumps(result)
+    assert "private-selection" not in serialized
+    assert "private-other-event-selection" not in serialized
+
+
 @pytest.mark.parametrize(
     ("mode", "entry_type", "skills", "expected"),
     [
@@ -234,18 +272,21 @@ def test_partner_board_player_identity_groups_divisions_without_merging_same_nam
                 "selection_id": "sel-primary-womens",
                 "registration_id": "reg-alex-primary",
                 "event_option_id": "event-womens",
+                "show_on_partner_board": True,
                 "note": "Prefer the left side",
             },
             {
                 "selection_id": "sel-primary-mixed",
                 "registration_id": "reg-alex-primary",
                 "event_option_id": "event-mixed",
+                "show_on_partner_board": True,
                 "note": "Available Saturday afternoon",
             },
             {
                 "selection_id": "sel-distinct-womens",
                 "registration_id": "reg-alex-distinct",
                 "event_option_id": "event-womens",
+                "show_on_partner_board": True,
                 "note": "Prefer the right side",
             },
         ],
@@ -373,6 +414,7 @@ def test_partner_board_note_never_falls_back_to_private_roster_or_registration_n
             "selection_id": "sel-1",
             "registration_id": "reg-1",
             "event_option_id": "event-1",
+            "show_on_partner_board": True,
             **({"note": partner_note} if partner_note is not None else {}),
         }],
         "event_rosters": [{
@@ -434,7 +476,12 @@ def test_public_roster_null_state_and_email_fallback_fail_closed(monkeypatch):
     row = state["registrations_by_event"][0]
 
     assert row["status"] == "Review"
-    assert row["members"] == [{"display_name": "Player", "skill": None, "age_bracket": "30-39"}]
+    assert row["members"] == [{
+        "display_name": "Player", "skill": None, "age_bracket": "30-39",
+        "event_entry_key": build_public_tournament_reference(
+            tournament_id="t-1", namespace="roster-player-event", source_id="event-1|player_id|99",
+        ),
+    }]
     assert row["public_entry_key"].startswith("tr_")
     assert "source_selection_ids" not in row
     assert "registration_id" not in row["members"][0]
@@ -460,8 +507,8 @@ def test_partner_board_projection_requires_display_and_contact_consent(monkeypat
             {"id": "reg-private", "wants_partner_board_contact": False, "status": "CONFIRMED"},
         ],
         "partner_board": [
-            {"selection_id": "sel-visible", "registration_id": "reg-visible", "event_option_id": "event-1"},
-            {"selection_id": "sel-private", "registration_id": "reg-private", "event_option_id": "event-1"},
+            {"selection_id": "sel-visible", "registration_id": "reg-visible", "event_option_id": "event-1", "show_on_partner_board": True},
+            {"selection_id": "sel-private", "registration_id": "reg-private", "event_option_id": "event-1", "show_on_partner_board": True},
         ],
         "event_rosters": [
             {

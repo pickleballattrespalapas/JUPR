@@ -8,7 +8,7 @@ This document tracks the public Tournament Roster migration from Streamlit to Ne
 - Next route: `/clubs/[clubSlug]/tournament-roster`.
 - Query support matching registration pages: `registration_slug` / `tournament` and `tournament_id`.
 - Public-safe roster projection using the existing Python tournament registration roster compiler.
-- Public-safe summary cards for registrations, players, waitlist, and players needing partners.
+- Public-safe summary cards for individual players, individual event entries, and players needing partners.
 - Grouped roster entries by day/event/division.
 - Day, event, division, and status filters with shareable query strings and row anchors.
 - Explicit `Registered`, `Waitlist`, `Needs Partner`, `Pending Partner Request`, `Pending Registration`, and fail-closed `Review` labels.
@@ -17,6 +17,14 @@ This document tracks the public Tournament Roster migration from Streamlit to Ne
 - Public-safe “players looking for partners” visibility.
 - Public-safe skill and age-bracket metadata plus direct partner-board deep links.
 - Read-only partner-board page at `/clubs/[clubSlug]/tournament-partner-board`, backed by the same public-safe projection.
+
+## Public count definitions
+
+Players counts each registered player identity once across the tournament. Individual event entries counts that identity once in each event entered: a doubles pair contributes two entries, and a four-player team contributes four. Repeated roster rows for a pending pairing do not add entries. Cancelled registrations and guests awaiting registration are excluded. Distinct player profiles are not merged by display name.
+
+The tournament home, roster summary, filtered result count, and division headers use these individual counts even when the roster displays team cards. The API exposes `total_event_entries` and opaque member `event_entry_key` references so filtered counts follow the same deduplication rule without exposing private IDs. Waitlist totals also count individual event entries.
+
+The home, roster, and partner board share the accepted-reservation projection. An unexpired accepted guest reservation removes the registered player from the available-partner count, without adding the guest to player or event-entry totals.
 
 ## Data safety
 
