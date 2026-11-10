@@ -507,8 +507,14 @@ def test_legacy_frozen_results_and_payout_are_unchanged():
     fixture = json.loads(Path(__file__).with_name("fixtures").joinpath("moneyball_v2_frozen.json").read_text())
     event = fixture["event"]
     before = deepcopy(event)
+    expected_rows = deepcopy(fixture["standings"])
+    # Python 3.12 improved sum() rounding. Only expectation totals may differ
+    # at machine precision; scores, ranks, results, and payouts remain exact.
+    for row in expected_rows:
+        for field in ("expectedWins", "expectedDifferential"):
+            row[field] = pytest.approx(row[field], abs=1e-12, rel=0)
     rows = generator_event_standings(event)
-    assert rows == fixture["standings"]
+    assert rows == expected_rows
     assert settlement(event, rows) == fixture["settlement"]
     assert event == before
     assert "scoringSummary" not in public_event(event)["moneyball"]
@@ -519,7 +525,7 @@ def test_legacy_frozen_results_and_payout_are_unchanged():
     assert all(not row["moneyballFinal"] and "moneyballScoringSummary" not in row for row in interim)
     event["rounds"][-1]["status"] = "saved"
     event["status"] = "completed"
-    assert generator_event_standings(event) == fixture["standings"]
+    assert generator_event_standings(event) == expected_rows
 
 
 def test_new_formula_prefers_winning_games_over_fewer_blowout_wins():
