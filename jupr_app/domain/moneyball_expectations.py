@@ -77,6 +77,9 @@ def freeze_moneyball(event: dict[str, Any], ratings: dict[str, float], *, target
         "ratingsFrozen": True, "experimental": True,
         "tiePolicy": "Tied winners split the pool.",
     }
+    summary = probability.scoring_summary(lock)
+    if summary:
+        event["moneyball"]["scoringSummary"] = summary
     if target_score == 15:
         event["moneyball"]["modelNote"] = (
             "Games to 15 use an experimental extension of the 11-point expectation model. "
@@ -160,6 +163,7 @@ def _verified_lock(event: dict[str, Any]) -> dict[str, Any]:
     supplied = verified.pop("lock_sha256", None)
     if probability.digest(verified) != supplied or not lock["fairness"]["simulation_fairness_check_passed"]:
         raise ValueError("The frozen Moneyball setup changed. Start a new event.")
+    probability.scoring_weights(lock)
     ratings = {p["id"]: p["rating"] for p in lock["config"]["players"]}
     try:
         current = config_from_event(event, ratings)
@@ -204,6 +208,8 @@ def all_games_saved(event: dict[str, Any]) -> bool:
 
 def standings(event: dict[str, Any]) -> list[dict[str, Any]]:
     lock = _verified_lock(event)
+    scoring = probability.scoring_weights(lock)
+    summary = probability.scoring_summary(lock)
     config, model = lock["config"], lock["model"]
     support = np.array(model["margin_support"], dtype=int)
     bound = int(np.max(np.abs(support)))
@@ -220,6 +226,9 @@ def standings(event: dict[str, Any]) -> list[dict[str, Any]]:
                "moneyballScore": None, "moneyballFinal": final, "standingsSort": FORMAT,
                "moneyballEligible": pid not in disqualified}
         pmf = np.array([1.])
+        win_pmf = np.array([1.])
+        if summary:
+            row["moneyballScoringSummary"] = summary
         for j, frozen in enumerate(config["matches"]):
             r, m = matches[frozen["id"]]
             if r.get("status") != "saved" or pid not in m["sideA"]+m["sideB"]:
@@ -235,14 +244,21 @@ def standings(event: dict[str, Any]) -> list[dict[str, Any]]:
             row["pointsAgainst"] += conceded
             row["differential"] += scored-conceded
             p = probabilities[j]
-            row["expectedWins"] += float(p[support*sign > 0].sum())
+            win_chance = float(p[support*sign > 0].sum())
+            row["expectedWins"] += win_chance
+            if scoring is not None:
+                win_pmf = np.convolve(win_pmf, [1-win_chance, win_chance])
             row["expectedDifferential"] += float(p @ support)*sign
             single = np.zeros(2*bound+1)
             single[support*sign+bound] = p
             pmf = np.convolve(pmf, single)
         if row["matches"] and row["moneyballEligible"]:
             position = row["differential"]+bound*row["matches"]
-            u = float(np.clip(pmf[:position].sum()+.5*pmf[position], 1e-12, 1-1e-12))
+            u = float(pmf[:position].sum()+.5*pmf[position])
+            if scoring is not None:
+                win_u = float(win_pmf[:row["wins"]].sum()+.5*win_pmf[row["wins"]])
+                u = probability.blended_percentile(u, win_u, scoring)
+            u = float(np.clip(u, 1e-12, 1-1e-12))
             z = math.log(u)-math.log1p(-u)+lock["balance_logit_offsets"][i]
             row["moneyballScore"] = 100/(1+math.exp(-z))
         rows.append(row)
@@ -254,6 +270,8 @@ def standings(event: dict[str, Any]) -> list[dict[str, Any]]:
                "pointsFor": 0, "pointsAgainst": 0, "differential": 0, "expectedWins": None,
                "expectedDifferential": None, "moneyballScore": None, "moneyballFinal": final,
                "standingsSort": FORMAT, "moneyballEligible": False}
+        if summary:
+            row["moneyballScoringSummary"] = summary
         for r, m in matches.values():
             if r.get("status") != "saved" or pid not in m["sideA"]+m["sideB"]:
                 continue
