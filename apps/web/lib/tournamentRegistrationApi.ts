@@ -137,6 +137,7 @@ export type TournamentRegistrationResponse = {
   roster_summary?: {
     total_registrations?: number | null;
     total_players?: number | null;
+    total_event_entries?: number | null;
     players_needing_partners?: number | null;
     waitlist?: number | null;
   } | null;
@@ -150,6 +151,7 @@ export type PublicPartnerProfileResolutionResponse = Pick<
 
 export type PublicTournamentRosterMember = {
   display_name: string;
+  event_entry_key?: string | null;
   skill?: string | number | null;
   age_bracket?: string | null;
   registration_pending?: boolean;
@@ -190,6 +192,7 @@ export type PublicTournamentRosterState = {
   summary: {
     total_registrations?: number | null;
     total_players?: number | null;
+    total_event_entries?: number | null;
     players_needing_partners?: number | null;
     partner_board_entries?: number | null;
     waitlist?: number | null;

@@ -32,6 +32,7 @@ def test_public_tournament_roster_empty_contract(client):
     assert payload["available"] is True
     assert payload["tournament"]["name"] == "Tres Palapas Open"
     assert payload["summary"]["total_registrations"] == 0
+    assert payload["summary"]["total_event_entries"] == 0
     assert payload["roster"]["registrations_by_event"] == []
     assert "admin_notes" not in payload["club"]
     assert "internal_seed_notes" not in payload["events"][0]
@@ -60,6 +61,7 @@ def test_public_tournament_roster_after_submit_contract(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["summary"]["total_registrations"] == 1
+    assert payload["summary"]["total_event_entries"] == 1
     roster_row = payload["roster"]["registrations_by_event"][0]
     members = roster_row["members"]
     assert members[0]["display_name"] == "Alex Rivera"
