@@ -2,6 +2,7 @@
   "name": "jupr-sql-regressions",
   "private": true,
   "scripts": {
+    "test:player-reactivation": "node player_game_reactivation.mjs",
     "test:badge-worker-leases": "node badge_queue_worker_leases.mjs",
     "test:weekly-highlights": "node league_weekly_highlights.mjs",
     "test:generator-journal": "node play_generator_operation_surface.mjs",

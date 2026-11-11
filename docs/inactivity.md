@@ -1,7 +1,7 @@
 # Player Inactivity (14-day global rule)
 
 ## Overview
-Players are marked **inactive** if they have not logged any recorded match in **14 days** across all leagues. Inactive players are hidden by default only on overall and league leaderboards (including printable rankings). They remain searchable in the Players directory and available for registration, roster selection, check-in, live play, match history, and awards. Ladder membership, league membership, withdrawals, and merged profiles have their own separate rules. A player with no recorded games uses `created_at` as the baseline for inactivity.
+Players are marked **inactive** if they have not logged any recorded match in **14 days** across all leagues. Inactive players are hidden by default only on overall and league leaderboards (including printable rankings). They remain searchable in the Players directory and available for registration, roster selection, check-in, live play, match history, and awards. Ladder membership, league membership, withdrawals, and merged profiles have their own separate rules. A player with no recorded games starts inactive; registration or profile creation alone does not establish activity.
 
 ## Data model
 The `players` table stores:
@@ -9,6 +9,19 @@ The `players` table stores:
 - `last_game_at`: the most recent match timestamp across all leagues.
 - `active`: manual leaderboard visibility flag.
 - `inactive_at`: set when a player crosses the 14-day inactivity threshold. A player is visible on active leaderboards when `inactive_at IS NULL` and `active` is not false.
+
+## Immediate reactivation
+
+Saving recent scored games updates activity in the match write transaction for
+both singles and doubles, including unrated play. The player activity trigger
+clears automatic `inactive_at` markers as soon as `last_game_at` is recent and
+the stored manual `active` flag is not false. Results do not wait for a worker.
+
+Date-only games may be stored at midnight, before the profile was created later
+that day. A newer inactivity timestamp alone must not prevent reactivation.
+Explicit manual `active=false` exclusions after the game and merged profiles
+remain excluded. Older automatic markers on inactive profiles still clear when
+a newer recent game is recorded.
 
 ## Daily job
 The canonical migration
@@ -21,8 +34,9 @@ of the current deployment path.
 - **Schedule**: `0 3 * * *` (03:00 UTC)
 - **Action**: runs `public.mark_inactive_players()` (idempotent).
 - **Owner**: `postgres`; application roles cannot execute this maintenance function.
-- **Scope**: only sets a missing `inactive_at`. It preserves manual `active` flags,
-  existing inactivity timestamps, ratings, and recorded match timestamps.
+- **Scope**: marks missing inactivity timestamps for stale or never-played
+  profiles and repairs automatic markers for recent players. It preserves
+  explicit later manual exclusions, merged profiles, ratings, and game dates.
 
 To run the job manually as the database owner:
 
@@ -45,15 +59,16 @@ ORDER BY r.start_time DESC
 LIMIT 10;
 ```
 
-Run `tests/sql/player_inactivity_daily_job.sql` against staging for transactional
-coverage of the cutoff boundary, never-played players, manual visibility,
-idempotency, permissions, and schedule. All test fixtures roll back.
+Run `npm run test:player-reactivation` in `tests/sql` for the activity trigger,
+same-day profile creation, repair, manual/merged exclusions, boundary cases,
+idempotency, rollback, and permission checks.
 
 ## Backfill
 The legacy migration backfilled `last_game_at` from `matches`. Match processing
-maintains it thereafter. The restored job uses those existing timestamps and
-marks inactive players by comparing `COALESCE(last_game_at, created_at)` to
-`NOW() - INTERVAL '14 days'`.
+maintains it thereafter. The current job uses `last_game_at` alone to require
+a recorded game within the preceding 14 days. The migration
+`supabase/migrations/20261111200814_immediate_player_game_reactivation.sql`
+repairs existing automatic markers without changing ratings or results.
 
 ## Match deletions/voids
 If matches are deleted/voided and you need to refresh activity timestamps for affected players,

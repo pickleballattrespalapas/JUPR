@@ -105,9 +105,9 @@ def build_recorded_game_activity_update(
     """Record scored play without undoing explicit visibility exclusions.
 
     The caller must supply the persisted active flag, not its display-time
-    projection. An old automatic inactivity marker clears on a newer game;
-    an exclusion after the latest game, or active=False without a marker,
-    remains in force, as in the daily activity reconciler.
+    projection. Automatic inactivity clears for recent play even when a
+    date-only game predates profile creation. An explicit active=False with
+    no marker, or with an exclusion after the latest game, remains in force.
     """
     update = build_player_activity_update(player.get("last_game_at"), match_time, now_utc=now_utc)
     if not update:
@@ -117,7 +117,7 @@ def build_recorded_game_activity_update(
     if (
         is_merged_player(player)
         or (player.get("active") is False and exclusion is None)
-        or (exclusion is not None and exclusion > latest)
+        or (player.get("active") is False and exclusion is not None and exclusion > latest)
     ):
         update.update(active=player.get("active"), inactive_at=player.get("inactive_at"))
         if is_merged_player(player):

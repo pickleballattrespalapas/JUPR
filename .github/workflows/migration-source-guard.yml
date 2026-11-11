@@ -66,6 +66,9 @@ jobs:
       - name: Verify weekly highlights saves and permissions
         working-directory: tests/sql
         run: npm run test:weekly-highlights
+      - name: Verify immediate player game reactivation
+        working-directory: tests/sql
+        run: npm run test:player-reactivation
       - name: Verify badge worker lease ownership and privileges
         working-directory: tests/sql
         run: npm run test:badge-worker-leases
