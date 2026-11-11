@@ -532,7 +532,9 @@ jobs:
       - name: Install Chromium for League Live browser acceptance
         if: steps.league-live-e2e.outputs.run == 'true'
         working-directory: apps/web
-        run: npx playwright install --with-deps chromium
+        # Hosted Ubuntu has Chromium's runtime libraries; the browser tests
+        # verify launch without downloading optional Ubuntu font packages.
+        run: npx playwright install chromium
 
       - name: Prepare League Live browser acceptance auth session
         if: steps.league-live-e2e.outputs.run == 'true'
@@ -629,7 +631,7 @@ jobs:
         working-directory: apps/web
         run: |
           npm ci --no-audit --no-fund
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
 
       - name: Prepare dedicated staging QA account session
         id: club-qa-auth

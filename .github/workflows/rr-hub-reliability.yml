@@ -61,7 +61,9 @@ jobs:
           PGLITE_MODULE="$GITHUB_WORKSPACE/tests/sql/node_modules/@electric-sql/pglite/dist/index.js" node tests/adversarial_hub/operation_sql_breaks.mjs
       - name: Install local browser
         working-directory: apps/web
-        run: npx playwright install --with-deps chromium
+        # Runtime libraries are already on the hosted Ubuntu runner. Keep the
+        # actual browser journey below as the dependency and behavior check.
+        run: npx playwright install chromium
       - name: Verify complete browser and API journey
         env:
           NEXT_TELEMETRY_DISABLED: "1"
