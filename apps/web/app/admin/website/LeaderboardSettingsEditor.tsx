@@ -55,7 +55,7 @@ export default function LeaderboardSettingsEditor({ clubId, document: doc, onCha
         </div>
       </fieldset>)}
       <h4>Selected cards &amp; order</h4>
-      <p>Card minimums apply alongside the overall minimum games below. For close-game and partnership cards, use a minimum that gives a meaningful record. Hidden cards keep their settings.</p>
+      <p>Card minimums apply alongside the overall minimum games below. Event-winner cards use their own minimum titles or court wins and include approved unrated results. For close-game and partnership cards, use a minimum that gives a meaningful record. Hidden cards keep their settings.</p>
       {settings.cards.length ? <ol style={{ paddingLeft: "1.5rem" }}>
         {settings.cards.map((key, index) => <li key={key} style={{ padding: "1rem 0", borderBottom: "1px solid #e2e8f0" }}>
           <div className={styles.actions}>
@@ -77,7 +77,7 @@ export default function LeaderboardSettingsEditor({ clubId, document: doc, onCha
           <input type="number" aria-label="Minimum games for performance cards" min={0} max={10000} step={1} value={settings.min_games} onChange={event => change({ min_games: Number(event.target.value) })} />
         </label>
       </div>
-      <p><small>Applies to every performance card in the selected period. Players need at least one game. For Biggest upset and Best partnership, the minimum counts games the two teammates played together. Highest rating is exempt from this overall minimum; its own card minimum still applies.</small></p>
+      <p><small>Applies to game performance cards in the selected period. Players need at least one game. For Biggest upset and Best partnership, the minimum counts games the two teammates played together. Highest rating and event-winner cards use their own card minimums.</small></p>
       <div className={styles.form} style={{ maxWidth: 340 }}>
         <label>Timezone for All time statistics<input aria-label="Timezone for All time statistics" list="leaderboard-timezones" value={settings.timezone} onChange={event => change({ timezone: event.target.value })} /></label>
       </div>

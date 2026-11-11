@@ -10,6 +10,7 @@ from jupr_app.domain.player_activity import is_player_leaderboard_active
 from jupr_app.domain.gamification.presentation import badge_category
 from jupr_app.domain.leaderboard_metrics import (
     EXTENDED_CARD_KEYS,
+    EVENT_WIN_CARD_KEYS,
     LEADERBOARD_CARD_KEYS,
     LEADERBOARD_CARD_METRICS,
     _display,
@@ -791,6 +792,7 @@ def build_public_leaderboard(
     from services.api.club_site_models import LeaderboardSettings
     settings = _leaderboard_settings(supabase, cid) if cid else LeaderboardSettings().model_dump(mode="json")
     period = _selected_period(settings, season if selected == OVERALL_SCOPE else "all")
+    event_highlights: dict[str, list[dict[str, Any]]] = {}
 
     metrics: dict[str, dict[str, Any]] = {}
     if selected == OVERALL_SCOPE:
@@ -799,12 +801,23 @@ def build_public_leaderboard(
         extended = stat in EXTENDED_CARD_KEYS if stat is not None else bool(EXTENDED_CARD_KEYS.intersection(settings["cards"]))
         as_of = datetime.now(timezone.utc)
         matches = []
-        if cid and (period["id"] is not None or extended):
+        if cid and ((period["id"] is not None and stat not in EVENT_WIN_CARD_KEYS) or extended):
             matches, base_rows, metrics = _overall_statistics(
                 supabase, club_id=cid, period=period, base_rows=base_rows,
                 extended=extended, now=as_of,
                 partnership_minimum=(settings.get("card_options", {}).get("best_partnership") or {}).get("minimum", 0),
             )
+        event_keys = EVENT_WIN_CARD_KEYS.intersection((stat,) if stat is not None else settings["cards"])
+        if cid and event_keys:
+            from jupr_app.services.event_winner_service import event_winner_highlights
+
+            try:
+                event_highlights = event_winner_highlights(
+                    supabase, club_id=cid, period=period, players=players, keys=event_keys,
+                    status=clean_status, card_options=settings.get("card_options") or {}, now=as_of,
+                )
+            except Exception as exc:
+                raise LeaderboardDataUnavailable("Unable to read the complete event-winner standings.") from exc
     elif selected:
         rating_rows = _fetch_league_ratings(supabase, cid, selected) if cid else []
         base_rows = _league_rows(rating_rows, players, club_id=cid, league_name=selected)
@@ -836,7 +849,9 @@ def build_public_leaderboard(
     if stat is not None:
         options = ((settings.get("card_options") or {}).get(stat) or {}) if selected == OVERALL_SCOPE else {}
         if selected == OVERALL_SCOPE:
-            if stat in {"biggest_upset", "best_partnership"}:
+            if stat in EVENT_WIN_CARD_KEYS:
+                stat_rows = event_highlights.get(stat, [])
+            elif stat in {"biggest_upset", "best_partnership"}:
                 builder = team_upset_highlights if stat == "biggest_upset" else team_partnership_highlights
                 stat_rows = builder(matches, players=all_ranked, status=clean_status, search="",
                                     min_games=min_games, options=options, full=True)
@@ -877,7 +892,7 @@ def build_public_leaderboard(
             "pagination": pagination,
             "stat_ranking": {"key": stat, "entries": entries, "total_qualified": total_qualified,
                              "minimum": minimum, "minimum_metric": minimum_metric,
-                             "min_games": min_games if stat != "highest_rating" or selected != OVERALL_SCOPE else 0,
+                             "min_games": 0 if stat in EVENT_WIN_CARD_KEYS else min_games if stat != "highest_rating" or selected != OVERALL_SCOPE else 0,
                              "pagination": pagination},
         }
 
@@ -901,6 +916,7 @@ def build_public_leaderboard(
     if selected == OVERALL_SCOPE:
         card_options = settings.get("card_options") or {}
         highlights = overall_highlights(ranked, metrics=metrics, min_games=min_games, card_options=card_options, full=True)
+        highlights.update(event_highlights)
         for key, entries in highlights.items():
             depth = max(1, min(10, int((card_options.get(key) or {}).get("depth", 5))))
             if clean_search:

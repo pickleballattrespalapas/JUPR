@@ -59,7 +59,7 @@ global.fetch = async (url, options = {}) => {
   const button = label => tree.root.findAllByType("button").find(item => text(item) === label);
   const field = label => tree.root.findByProps({ "aria-label": label });
   await act(async () => button("Overall leaderboard").props.onClick());
-  assert.equal(Object.keys(LEADERBOARD_CARD_LABELS).length, 17);
+  assert.equal(Object.keys(LEADERBOARD_CARD_LABELS).length, 20);
   for (const group of LEADERBOARD_CARD_GROUPS) assert.ok(tree.root.findAllByType("legend").some(node => text(node) === group));
   for (const label of Object.values(LEADERBOARD_CARD_LABELS)) assert.ok(field(`Show ${label} card`));
   await act(async () => field("Remove Highest rating card").props.onClick());
