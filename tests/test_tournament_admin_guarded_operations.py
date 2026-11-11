@@ -841,5 +841,5 @@ def test_private_operation_schema_and_ui_recovery_contracts() -> None:
     assert 'allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]' in api_main
     assert "Review publish impact (dry run)" in setup_panel
     assert "expected_state_fingerprint" in setup_panel
-    assert "direct_import_available" in registration_panel
-    assert "Registration Admin cannot bypass" in registration_panel
+    assert 'tournamentRouteHref("/admin/tournaments/ops/import"' in registration_panel
+    assert "/registrations/import-handoff" not in registration_panel
