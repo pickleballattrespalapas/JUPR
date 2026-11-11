@@ -280,6 +280,23 @@ global.fetch = async (url, options = {}) => {
     assert.doesNotMatch(markup, /Leaderboards are unavailable right now/);
   }
 
+  data.selected_scope = "OVERALL";
+  data.period = { id: "2026", name: "2026–27", start_date: "2026-09-15", timezone: "America/Mazatlan" };
+  data.leaderboard_settings.cards = ["round_robin_wins", "moneyball_wins", "ladder_court_wins"];
+  for (const key of data.leaderboard_settings.cards) {
+    data.highlights[key] = [{ player_id: 1, player_name: "Stu", metric_value: 4, metric_sample: 4,
+      metric_display: key === "ladder_court_wins" ? "4 court wins" : "4 titles" }];
+  }
+  markup = await render({ season: "2026" });
+  assert.equal((markup.match(/data-testid="leaderboard-highlight-card"/g) || []).length, 3);
+  for (const key of data.leaderboard_settings.cards) {
+    assert.ok(markup.includes(LEADERBOARD_CARD_LABELS[key]));
+    const link = markup.match(new RegExp(`/leaderboards/${key}\\?[^\"]+`))[0];
+    assert.ok(link.includes("season=2026"));
+  }
+  assert.ok(markup.includes("4 titles"));
+  assert.ok(markup.includes("4 court wins"));
+
   process.env.JUPR_API_BASE_URL = "https://api.test";
   let requestedUrl;
   global.fetch = async url => { requestedUrl = new URL(url); return { ok: true, json: async () => ({}) }; };
@@ -289,5 +306,5 @@ global.fetch = async (url, options = {}) => {
   assert.equal(requestedUrl.searchParams.get("offset"), "50");
   await api.getClubLeaderboard("tres-palapas");
   assert.equal(requestedUrl.searchParams.has("season"), false, "Omitted season lets the API choose the published default");
-  console.log("Overall leaderboard: 17 grouped choices, persisted card depth/minimums, generic metrics, independent Overall card visibility, preserved table/league display controls, card order, season validation and draft/publish isolation passed.");
+  console.log("Overall leaderboard: 20 grouped choices, season winner cards and links, persisted card depth/minimums, generic metrics, independent Overall card visibility, preserved table/league display controls, card order, season validation and draft/publish isolation passed.");
 })().catch(error => { console.error(error); process.exitCode = 1; });
