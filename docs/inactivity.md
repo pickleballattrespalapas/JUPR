@@ -12,8 +12,9 @@ The `players` table stores:
 
 ## Immediate reactivation
 
-Saving recent scored games updates activity in the match write transaction for
-both singles and doubles, including unrated play. The player activity trigger
+Saving recent scored games updates activity synchronously for both singles and
+doubles, including unrated play. Atomic saves include activity in the match
+transaction; legacy writers refresh it before completing. The activity trigger
 clears automatic `inactive_at` markers as soon as `last_game_at` is recent and
 the stored manual `active` flag is not false. Results do not wait for a worker.
 
