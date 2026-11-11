@@ -164,6 +164,63 @@ def test_ladder_counts_each_completed_court_round_and_all_tied_first_places():
     assert all(r["rank"] == 1 and r["metric_value"] == 2 for r in result)
 
 
+@pytest.mark.parametrize("date", ["2026-10-13", "2026-10-13T00:00:00+00:00", "2026-10-13T00:00:00Z", "2026-10-13T19:00:00+00:00", "2026-10-14T01:00:00+00:00"])
+def test_ladder_uses_played_date_for_legacy_dates_and_real_local_timestamps(date):
+    tables = league_tables()
+    for game in tables["matches"]:
+        game["date"] = date
+    result = winners(WinnerDB(**tables))["ladder_court_wins"]
+    assert [(r["player_id"], r["metric_value"]) for r in result] == [(1, 1)]
+
+
+def test_ladder_legacy_midnight_results_respect_season_boundaries():
+    tables = league_tables()
+    for game in tables["matches"]:
+        game["date"] = "2026-10-13T00:00:00+00:00"
+    assert winners(WinnerDB(**tables), period={**PERIOD, "start_date": "2026-10-13"})["ladder_court_wins"]
+    assert not winners(WinnerDB(**tables), period={**PERIOD, "start_date": "2026-10-14"})["ladder_court_wins"]
+    assert not winners(WinnerDB(**tables), period={**PERIOD, "end_date": "2026-10-12"})["ladder_court_wins"]
+
+
+def test_public_ladder_card_and_detail_include_legacy_courts():
+    sb = fixture()
+    sb.store["players"] = deepcopy(PLAYERS)
+    settings = sb.store["pcs_club_sites"][0]["published"]["leaderboard"]
+    settings.update(cards=["ladder_court_wins"], seasons=[PERIOD], default_season_id="2026")
+    tables = league_tables()
+    for game in tables["matches"]:
+        game["date"] = "2026-10-13T00:00:00+00:00"
+    db = WinnerDB(**{**sb.store, **tables})
+    card = build_public_leaderboard(db, club_id="club-1", status="all")["highlights"]["ladder_court_wins"]
+    detail = build_public_leaderboard(db, club_id="club-1", status="all", stat="ladder_court_wins")["stat_ranking"]["entries"]
+    assert [(r["player_id"], r["metric_value"]) for r in card] == [(1, 1)]
+    assert [(r["player_id"], r["metric_value"]) for r in detail] == [(1, 1)]
+
+
+@pytest.mark.parametrize("title", ["Moneyball Oct 10", "Moneyball October 13", "Money ball — October 13", " moneyBALL November 7 "])
+def test_legacy_moneyball_titles_use_recorded_rr_rules_in_moneyball_category(title):
+    ev = event()
+    ev.update(name=title, standingsSort="points", playFormat="singles")
+    # The recorded points rule awards Bea; the wins rule would award Alex.
+    games = [r["matches"][0] for r in ev["rounds"]]
+    for game, a, b, score_a, score_b in zip(games, ["p1", "p1", "p2"], ["p2", "p3", "p3"], [11, 11, 25], [0, 0, 23]):
+        game.update(sideA=[a], sideB=[b], scoreA=score_a, scoreB=score_b)
+    result = winners(WinnerDB(live_sessions=[session(ev)]))
+    assert [(r["player_id"], r["metric_value"]) for r in result["moneyball_wins"]] == [(2, 1)]
+    assert not result["round_robin_wins"]
+    assert winners(WinnerDB(live_sessions=[session(ev)]), keys={"moneyball_wins"})["moneyball_wins"]
+
+
+def test_ordinary_rr_and_invalid_frozen_moneyball_never_use_legacy_fallback():
+    ev = event()
+    ev["name"] = "Evening round robin after Moneyball"
+    result = winners(WinnerDB(live_sessions=[session(ev)]))
+    assert result["round_robin_wins"] and not result["moneyball_wins"]
+    ev.update(name="Moneyball October 13", eventFormat="moneyball_expectations")
+    result = winners(WinnerDB(live_sessions=[session(ev)]))
+    assert not result["round_robin_wins"] and not result["moneyball_wins"]
+
+
 @pytest.mark.parametrize("change", ["deleted", "missing", "roster", "date", "league", "draft", "repeat"])
 def test_ladder_ignores_incomplete_or_stale_courts(change):
     tables = league_tables()
