@@ -62,10 +62,10 @@ def test_extended_cards_share_season_history_and_use_chronological_results_and_l
     assert metric(payload, "playing_days")["metric_value"] == 2
     assert metric(payload, "partner_variety")["metric_value"] == 1
     pair = partnership(payload)
-    assert pair["metric_value"] == 60
+    assert pair["metric_value"] == 3
     assert pair["metric_sample"] == 5
     assert pair["player_name"] == "Avery Ace & Blake Baseline"
-    assert pair["metric_display"] == "60.0% (3/5)"
+    assert pair["metric_display"] == "3 wins (3/5)"
     assert sb.store == original
 
 
@@ -110,7 +110,7 @@ def test_best_partnership_selects_best_qualifying_pair_instead_of_rejecting_best
         for mid in (2, 3, 4)
     ]
     row = partnership(build_public_leaderboard(sb, club_id="club-1", status="all"), (1, 3))
-    assert row["metric_value"] == pytest.approx(200 / 3)
+    assert row["metric_value"] == 2
     assert row["metric_sample"] == 3
     assert row["player_name"] == "Avery Ace & Casey Court"
 
@@ -324,13 +324,37 @@ def test_best_partnership_ranks_unique_pairs_before_depth_and_includes_nonbest_p
     leaders = payload["highlights"]["best_partnership"]
     assert [row["team_key"] for row in leaders] == ["1:2", "3:4", "1:3"]
     assert [row["rank"] for row in leaders] == [1, 2, 3]
-    assert [row["metric_display"] for row in leaders] == ["100.0% (6/6)", "100.0% (5/5)", "100.0% (4/4)"]
+    assert [row["metric_display"] for row in leaders] == ["6 wins (6/6)", "5 wins (5/5)", "4 wins (4/4)"]
     assert all(row["player_id"] is None and len(row["team_members"]) == 2 for row in leaders)
     # Third place is neither member's individual best partner; deduplicating
     # the old player rows would miss this team entirely.
     assert [member["player_id"] for member in leaders[2]["team_members"]] == [1, 3]
     assert len(sb.match_queries) == 2  # Reuse the same canonical scan.
     assert sb.store == original
+
+
+@pytest.mark.parametrize("stat", [None, "best_partnership"])
+def test_best_partnership_prioritizes_wins_then_win_percentage_on_card_and_full_ranking(stat):
+    sb, _ = partnership_setup()
+    sb.store["matches"] = [
+        game(i, t2_p1=5, t2_p2=6, score_t1=11 if i <= 8 else 7)
+        for i in range(1, 11)
+    ] + [
+        game(i, t1_p1=3, t1_p2=4, t2_p1=5, t2_p2=6)
+        for i in range(11, 17)
+    ] + [
+        game(i, t1_p2=3, t2_p1=5, t2_p2=6, score_t1=11 if i <= 22 else 7)
+        for i in range(17, 24)
+    ]
+    payload = build_public_leaderboard(sb, club_id="club-1", stat=stat)
+    leaders = payload["stat_ranking"]["entries"] if stat else payload["highlights"]["best_partnership"]
+    assert [row["team_key"] for row in leaders[:3]] == ["1:2", "3:4", "1:3"]
+    assert [row["metric_value"] for row in leaders[:3]] == [8, 6, 6]
+    assert [row["metric_display"] for row in leaders[:3]] == ["8 wins (8/10)", "6 wins (6/6)", "6 wins (6/7)"]
+    # The recap's best-partner choice follows the same wins-first rule.
+    metrics = compute_overall_metrics(sb.store["matches"], names={"2": "Blake", "3": "Casey"}, timezone="UTC")
+    assert metrics["1"]["best_partner_name"] == "Blake"
+    assert metrics["1"]["best_partnership_wins"] == 8
 
 
 def test_best_partnership_minimums_use_pair_games_and_ties_count_without_inventing_wins():
@@ -340,9 +364,9 @@ def test_best_partnership_minimums_use_pair_games_and_ties_count_without_inventi
         game(4, t1_p2=3, t2_p1=5, t2_p2=6),
     ]
     row = partnership(build_public_leaderboard(sb, club_id="club-1"))
-    assert row["metric_value"] == pytest.approx(200 / 3)
+    assert row["metric_value"] == 2
     assert row["metric_sample"] == row["matches_played"] == 3
-    assert row["metric_display"] == "66.7% (2/3)"
+    assert row["metric_display"] == "2 wins (2/3)"
     config["min_games"] = 4
     assert [row["team_key"] for row in build_public_leaderboard(sb, club_id="club-1")["highlights"]["best_partnership"]] == ["5:6"]
     config["min_games"] = 0
@@ -379,5 +403,5 @@ def test_best_partnership_uses_canonical_games_and_does_not_require_rating_snaps
     payload = build_public_leaderboard(sb, club_id="club-1", season=season)
     row = partnership(payload)
     assert row["metric_sample"] == (2 if season == "all" else 1)
-    assert row["metric_value"] == (50 if season == "all" else 100)
+    assert row["metric_value"] == 1
     assert all("99" not in row["team_key"].split(":") for row in payload["highlights"]["best_partnership"])

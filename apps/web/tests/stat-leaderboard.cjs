@@ -59,10 +59,12 @@ const decode = s => s.replaceAll("&amp;", "&");
     }
   }
   data.stat_ranking.key = "best_partnership";
-  data.stat_ranking.entries = [{ rank: 5, team_key: "1:2", player_name: "Suzanne & Esteban", team_members: [{ player_id: 1, player_name: "Suzanne" }, { player_id: 2, player_name: "Esteban" }], metric_display: "90.0% (9/10)", metric_sample: 10 }];
+  data.stat_ranking.entries = [{ rank: 5, team_key: "1:2", player_name: "Suzanne & Esteban", team_members: [{ player_id: 1, player_name: "Suzanne" }, { player_id: 2, player_name: "Esteban" }], metric_value: 9, metric_display: "9 wins (9/10)", metric_sample: 10 }];
   data.stat_ranking.total_qualified = 30; data.stat_ranking.pagination = { total: 1, offset: 0, limit: 50, has_more: false };
   let html = await render("best_partnership", { q: "Suzanne" });
   assert.equal((html.match(/data-testid="stat-ranking-row"/g) || []).length, 1);
+  assert.match(html, /9 wins \(9\/10\)/);
+  assert.match(html, /Pairs ranked by total wins together/);
   assert.match(html, /#5/); assert.match(html, /players\/1/); assert.match(html, /players\/2/);
   assert.match(html, /Ranks show positions in the full qualifying field/);
   assert.doesNotMatch(html, /players\/(null|undefined)/);

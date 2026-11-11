@@ -192,7 +192,7 @@ global.fetch = async (url, options = {}) => {
     player_id: null, player_name: names.join(" & "), rank: index + 1,
     team_key: `${301 + index * 2}:${302 + index * 2}`,
     team_members: names.map((player_name, memberIndex) => ({ player_id: 301 + index * 2 + memberIndex, player_name })),
-    metric_value: 100, metric_display: `100.0% (${6 - index}/${6 - index})`, metric_sample: 6 - index,
+    metric_value: 6 - index, metric_display: `${6 - index} wins (${6 - index}/${6 - index})`, metric_sample: 6 - index,
   }));
   data.highlights.average_margin = [201, 202, 203].map(player_id => ({ ...row, player_id, player_name: "Clover", metric_value: 4, metric_display: "+4.0 pts/game", metric_sample: 8 }));
   markup = await render();
@@ -215,8 +215,10 @@ global.fetch = async (url, options = {}) => {
   assert.deepEqual([...partnershipCard.matchAll(/data-testid="leaderboard-team-place"[^>]*>#(\d+)<\/span>/g)].map(match => Number(match[1])), [1, 2, 3]);
   assert.deepEqual([...partnershipCard.matchAll(/<a href="([^"]*\/players\/[^"]+)"/g)].map(match => match[1]),
     [301, 302, 303, 304, 305, 306].map(id => `/clubs/tres-palapas/players/${id}`));
-  assert.match(partnershipCard, /100\.0% \(6\/6\)/);
-  assert.match(partnershipCard, /100\.0% \(5\/5\)/);
+  assert.match(partnershipCard, /6 wins \(6\/6\)/);
+  assert.match(partnershipCard, /5 wins \(5\/5\)/);
+  assert.match(partnershipCard, /Pairs ranked by total wins together/);
+  assert.match(partnershipCard, /Win percentage together breaks ties/);
   assert.match(partnershipCard, /Sam &amp; Pat/);
   assert.doesNotMatch(partnershipCard, /players\/(?:null|undefined)|with Suzanne|with Esteban/);
   const marginCard = cardMarkup(markup, "Best average margin");
