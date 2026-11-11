@@ -20,7 +20,7 @@ function positive(value: string, fallback: number, max = 100000) {
   return Number.isFinite(number) && number >= 1 ? Math.min(Math.floor(number), max) : fallback;
 }
 function sampleLabel(metric: string) {
-  return ({ games: "games", matches_played: "games", games_played: "games", close_games: "close games", upset_wins: "upset wins", best_partnership_games: "games together", weeks_played: "weeks played", playing_days: "playing days" } as Record<string, string>)[metric] || metric.replaceAll("_", " ");
+  return ({ games: "games", matches_played: "games", games_played: "games", close_games: "close games", upset_wins: "upset wins", best_partnership_games: "games together", weeks_played: "weeks played", playing_days: "playing days", round_robin_wins: "titles", moneyball_wins: "titles", ladder_court_wins: "court wins" } as Record<string, string>)[metric] || metric.replaceAll("_", " ");
 }
 function playerLink(clubSlug: string, id: string | number) { return `/clubs/${encodeURIComponent(clubSlug)}/players/${encodeURIComponent(String(id))}`; }
 function RowName({ row, clubSlug }: { row: RankingRow; clubSlug: string }) {

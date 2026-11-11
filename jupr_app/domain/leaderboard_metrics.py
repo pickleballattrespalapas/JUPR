@@ -33,9 +33,13 @@ LEADERBOARD_CARD_METRICS = {
     "best_partnership": ("best_partnership_wins", "best_partnership_games", "partner"),
     "partner_variety": ("partner_variety", "games", "partners"),
     "playing_days": ("playing_days", "playing_days", "days"),
+    "round_robin_wins": ("round_robin_wins", "round_robin_wins", "titles"),
+    "moneyball_wins": ("moneyball_wins", "moneyball_wins", "titles"),
+    "ladder_court_wins": ("ladder_court_wins", "ladder_court_wins", "court wins"),
 }
 LEADERBOARD_CARD_KEYS = tuple(LEADERBOARD_CARD_METRICS)
-EXTENDED_CARD_KEYS = frozenset(LEADERBOARD_CARD_KEYS[5:])
+EVENT_WIN_CARD_KEYS = frozenset({"round_robin_wins", "moneyball_wins", "ladder_court_wins"})
+EXTENDED_CARD_KEYS = frozenset(LEADERBOARD_CARD_KEYS[5:]) - EVENT_WIN_CARD_KEYS
 _POSITIVE_ONLY = {"hot_hand", "longest_win_streak", "biggest_upset", "most_upsets"}
 _SLOTS = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
 
@@ -295,7 +299,7 @@ def overall_highlights(
     output: dict[str, list[dict[str, Any]]] = {}
     for key in keys if keys is not None else LEADERBOARD_CARD_KEYS:
         field, sample_field, kind = LEADERBOARD_CARD_METRICS[key]
-        if key == "biggest_upset":
+        if key == "biggest_upset" or key in EVENT_WIN_CARD_KEYS:
             # This card is populated separately from complete partnerships,
             # never by duplicating the same win into two individual entries.
             output[key] = []

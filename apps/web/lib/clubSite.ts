@@ -44,6 +44,9 @@ export const LEADERBOARD_CARD_LABELS = {
   best_partnership: "Best partnership",
   partner_variety: "Most partners",
   playing_days: "Most playing days",
+  round_robin_wins: "Most round-robin wins",
+  moneyball_wins: "Most Moneyball wins",
+  ladder_court_wins: "Most ladder court wins",
 } as const;
 export type LeaderboardCard = keyof typeof LEADERBOARD_CARD_LABELS;
 export const LEADERBOARD_CARD_GROUPS = ["Ratings & improvement", "Results", "Streaks", "Competition", "Participation & partnerships"] as const;
@@ -70,6 +73,9 @@ export const LEADERBOARD_CARD_DETAILS: Record<LeaderboardCard, {
   best_partnership: { group: "Participation & partnerships", description: "Pairs ranked by total wins together in this period. Win percentage together breaks ties. Each pair appears once.", sample: "games together", fields: ["records"] },
   partner_variety: { group: "Participation & partnerships", description: "Number of different doubles partners in this period.", sample: "games", fields: ["match_counts"] },
   playing_days: { group: "Participation & partnerships", description: "Different days with recorded games, using the selected period’s timezone.", sample: "playing days", fields: ["match_counts"] },
+  round_robin_wins: { group: "Competition", description: "First-place finishes in completed, approved round robins in this period. Moneyball is counted separately. Unresolved first-place ties await an admin decision.", sample: "titles", fields: ["records"] },
+  moneyball_wins: { group: "Competition", description: "First-place finishes in completed, approved Moneyball events in this period, using each event’s scoring rules. Shared winners each receive a win.", sample: "titles", fields: ["records"] },
+  ladder_court_wins: { group: "Competition", description: "First-place finishes on any completed ladder court in this period. Each round counts separately; tied court winners each receive a win.", sample: "court wins", fields: ["records"] },
 };
 export type LeaderboardCardOptions = { minimum: number; depth: number };
 export type LeaderboardSeason = {

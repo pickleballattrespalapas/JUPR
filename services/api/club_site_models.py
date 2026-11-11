@@ -91,6 +91,7 @@ LeaderboardCard = Literal[
     "hot_hand", "point_differential", "average_margin", "longest_win_streak",
     "close_game_record", "biggest_upset", "most_upsets", "opponent_strength",
     "over_performance", "best_partnership", "partner_variety", "playing_days",
+    "round_robin_wins", "moneyball_wins", "ladder_court_wins",
 ]
 
 
@@ -124,7 +125,7 @@ class LeaderboardSeason(StrictModel):
 class LeaderboardSettings(StrictModel):
     cards: list[LeaderboardCard] = Field(default_factory=lambda: [
         "highest_rating", "most_improved", "best_win_pct", "most_wins"
-    ], max_length=17)
+    ], max_length=20)
     card_options: dict[LeaderboardCard, LeaderboardCardOptions] = Field(default_factory=dict)
     show_summary: bool = True
     seasons: list[LeaderboardSeason] = Field(default_factory=list, max_length=40)
