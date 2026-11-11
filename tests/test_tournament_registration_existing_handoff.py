@@ -183,3 +183,25 @@ def test_atomic_duplicate_conflict_also_recovers(partner_handoff, monkeypatch, c
     assert response.status_code == 200, response.text
     assert response.json()["edit_link_status"] == "sent"
     assert len(deliveries) == 1
+
+
+def test_real_partner_reservation_conflict_returns_actionable_validation(partner_handoff, monkeypatch):
+    api, db, storage, payload, deliveries = partner_handoff
+    before = {key: deepcopy(storage[key]) for key in DOMAIN_TABLES}
+    original_rpc = db.rpc
+
+    def conflict(name, params):
+        if name == "create_tournament_registration_canonical_v1":
+            raise RuntimeError("JUPR_INVITATION: This player has a reserved partnership.")
+        return original_rpc(name, params)
+
+    monkeypatch.setattr(db, "rpc", conflict)
+    response = api.post(PATH, json={
+        **payload, "first_name": "New", "last_name": "Entrant", "email": "new@example.com",
+    })
+    assert response.status_code == 400, response.text
+    assert "accepted partner request" in response.json()["detail"]
+    assert "partner-request email" in response.json()["detail"]
+    assert "temporarily unavailable" not in response.json()["detail"]
+    assert {key: storage[key] for key in DOMAIN_TABLES} == before
+    assert not deliveries
