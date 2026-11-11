@@ -150,4 +150,5 @@ def test_partnership_supporting_record_does_not_invent_losses_for_legacy_ties():
     ranking = service.build_public_leaderboard(db, club_id="club-1", stat="best_partnership")["stat_ranking"]
     pair = next(row for row in ranking["entries"] if row["team_key"] == "1:2")
     assert (pair["wins"], pair["losses"], pair["matches_played"]) == (1, 0, 2)
-    assert pair["metric_value"] == 50
+    assert pair["metric_value"] == 1
+    assert pair["metric_display"] == "1 win (1/2)"

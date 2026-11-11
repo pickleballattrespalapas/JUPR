@@ -32,7 +32,7 @@ LEADERBOARD_CARD_METRICS = {
     "most_upsets": ("upset_wins", "upset_wins", "wins"),
     "opponent_strength": ("average_opponent_jupr", "games", "rating"),
     "over_performance": ("wins_above_expected", "games", "expected"),
-    "best_partnership": ("best_partnership_win_pct", "best_partnership_games", "partner"),
+    "best_partnership": ("best_partnership_wins", "best_partnership_games", "partner"),
     "partner_variety": ("partner_variety", "games", "partners"),
     "playing_days": ("playing_days", "playing_days", "days"),
 }
@@ -118,8 +118,8 @@ def compute_overall_metrics(
         # Qualify each pair BEFORE picking the player's best partnership.
         partners = [(other, pair) for other, pair in current["partners"].items()
                     if pair["games"] >= max(1, partnership_minimum)]
-        partners.sort(key=lambda item: (-(item[1]["wins"] / item[1]["games"]),
-                                        -item[1]["games"], -item[1]["wins"], item[0]))
+        partners.sort(key=lambda item: (-item[1]["wins"],
+                                        -(item[1]["wins"] / item[1]["games"]), item[0]))
         other, pair = partners[0] if partners else (None, {"games": 0, "wins": 0})
         result[pid] = {
             "games": games, "point_differential": current["points"],
@@ -159,7 +159,8 @@ def _display(kind: str, value: float, stats: dict[str, Any]) -> str:
     if kind == "expected":
         return f"{value:+.1f} wins"
     if kind == "partner":
-        return f"{value:.1f}% with {stats['best_partner_name']} ({stats['best_partnership_wins']}/{stats['best_partnership_games']})"
+        unit = "win" if value == 1 else "wins"
+        return f"{value:.0f} {unit} with {stats['best_partner_name']} ({stats['best_partnership_wins']}/{stats['best_partnership_games']})"
     return f"{value:.0f} {kind}"
 
 
@@ -241,7 +242,7 @@ def team_partnership_highlights(
     status: str, search: str, min_games: int, options: dict[str, int],
     full: bool = False,
 ) -> list[dict[str, Any]]:
-    """Rank all unique pairs by win percentage, then games played together.
+    """Rank all unique pairs by wins together, then win percentage.
 
     Use the full canonical period history, not each player's best partner:
     a qualifying pair can rank even when both members have a better partner.
@@ -271,18 +272,19 @@ def team_partnership_highlights(
         if (status == "active" and not active) or (status == "inactive" and active):
             continue
         team_members = [{"player_id": member["player_id"], "player_name": member["player_name"]} for member in members]
-        percentage = 100 * totals["wins"] / totals["games"]
+        unit = "win" if totals["wins"] == 1 else "wins"
         eligible.append({
             "team_key": ":".join(pair), "team_members": team_members,
             "player_id": None, "player_name": " & ".join(member["player_name"] for member in team_members),
             "club_id": members[0]["club_id"], "league_name": members[0]["league_name"],
             "is_active": active, "matches_played": totals["games"],
             "wins": totals["wins"], "losses": totals["losses"],
-            "metric_value": percentage,
-            "metric_display": f"{percentage:.1f}% ({totals['wins']}/{totals['games']})",
+            "metric_value": totals["wins"],
+            "metric_display": f"{totals['wins']} {unit} ({totals['wins']}/{totals['games']})",
             "metric_sample": totals["games"],
         })
-    eligible.sort(key=lambda row: (-row["metric_value"], -row["metric_sample"], row["team_key"]))
+    eligible.sort(key=lambda row: (-row["metric_value"],
+                                   -row["metric_value"] / row["metric_sample"], row["team_key"]))
     ranked = [{**row, "rank": rank, "rank_position": rank} for rank, row in enumerate(eligible, start=1)]
     if needle:
         ranked = [row for row in ranked if any(matches_player_search(member["player_name"], needle) for member in row["team_members"])]
@@ -325,8 +327,11 @@ def overall_highlights(
             support = {name: stats[name] for name in ("close_games", "close_wins", "expected_wins", "actual_wins") if name in stats}
             eligible.append({**row, **support, "metric_value": value, "metric_display": _display(kind, value, stats),
                              "metric_sample": sample})
-        # More relevant observations resolve ties, then the existing rating rank.
-        eligible.sort(key=lambda row: (-row["metric_value"], -row["metric_sample"], int(row.get("rank") or 0)))
+        # Partnership wins use win percentage to break ties. Other cards use
+        # more relevant observations, then the existing rating rank.
+        eligible.sort(key=lambda row: (-row["metric_value"],
+            -row["metric_value"] / row["metric_sample"] if key == "best_partnership" else -row["metric_sample"],
+            int(row.get("rank") or 0)))
         ranked = [{**row, "rank": index, "rank_position": index} for index, row in enumerate(eligible, start=1)]
         output[key] = ranked if full else ranked[:depth]
     return output
