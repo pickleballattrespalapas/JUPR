@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID, uuid5
 
 from jupr_app.config import EMAIL_MODE_DRY_RUN
+from jupr_app.domain.notifications.tournament_email_content import clean_tournament_message
 from jupr_app.services.tournament_broadcast_edit_link_service import build_tournament_broadcast_edit_links
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.notifications.player_profile_update_repo import (
@@ -79,23 +80,27 @@ def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: s
         operation_key: str, preview_fingerprint: str, registration_ids: list[str],
         subject: str, message: str, include_cancelled: bool,
         confirmation_text: str, actor_email: str, actor_role: str,
-        include_registration_events: bool = False, include_registration_edit_links: bool = False) -> dict:
+        include_registration_events: bool = False, include_registration_edit_links: bool = False,
+        message_format: str = "text") -> dict:
     _authorize(supabase, club_id, tournament_id)
     require_staging_communications_mutations()
     if confirmation_text != CONFIRM_SEND:
         raise ValueError("Confirm the selected participants before sending.")
     operation_key = _key(operation_key)
+    message = clean_tournament_message(message, message_format)
     request = dict(tournament_id=tournament_id, registration_ids=sorted(set(registration_ids)),
         subject=subject.strip(), message=message.strip(), include_cancelled=include_cancelled,
         preview_fingerprint=preview_fingerprint, actor_email=actor_email.lower())
     if include_registration_events:
         request["include_registration_events"] = True
+    if message_format != "text":
+        request["message_format"] = message_format
     if include_registration_edit_links:
         request["include_registration_edit_links"] = True
     if not request["registration_ids"] or not request["subject"] or not request["message"]:
         raise ValueError("Select participants and enter a subject and message.")
-    if "\x00" in message or len(subject) > 200 or len(message) > 10000:
-        raise ValueError("Use a subject up to 200 characters and a message up to 10,000 characters without null characters.")
+    if len(subject) > 200:
+        raise ValueError("Use a subject up to 200 characters.")
     existing = get_communications_admin_operation(supabase, operation_key=operation_key)
     if existing:
         validate_communications_admin_operation(existing, club_id=club_id,
@@ -106,6 +111,7 @@ def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: s
     preview = build_admin_tournament_broadcast_preview(supabase, club_id=club_id,
         tournament_id=tournament_id, registration_ids=registration_ids,
         subject=subject, message=message, include_cancelled=include_cancelled,
+        message_format=message_format,
         include_registration_events=include_registration_events,
         include_registration_edit_links=include_registration_edit_links)
     if not preview.get("send_available"):
@@ -159,6 +165,7 @@ def get_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: str,
             "detail": result.get("detail", "Check delivery before sending another email." if attempt else "")})
     return {"ok": True, "operation_key": operation_key, "subject": request["review"]["preview"]["subject"],
         "message": request["message"], "created_at": row.get("created_at"),
+        "message_format": request.get("message_format", "text"),
         "include_registration_events": request.get("include_registration_events", False),
         "include_registration_edit_links": request.get("include_registration_edit_links", False),
         "delivery_mode": request["review"]["delivery_mode"], "sender": request["review"]["sender"],
@@ -198,6 +205,7 @@ def send_tournament_broadcast_recipient(supabase: Any, *, club_id: str, tourname
     preview = build_admin_tournament_broadcast_preview(supabase, club_id=club_id,
         tournament_id=tournament_id, registration_ids=request["registration_ids"],
         subject=request["subject"], message=request["message"], include_cancelled=request["include_cancelled"],
+        message_format=request.get("message_format", "text"),
         include_sponsor_logos=False, reviewed_email_sponsors=review.get("email_sponsors"),
         include_registration_events=request.get("include_registration_events", False),
         include_registration_edit_links=request.get("include_registration_edit_links", False))
@@ -232,6 +240,7 @@ def send_tournament_broadcast_recipient(supabase: Any, *, club_id: str, tourname
         delivery = send_tournament_registrant_broadcast_email(
             tournament_name="", recipient_email=recipient["email"], recipient_name=recipient["name"],
             subject=review["preview"]["subject"], message=request["message"],
+            message_format=request.get("message_format", "text"),
             personalize_greeting=False, message_id=child_key, email_sponsors=review.get("email_sponsors"),
             registration_events=recipient.get("registration_events"), registration_edit_links=edit_links)
         result = {"status": delivery["status"], "provider_message_id": delivery.get("provider_message_id"),

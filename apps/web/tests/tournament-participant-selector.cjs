@@ -23,6 +23,7 @@ let token = "test-session";
 const Panel = load("app/admin/tournaments/registrations/RegistrationManagementPanel.tsx", {
   "next/link": { __esModule: true, default: ({ children }) => children },
   "./TournamentEmailDelivery": { __esModule: true, default: () => null },
+  "@/lib/preparedTournamentEmails": load("lib/preparedTournamentEmails.ts"),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: token, session: {}, loading: false }), adminSessionLabel: () => "Test admin" },
   "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),
   "@/lib/tournamentRouteContext": { tournamentRouteHref: value => value }
@@ -49,6 +50,8 @@ async function main() {
   let resolvePreview;
   let legacyApi = false;
   let legacyEditApi = false;
+  let legacyHtmlApi = false;
+  let primaryId = "baja";
   let renderer;
   global.fetch = async (url, options = {}) => {
     if (url.endsWith("broadcast-preview")) {
@@ -62,6 +65,7 @@ async function main() {
         selected_registration_ids: legacyApi ? undefined : body.registration_ids,
         include_registration_events: legacyApi ? undefined : body.include_registration_events,
         include_registration_edit_links: legacyEditApi ? undefined : body.include_registration_edit_links,
+        message_format: legacyHtmlApi ? undefined : body.message_format,
         recipient_count: emails.size,
         recipients: [...emails].map(([email, row]) => ({ name: row.display_name, email })),
         recipient_csv: [...emails.keys()].join("\n"),
@@ -71,8 +75,8 @@ async function main() {
       return response(payload);
     }
     if (url.endsWith("import-handoff")) return response({ write_count: 0 });
-    if (url.endsWith("/admin/tournaments")) return response({ tournaments: [{ id: "baja", name: "Baja Classic" }, { id: "other", name: "Other Tournament" }] });
-    return response({ tournament: { id: url.endsWith("/other") ? "other" : "baja" }, registrations, selections: [{ registration_id: "partner", partner_email: "alex@example.com" }], days: [], event_options: [] });
+    if (url.endsWith("/admin/tournaments")) return response({ tournaments: [{ id: primaryId, name: "Baja Classic" }, { id: "other", name: "Other Tournament" }] });
+    return response({ tournament: { id: url.endsWith("/other") ? "other" : primaryId }, registrations, selections: [{ registration_id: "partner", partner_email: "alex@example.com" }], days: [], event_options: [] });
   };
   const props = { apiBase: "http://fixture.local", clubId: "club", status: { enabled: true }, initialTournamentId: "baja", initialTournamentName: "Baja Classic", initialDrawId: "" };
   try {
@@ -88,6 +92,7 @@ async function main() {
     const toggleCancelled = async checked => act(async () => root.findAllByType("label").find(l => text(l) === " Include cancelled registrations").findByType("input").props.onChange({ target: { checked } }));
 
     assert.equal(button("Preview recipients").props.disabled, true);
+    assert.equal(button("Load prepared player information email"), undefined, "Prepared content is scoped to the exact tournament");
     assert.match(text(root), /0 participants selected · 0 email recipients/);
     assert.equal(checkbox("Cancelled").props.disabled, true);
     assert.equal(checkbox("No Email").props.disabled, true);
@@ -183,6 +188,28 @@ async function main() {
     await select("Beth");
     await act(async () => renderer.update(React.createElement(Panel, { ...props, initialTournamentId: "other" })));
     assert.match(text(root), /0 participants selected/, "Changing tournaments clears selected recipients");
+    primaryId = "563b7922-ae92-41d4-8286-75fe9846e944";
+    await act(async () => renderer.update(React.createElement(Panel, { ...props, initialTournamentId: primaryId })));
+    await changeSearch("beth");
+    const beforeLoad = requests.length;
+    await act(async () => button("Load prepared player information email").props.onClick());
+    assert.equal(requests.length, beforeLoad, "Loading prepared content does not send or create a broadcast");
+    assert.match(text(root), /4 participants selected · 3 email recipients/, "Prepared audience includes all current participants despite active filters");
+    assert.match(root.findByType("textarea").props.value, /#123e37/);
+    assert.ok(root.findByType("textarea").props.value.length > 10000, "The full approved HTML is loaded");
+    assert.equal(root.findByType("textarea").props.maxLength, 100000);
+    await act(async () => button("Preview recipients").props.onClick());
+    assert.equal(requests.at(-1).message_format, "html");
+    assert.deepEqual(requests.at(-1).registration_ids, ["alex", "beth", "partner", "shared"]);
+    assert.ok(button("Download recipient CSV"));
+    legacyHtmlApi = true;
+    await act(async () => button("Preview recipients").props.onClick());
+    assert.match(text(root), /HTML formatting could not be verified/);
+    assert.equal(button("Download recipient CSV"), undefined, "An older API cannot send HTML source as plain text");
+    legacyHtmlApi = false;
+    await act(async () => root.findAllByType("label").find(l => text(l).startsWith("Email format")).findByType("select").props.onChange({ target: { value: "text" } }));
+    assert.equal(button("Download recipient CSV"), undefined, "Changing email format invalidates the preview");
+    await changeSearch("");
     await select("Alex");
     token = "";
     await act(async () => renderer.update(React.createElement(Panel, props)));

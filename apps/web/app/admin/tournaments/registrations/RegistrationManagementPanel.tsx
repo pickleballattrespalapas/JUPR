@@ -16,6 +16,7 @@ import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import TournamentEmailDelivery from "./TournamentEmailDelivery";
 import RegistrationAttemptHistory from "@/components/tournaments/RegistrationAttemptHistory";
+import { preparedTournamentEmail } from "@/lib/preparedTournamentEmails";
 
 type Props = {
   apiBase: string | null;
@@ -91,6 +92,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
 
   const [broadcastSubject, setBroadcastSubject] = useState("");
   const [broadcastMessage, setBroadcastMessage] = useState("");
+  const [messageFormat, setMessageFormat] = useState<"text" | "html">("text");
   const [includeCancelled, setIncludeCancelled] = useState(false);
   const [includeRegistrationEvents, setIncludeRegistrationEvents] = useState(false);
   const [includeRegistrationEditLinks, setIncludeRegistrationEditLinks] = useState(false);
@@ -98,7 +100,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
   const [broadcastPreview, setBroadcastPreview] = useState<AdminTournamentBroadcastPreviewResponse | null>(null);
   const [broadcastPreviewScope, setBroadcastPreviewScope] = useState("");
   const [previewBusy, setPreviewBusy] = useState(false);
-  const previewScope = JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, includeRegistrationEvents, includeRegistrationEditLinks, broadcastSubject, broadcastMessage]);
+  const previewScope = JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, includeRegistrationEvents, includeRegistrationEditLinks, broadcastSubject, broadcastMessage, messageFormat]);
   const previewRequest = useLatestRequestGuard(previewScope, clearBroadcastPreview);
   const currentPreview = broadcastPreviewScope === previewScope ? broadcastPreview : null;
 
@@ -132,6 +134,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
     setBusy(false); setMessage(null);
     setTournaments([]); setSelectedTournamentId(initialTournamentId); setDetail(null); setImportHandoff(null);
     setBroadcastSubject(""); setBroadcastMessage(""); setBroadcastPreview(null);
+    setMessageFormat("text");
     setIncludeRegistrationEvents(false);
     clearParticipantSelection();
   }
@@ -235,6 +238,20 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
   const selectedEmails = [...new Set(selectedRegistrations.map((row) => row.email!.trim().toLowerCase()))].sort();
   const visibleIds = new Set(filteredRegistrations.map((row) => row.id));
   const hiddenSelectedCount = selectedRegistrations.filter((row) => !visibleIds.has(row.id)).length;
+  const preparedEmail = preparedTournamentEmail(detail?.tournament.id || "");
+
+  function loadPreparedEmail() {
+    if (!preparedEmail || !detail) return;
+    clearBroadcastPreview();
+    setBroadcastSubject(preparedEmail.subject);
+    setBroadcastMessage(preparedEmail.message);
+    setMessageFormat(preparedEmail.format);
+    setIncludeCancelled(false);
+    setIncludeRegistrationEvents(false);
+    setIncludeRegistrationEditLinks(false);
+    setSelectedRegistrationIds(detail.registrations.filter(row => !emailExclusion(row, false)).map(row => row.id));
+    setMessage("Loaded the prepared player information email and selected all current participants with email addresses. Review the preview before sending.");
+  }
 
   function selectParticipant(id: string, checked: boolean) {
     setMessage(null);
@@ -310,6 +327,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
           body: JSON.stringify({
             subject: broadcastSubject,
             message: broadcastMessage,
+            message_format: messageFormat,
             include_cancelled: includeCancelled,
             include_registration_events: includeRegistrationEvents,
             include_registration_edit_links: includeRegistrationEditLinks,
@@ -319,6 +337,9 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
         }
       );
       if (!previewRequest.isCurrent(generation)) return;
+      if (messageFormat === "html" && payload.message_format !== "html") {
+        throw new Error("HTML formatting could not be verified. Refresh the page and preview again.");
+      }
       if (includeRegistrationEvents && payload.include_registration_events !== true) {
         throw new Error("Registration events could not be included. Refresh the page and preview again.");
       }
@@ -432,8 +453,11 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
             <h2 style={{ marginTop: 0 }}>Email participants</h2>
             <p style={{ color: "#475569" }}>Write your email, review the selected recipients, then send. Each recipient receives a separate email. Shared email addresses receive one copy.</p>
             <p style={{ color: "#475569" }}>Published tournament sponsors are included automatically.</p>
+            {preparedEmail ? <p><button type="button" onClick={loadPreparedEmail} disabled={busy || previewBusy} style={buttonStyle}>Load prepared player information email</button><br /><small>Loads the styled Baja Classic email and selects all current participants with email addresses. Cancelled registrations are excluded.</small></p> : null}
             <label><strong>Subject</strong><br /><input value={broadcastSubject} disabled={busy} maxLength={200} onChange={(event) => setBroadcastSubject(event.target.value)} style={inputStyle} /></label>
-            <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Message</strong><br /><textarea value={broadcastMessage} disabled={busy} maxLength={10000} onChange={(event) => setBroadcastMessage(event.target.value)} rows={6} style={inputStyle} /></label>
+            <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Email format</strong><br /><select value={messageFormat} disabled={busy} onChange={event => setMessageFormat(event.target.value as "text" | "html")} style={inputStyle}><option value="text">Plain text</option><option value="html">Styled HTML</option></select></label>
+            <label style={{ display: "block", marginTop: "0.75rem" }}><strong>{messageFormat === "html" ? "HTML message" : "Message"}</strong><br /><textarea value={broadcastMessage} disabled={busy} maxLength={messageFormat === "html" ? 100000 : 10000} onChange={(event) => setBroadcastMessage(event.target.value)} rows={messageFormat === "html" ? 10 : 6} style={inputStyle} /></label>
+            {messageFormat === "html" ? <p style={{ color: "#475569" }}>Paste email-body HTML with inline formatting. The preview shows the styled email; a readable plain-text version is generated too.</p> : null}
             <label style={{ display: "block", marginTop: "0.75rem" }}><input type="checkbox" checked={includeRegistrationEvents} disabled={busy} onChange={(event) => setIncludeRegistrationEvents(event.target.checked)} /> Include registration events</label>
             <p style={{ color: "#475569", marginTop: "0.35rem" }}>Add each selected player’s events, dates, and partner details below your message. Players sharing an email address are listed separately in one email.</p>
             <label style={{ display: "block", marginTop: "0.75rem" }}><input type="checkbox" checked={includeRegistrationEditLinks} disabled={busy} onChange={(event) => setIncludeRegistrationEditLinks(event.target.checked)} /> Include Edit Registration button</label>
@@ -465,7 +489,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
             ) : null}
             <TournamentEmailDelivery clubId={clubId} tournamentId={detail.tournament.id} accessToken={accessToken}
               apiBase={apiBase} preview={currentPreview} previewScope={previewScope} subject={broadcastSubject}
-              message={broadcastMessage} includeCancelled={includeCancelled} includeRegistrationEvents={includeRegistrationEvents} includeRegistrationEditLinks={includeRegistrationEditLinks} busy={busy || previewBusy} onBusy={setBusy} requestJson={requestJson} />
+              message={broadcastMessage} messageFormat={messageFormat} includeCancelled={includeCancelled} includeRegistrationEvents={includeRegistrationEvents} includeRegistrationEditLinks={includeRegistrationEditLinks} busy={busy || previewBusy} onBusy={setBusy} requestJson={requestJson} />
           </article>
 
           <RegistrationAttemptHistory apiBase={apiBase} clubId={clubId} tournamentId={detail.tournament.id} accessToken={accessToken} />

@@ -15,6 +15,7 @@ type Props = {
   previewScope: string;
   subject: string;
   message: string;
+  messageFormat?: "text" | "html";
   includeCancelled: boolean;
   includeRegistrationEvents?: boolean;
   includeRegistrationEditLinks?: boolean;
@@ -35,7 +36,7 @@ function outcome(result: TournamentBroadcast): string {
 }
 
 export default function TournamentEmailDelivery(props: Props) {
-  const { clubId, tournamentId, accessToken, apiBase, preview, previewScope, subject, message, includeCancelled, includeRegistrationEvents = false, includeRegistrationEditLinks = false, busy, onBusy, requestJson } = props;
+  const { clubId, tournamentId, accessToken, apiBase, preview, previewScope, subject, message, messageFormat = "text", includeCancelled, includeRegistrationEvents = false, includeRegistrationEditLinks = false, busy, onBusy, requestJson } = props;
   const [history, setHistory] = useState<TournamentBroadcastSummary[]>([]);
   const [active, setActive] = useState<TournamentBroadcast | null>(null);
   const [sending, setSending] = useState(false);
@@ -97,7 +98,7 @@ export default function TournamentEmailDelivery(props: Props) {
     try {
       let result = resumeKey ? await readSaved(key) : await requestJson<TournamentBroadcast>(path, {
         method: "POST", body: JSON.stringify({ operation_key: key, preview_fingerprint: fingerprint,
-          registration_ids: preview!.selected_registration_ids, subject, message,
+          registration_ids: preview!.selected_registration_ids, subject, message, message_format: messageFormat,
           include_cancelled: includeCancelled, include_registration_events: includeRegistrationEvents, include_registration_edit_links: includeRegistrationEditLinks, confirmation_text: confirmationText })
       });
       if (!isCurrent()) throw new Error("The admin session changed.");
