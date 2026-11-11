@@ -9,6 +9,7 @@ from typing import Any
 from jupr_app.config import EMAIL_MODE_DRY_RUN, get_email_mode
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.domain.notifications.tournament_email_sponsors import sponsor_preview_html
+from jupr_app.domain.notifications.tournament_email_content import clean_tournament_message
 from jupr_app.services.tournament_email_sponsor_service import (
     prepare_tournament_email_sponsors,
     tournament_email_sponsor_snapshot,
@@ -361,6 +362,7 @@ def build_admin_tournament_broadcast_preview(
     tournament_id: str,
     subject: str = "",
     message: str = "",
+    message_format: str = "text",
     registration_ids: list[str] | None = None,
     include_cancelled: bool = False,
     include_registration_events: bool = False,
@@ -482,7 +484,7 @@ def build_admin_tournament_broadcast_preview(
         limit=180,
     )
     clean_subject = _clean_text(subject, limit=200)
-    clean_message = str(message or "").replace("\x00", "").strip()[:10000]
+    clean_message = clean_tournament_message(message, message_format)
     if "\r" in clean_subject or "\n" in clean_subject:
         raise ValueError("The email subject must be a single line.")
     preview_recipient = (
@@ -508,6 +510,8 @@ def build_admin_tournament_broadcast_preview(
         "delivery_mode": delivery["delivery_mode"], "sender": delivery["sender"]}
     if include_registration_events:
         reviewed_scope["include_registration_events"] = True
+    if message_format != "text":
+        reviewed_scope["message_format"] = message_format
     if include_registration_edit_links:
         reviewed_scope["include_registration_edit_links"] = True
         reviewed_scope["edit_link_context"] = edit_link_context
@@ -530,6 +534,7 @@ def build_admin_tournament_broadcast_preview(
         "email_sponsors": email_sponsors,
         "include_registration_events": include_registration_events,
         "include_registration_edit_links": include_registration_edit_links,
+        "message_format": message_format,
         "edit_link_context": edit_link_context,
         "selected_registration_ids": sorted(selected_ids) if selected_ids is not None else None,
         "recipient_count": len(recipients),
@@ -544,6 +549,7 @@ def build_admin_tournament_broadcast_preview(
                 recipient_name=preview_recipient["name"],
                 subject=final_subject,
                 message=clean_message,
+                message_format=message_format,
                 personalize_greeting=False,
                 email_sponsors=email_sponsors,
                 registration_events=preview_recipient.get("registration_events"),
@@ -554,6 +560,7 @@ def build_admin_tournament_broadcast_preview(
                 recipient_name=preview_recipient["name"],
                 subject=final_subject,
                 message=clean_message,
+                message_format=message_format,
                 personalize_greeting=False,
                 email_sponsors=email_sponsors,
                 registration_events=preview_recipient.get("registration_events"),

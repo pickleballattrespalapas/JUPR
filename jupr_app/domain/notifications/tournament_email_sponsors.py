@@ -92,9 +92,9 @@ def _html_groups(sponsors: list[dict] | None) -> tuple[str, str]:
     return header, footer
 
 
-def with_sponsors_html(body: str, sponsors: list[dict] | None) -> str:
+def with_sponsors_html(body: str, sponsors: list[dict] | None, *, include_header: bool = True) -> str:
     header, footer = _html_groups(sponsors)
-    if header:
+    if header and include_header:
         body = body.replace("</h1>", "</h1>" + header, 1)
     body = body.replace('<h1>', '<h1 style="font-size:24px;line-height:1.3;margin:0 0 12px">', 1)
     # Apply the mobile layout even when the tournament has no sponsors.

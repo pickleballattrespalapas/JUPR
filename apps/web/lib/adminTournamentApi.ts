@@ -507,6 +507,7 @@ export type AdminTournamentBroadcastRecipient = {
 };
 
 export type AdminTournamentBroadcastPreviewResponse = {
+  message_format?: "text" | "html";
   ok: boolean;
   mode: "tournament_broadcast_preview";
   dry_run: true;
@@ -532,6 +533,7 @@ export type AdminTournamentBroadcastPreviewResponse = {
 };
 
 export type TournamentBroadcast = {
+  message_format?: "text" | "html";
   include_registration_events?: boolean;
   include_registration_edit_links?: boolean;
   operation_key: string;
