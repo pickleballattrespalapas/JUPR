@@ -215,7 +215,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 171
+    assert len(versions) == 172
+    assert "20261111223919" in versions
+    assert "complete_matching_partner_reservations" in contract["required_ledger_names"]
     assert "20261108234006" in versions
     assert "badge_queue_worker_leases" in contract["required_ledger_names"]
     assert {"20261109011000", "20261109011100"}.issubset(versions)
@@ -284,7 +286,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "interclub_commissioner_registration_window" in contract["required_ledger_names"]
     assert "interclub_pool_profile_matching_bulk_add" in contract["required_ledger_names"]
     assert {"20260906004056", "20260906005541", "20260906052216", "20260908052027", "20260908060747", "20260908060948", "20260908151701", "20260908173710"}.issubset(versions)
-    assert versions[-52:] == (
+    assert versions[-53:] == (
         "20261030010000",
         "20261030183226",
         "20261030224214",
@@ -337,12 +339,13 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109011100",
         "20261109011200",
         "20261111200814",
+        "20261111223919",
     )
     assert {"20260908155131", "20260908164204"}.issubset(versions)
-    assert len(names) == 171
+    assert len(names) == 172
     assert "admin_tournament_registration_player_link" in contract["required_ledger_names"]
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 171
+    assert len(contract["required_ledger_names"]) == 172
     assert "immediate_player_game_reactivation" in contract["required_ledger_names"]
     assert "interclub_conflicts_are_not_serialization_failures" in contract["required_ledger_names"]
     assert {"interclub_competition_operations", "southern_bcs_eligibility", "interclub_rating_ledger", "interclub_publication_review_guard", "interclub_meet_overlap_guard", "southern_bcs_missing_pairing_rosters", "interclub_lineup_refresh_deadline_guard"}.issubset(contract["required_ledger_names"])
@@ -552,7 +555,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261111200814"
+    assert migrations[-1] == "20261111223919"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
