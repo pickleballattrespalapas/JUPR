@@ -5,6 +5,7 @@ for first place, so an unlinked winner never promotes a linked runner-up.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -46,6 +47,23 @@ def _day(value, zone):
         return stamp.replace(tzinfo=timezone.utc).astimezone(zone).date().isoformat() if stamp.tzinfo is None else stamp.astimezone(zone).date().isoformat()
     except (ValueError, TypeError):
         return ""
+
+
+def _match_day(value, zone):
+    """Keep legacy calendar dates stored as midnight UTC on their played day.
+
+    Older match entry stored date-only values at 00:00 UTC. Converting those
+    sentinels to the club timezone moves a submitted court to the previous day.
+    Actual timestamps still use the club's local date.
+    """
+    try:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if (stamp.tzinfo is not None and stamp.utcoffset().total_seconds() == 0
+                and (stamp.hour, stamp.minute, stamp.second, stamp.microsecond) == (0, 0, 0, 0)):
+            return stamp.date().isoformat()
+    except (ValueError, TypeError):
+        pass
+    return _day(value, zone)
 
 
 def _in_period(value, period, now):
@@ -153,7 +171,14 @@ def _event_credits(event, keys):
         for player in settlement(event, moneyball_standings(event)).get("winners", []):
             yield "moneyball_wins", "title", str(player["participantId"])
         return
-    if event.get("type") != "round_robin" or "round_robin_wins" not in keys:
+    # Before the frozen expectations format, Moneyball used the regular RR
+    # engine. Preserve those events' recorded scoring while classifying their
+    # titles separately, just as the organizer named them at the time.
+    legacy_moneyball = (event.get("eventFormat") in {None, "", "standard"}
+                        and not event.get("moneyballPrivate")
+                        and re.match(r"^money\s*ball\b", str(event.get("name") or "").strip(), re.IGNORECASE))
+    key = "moneyball_wins" if legacy_moneyball else "round_robin_wins"
+    if event.get("type") != "round_robin" or key not in keys:
         return
     normalized = {**event, "rounds": [{"matches": games}]}
     decision = event.get("round_robin_winner") or {}
@@ -172,7 +197,7 @@ def _event_credits(event, keys):
     else:
         leaders = [row for row in rows if row["rank"] == 1]
     if len(leaders) == 1 and not leaders[0].get("winnerNeedsAdmin"):
-        yield "round_robin_wins", "title", str(leaders[0]["participantId"])
+        yield key, "title", str(leaders[0]["participantId"])
 
 
 def _social_sources(db, club_id, period, now):
@@ -241,8 +266,8 @@ def _league_credits(db, club_id, period, now):
             game = canonical.get(_id(mid))
             court = snapshot.get("court", snapshot.get("court_number"))
             if (not game or game.get("deleted_at") or not court or game.get("league") != session["league_name"]
-                    or not _in_period(game.get("date"), period, now)
-                    or _day(game.get("date"), ZoneInfo(period["timezone"])) != str(row["match_date"])[:10]
+                    or not _in_period(_match_day(game.get("date"), ZoneInfo(period["timezone"])), period, now)
+                    or _match_day(game.get("date"), ZoneInfo(period["timezone"])) != str(row["match_date"])[:10]
                     or any(_id(game.get(slot)) != _id(snapshot.get(slot)) for slot in _SLOTS)):
                 break
             courts[str(court)].append({"teamA": [_id(game[k]) for k in _SLOTS[:2]], "teamB": [_id(game[k]) for k in _SLOTS[2:]],
@@ -281,7 +306,7 @@ def event_winner_highlights(db, *, club_id, period, players, keys, status, card_
         if not day and official.get("match_context_by_live_id"):
             dates = []
             for batch in _batches(official["match_context_by_live_id"].values()):
-                dates.extend(g["date"] for g in read_all_rows(lambda: db.table("matches").select("id,date").eq("club_id", club_id).in_("context_id", batch)))
+                dates.extend(_match_day(g["date"], ZoneInfo(period["timezone"])) for g in read_all_rows(lambda: db.table("matches").select("id,date").eq("club_id", club_id).in_("context_id", batch)))
             day = min(dates) if dates else None
         if _in_period(day, period, now):
             mapping = official.get("match_context_by_live_id") or {
@@ -314,7 +339,7 @@ def event_winner_highlights(db, *, club_id, period, players, keys, status, card_
             valid = True
             for mid, context in mapping.items():
                 g, record = games.get(mid), canonical.get(context)
-                if (not g or not record or record.get("deleted_at") or not _in_period(record.get("date"), period, now)
+                if (not g or not record or record.get("deleted_at") or not _in_period(_match_day(record.get("date"), ZoneInfo(period["timezone"])), period, now)
                         or [links.get(str(pid), "") for side in ("A", "B") for pid in g.get(f"side{side}", g.get(f"team{side}", []))]
                         != [_id(record.get(slot)) for slot in _SLOTS if record.get(slot) is not None]):
                     valid = False
