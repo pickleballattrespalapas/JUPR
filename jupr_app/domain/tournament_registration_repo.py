@@ -42,6 +42,10 @@ LOGGER = logging.getLogger(__name__)
 PUBLIC_REGISTRATION_UNAVAILABLE_MESSAGE = (
     "Tournament registration is temporarily unavailable."
 )
+PARTNER_RESERVATION_CONFLICT_MESSAGE = (
+    "An accepted partner request already reserves this division. Open your registration "
+    "or partner-request email to review the partnership before choosing another partner."
+)
 _PUBLIC_REGISTRATION_ERROR_SCOPE: ContextVar[bool] = ContextVar(
     "public_registration_error_scope",
     default=False,
@@ -3625,6 +3629,8 @@ def save_registration(
                 PUBLIC_REGISTRATION_COMMERCE_CREATE_RPC, params
             ).execute()
         except Exception as exc:
+            if _database_error_contains(exc, "JUPR_INVITATION:"):
+                raise ValueError(PARTNER_RESERVATION_CONFLICT_MESSAGE) from exc
             manual_partner_message = _manual_partner_error_message(exc)
             if manual_partner_message:
                 raise ValueError(manual_partner_message) from exc
@@ -3705,6 +3711,8 @@ def save_registration(
             {"p_registration": reg_row, "p_selections": rows},
         ).execute()
     except Exception as exc:
+        if _database_error_contains(exc, "JUPR_INVITATION:"):
+            raise ValueError(PARTNER_RESERVATION_CONFLICT_MESSAGE) from exc
         manual_partner_message = _manual_partner_error_message(exc)
         if manual_partner_message:
             raise ValueError(manual_partner_message) from exc
