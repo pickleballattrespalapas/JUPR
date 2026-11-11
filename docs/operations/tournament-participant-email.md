@@ -14,6 +14,27 @@ sender and Reply-To. No new secrets or database migration are needed.
 4. After an interruption or reload, open Recent emails, review saved results,
    and continue with recipients marked Not sent.
 
+## Styled and prepared messages
+
+The composer defaults to plain text. **Styled HTML** accepts an email-body
+fragment with passive inline formatting, up to 100,000 characters. Plain text
+keeps its 10,000-character limit. Active tags, resource-loading CSS, unsafe links,
+and unbalanced markup are rejected. A readable plain-text alternative is generated
+from the same content. Preview, confirmation, retry validation, and delivery bind
+the format along with the exact message. Older previews cannot silently turn
+styled HTML into visible source code.
+
+Baja Classic 2026 has a **Load prepared player information email** button. It
+loads the approved Tres-styled subject and HTML and selects every current
+registration with an email address, excluding cancelled registrations, regardless
+of list filters. Shared inboxes still receive one copy. The prepared content is
+available after reopening the page; loading it never creates or sends a broadcast.
+The operator can edit it, preview the current recipients, and use the existing
+send confirmation. No database migration or background sending is added.
+
+Styled messages retain their own header. Optional personal registration details
+and edit buttons remain below the message and above the published sponsor footer.
+
 Sent means SMTP accepted the message; it does not prove inbox delivery. An
 uncertain attempt is marked Check delivery and cannot be retried automatically.
 Check the recipient's inbox before intentionally composing another message.

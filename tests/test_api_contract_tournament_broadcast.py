@@ -132,3 +132,23 @@ def test_edit_button_option_passes_through_preview_and_saved_send(api, monkeypat
     assert sent.json()["status"] == "dry_run"
     assert client.get(f"{ROOT}/{key}", headers=headers).json()["include_registration_edit_links"] is True
     assert "edit_token=" not in str(db.tables["communications_admin_operations"])
+
+
+def test_html_format_round_trip_keeps_long_message_and_stays_dry_run(api):
+    db, client, headers = api
+    message = '<div style="color:#123e37"><h1>Baja Classic</h1><p>' + 'x' * 12000 + '</p></div>'
+    body = {key: value for key, value in prepare(db, message=message, message_format='html').items()
+            if key not in {'club_id', 'tournament_id', 'actor_email', 'actor_role'}}
+    preview = client.post(ROOT.rsplit('/', 1)[0]+'/broadcast-preview', headers=headers, json=body)
+    assert preview.status_code == 200
+    assert preview.json()['message_format'] == 'html'
+    assert 'x' * 12000 in preview.json()['preview']['html']
+    assert '&lt;div' not in preview.json()['preview']['html']
+    created = client.post(ROOT, headers=headers, json=body)
+    assert created.status_code == 200
+    assert created.json()['message_format'] == 'html'
+    assert created.json()['message'] == message
+    key = created.json()['operation_key']
+    assert client.post(f'{ROOT}/{key}/recipients/0/send', headers=headers,
+        json={'confirmation_text': CONFIRM_SEND}).json()['status'] == 'dry_run'
+    assert client.post(ROOT, headers=headers, json={**body, 'message_format': 'invalid'}).status_code == 422
