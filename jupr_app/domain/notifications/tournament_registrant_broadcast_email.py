@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from jupr_app.config import EMAIL_MODE_DRY_RUN, EMAIL_MODE_LIVE, EMAIL_MODE_STAGING_REDIRECT, SMTPConfig, get_email_mode, get_env_or_default
 from jupr_app.domain.notifications.tournament_email_sponsors import with_sponsors_html, with_sponsors_text, sponsor_inline_images
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
+from jupr_app.domain.notifications.tournament_email_content import clean_tournament_message, render_tournament_message_html
 
 
 def _safe_text(value: Any) -> str:
@@ -99,6 +100,7 @@ def build_tournament_registrant_broadcast_email_html(
     recipient_name: str,
     subject: str,
     message: str,
+    message_format: str = "text",
     personalize_greeting: bool = True,
     email_sponsors: list[dict] | None = None,
     registration_events: list[dict] | None = None,
@@ -109,11 +111,20 @@ def build_tournament_registrant_broadcast_email_html(
     tournament_line = f"<p><strong>Tournament:</strong> {escape(_safe_text(tournament_name))}</p>" if personalize_greeting else ""
     events_html, _ = _registration_events_sections(registration_events)
     edit_html, _ = _registration_edit_sections(registration_edit_links)
+    clean_message = clean_tournament_message(message, message_format)
+    if message_format == "html":
+        content, _ = render_tournament_message_html(clean_message)
+        return with_sponsors_html(
+            '<!doctype html><html><body style="margin:0;padding:0;font-family:Arial,sans-serif;color:#263e3a">'
+            + content + events_html + edit_html
+            + '<p style="font-size:12px;color:#6b7280">You are receiving this because you registered for this tournament.</p></body></html>',
+            email_sponsors, include_header=False,
+        )
     return with_sponsors_html(f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
 <h1>{escape(_safe_text(subject) or 'Tournament update')}</h1>
 {greeting}
 {tournament_line}
-<p style="font-size:18px;line-height:1.65;margin:24px 0">{_message_html(message)}</p>
+<p style="font-size:18px;line-height:1.65;margin:24px 0">{_message_html(clean_message)}</p>
 {events_html}
 {edit_html}
 <p style=\"color:#6b7280;font-size:12px\">You are receiving this because you registered for this tournament.</p>
@@ -126,11 +137,15 @@ def build_tournament_registrant_broadcast_email_text(
     recipient_name: str,
     subject: str,
     message: str,
+    message_format: str = "text",
     personalize_greeting: bool = True,
     email_sponsors: list[dict] | None = None,
     registration_events: list[dict] | None = None,
     registration_edit_links: list[dict] | None = None,
 ) -> str:
+    message = clean_tournament_message(message, message_format)
+    if message_format == "html":
+        _, message = render_tournament_message_html(message)
     greeting_name = _safe_text(recipient_name) or "there"
     _, events_text = _registration_events_sections(registration_events)
     _, edit_text = _registration_edit_sections(registration_edit_links)
@@ -158,6 +173,7 @@ def send_tournament_registrant_broadcast_email(
     recipient_name: str,
     subject: str,
     message: str,
+    message_format: str = "text",
     smtp_config: SMTPConfig | None = None,
     personalize_greeting: bool = True,
     message_id: str | None = None,
@@ -168,7 +184,8 @@ def send_tournament_registrant_broadcast_email(
     original_to_email = _safe_text(recipient_email)
     if not original_to_email:
         raise ValueError("Recipient email is required.")
-    if not _safe_text(message):
+    message = clean_tournament_message(message, message_format)
+    if not message:
         raise ValueError("Message is required.")
 
     final_subject = build_tournament_registrant_broadcast_subject(
@@ -194,6 +211,7 @@ def send_tournament_registrant_broadcast_email(
             recipient_name=recipient_name,
             subject=final_subject,
             message=message,
+            message_format=message_format,
             personalize_greeting=personalize_greeting,
             email_sponsors=email_sponsors,
             registration_events=registration_events,
@@ -204,6 +222,7 @@ def send_tournament_registrant_broadcast_email(
             recipient_name=recipient_name,
             subject=final_subject,
             message=message,
+            message_format=message_format,
             personalize_greeting=personalize_greeting,
             email_sponsors=email_sponsors,
             registration_events=registration_events,

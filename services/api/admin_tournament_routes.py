@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from jupr_app.domain.notifications.tournament_email_content import HTML_LIMIT, TEXT_LIMIT
 
 from jupr_app.domain.admin.roles import (
     PERMISSION_ENTER_SCORES,
@@ -145,10 +146,21 @@ class AdminTournamentRegistrationUpdateRequest(BaseModel):
     source: str = "next_tournament_admin_registration_update"
 
 
-class AdminTournamentBroadcastPreviewRequest(BaseModel):
+class AdminTournamentBroadcastContent(BaseModel):
+    message_format: Literal["text", "html"] = "text"
+    message: str = Field(default="", max_length=HTML_LIMIT)
+
+    @model_validator(mode="after")
+    def bounded_message(self):
+        limit = HTML_LIMIT if self.message_format == "html" else TEXT_LIMIT
+        if len(self.message) > limit:
+            raise ValueError(f"Email message exceeds {limit:,} characters.")
+        return self
+
+
+class AdminTournamentBroadcastPreviewRequest(AdminTournamentBroadcastContent):
     preview_recipient_email: str | None = Field(default=None, max_length=180)
     subject: str = ""
-    message: str = ""
     registration_ids: list[str] | None = Field(default=None, max_length=2000)
     include_cancelled: bool = False
     include_registration_events: bool = False
@@ -161,9 +173,9 @@ class AdminTournamentBroadcastPreviewRequest(BaseModel):
     search: str | None = None
 
 
-class AdminTournamentBroadcastCreateRequest(BaseModel):
+class AdminTournamentBroadcastCreateRequest(AdminTournamentBroadcastContent):
     subject: str = Field(min_length=1, max_length=200)
-    message: str = Field(min_length=1, max_length=10000)
+    message: str = Field(min_length=1, max_length=100000)
     registration_ids: list[str] = Field(min_length=1, max_length=2000)
     include_cancelled: bool = False
     include_registration_events: bool = False
