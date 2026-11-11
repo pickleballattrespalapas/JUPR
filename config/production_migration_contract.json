@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "tres-round-robin-hub-2026-10-20",
-  "repository_migration_content_sha256": "df88c0f7b8af50eb7c7f233132f8673c9437a37d6564b4d696a51cf1c9902896",
+  "repository_migration_content_sha256": "e224b160c1d3a328bf9fe2901f091688f4913886e469364fc02a1c8774c48a9e",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -179,7 +179,8 @@
     "tournament_pool_playoff_progression",
     "admin_tournament_registration_player_link",
     "tournament_combined_division_draws",
-    "combined_division_live_guards"
+    "combined_division_live_guards",
+    "complete_matching_partner_reservations"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -211,6 +212,7 @@
     "combined_division_live_guards",
     "combined_rating_team_tournaments",
     "communications_outbox_stale_guards",
+    "complete_matching_partner_reservations",
     "complete_registration_cancellation",
     "direct_match_active_league_guard",
     "direct_partner_request_delivery",
