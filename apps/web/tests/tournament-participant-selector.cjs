@@ -46,6 +46,7 @@ const response = value => new Response(JSON.stringify(value), { headers: { "Cont
 async function main() {
   const originalFetch = global.fetch;
   const requests = [];
+  const importHandoffRequests = [];
   let deferNext = false;
   let resolvePreview;
   let legacyApi = false;
@@ -74,7 +75,12 @@ async function main() {
       if (deferNext) { deferNext = false; return new Promise(resolve => { resolvePreview = () => resolve(response(payload)); }); }
       return response(payload);
     }
-    if (url.endsWith("import-handoff")) return response({ write_count: 0 });
+    // This report can be slow for a tournament with many event entries. It
+    // must not hold the participant list or email composer behind its reads.
+    if (url.endsWith("import-handoff")) {
+      importHandoffRequests.push(url);
+      return new Promise(() => {});
+    }
     if (url.endsWith("/admin/tournaments")) return response({ tournaments: [{ id: primaryId, name: "Baja Classic" }, { id: "other", name: "Other Tournament" }] });
     return response({ tournament: { id: url.endsWith("/other") ? "other" : primaryId }, registrations, selections: [{ registration_id: "partner", partner_email: "alex@example.com" }], days: [], event_options: [] });
   };
@@ -91,6 +97,9 @@ async function main() {
     const toggleEditLinks = async checked => act(async () => root.findAllByType("label").find(l => text(l) === " Include Edit Registration button").findByType("input").props.onChange({ target: { checked } }));
     const toggleCancelled = async checked => act(async () => root.findAllByType("label").find(l => text(l) === " Include cancelled registrations").findByType("input").props.onChange({ target: { checked } }));
 
+    assert.ok(button("Preview recipients"), "The email editor loads without waiting for the draw-import report");
+    assert.equal(button("Refreshing…"), undefined, "Loading finishes when the participant details arrive");
+    assert.deepEqual(importHandoffRequests, [], "Communications does not run per-entry draw import checks");
     assert.equal(button("Preview recipients").props.disabled, true);
     assert.equal(button("Load prepared player information email"), undefined, "Prepared content is scoped to the exact tournament");
     assert.match(text(root), /0 participants selected · 0 email recipients/);
