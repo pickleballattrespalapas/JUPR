@@ -1,6 +1,6 @@
 import { openPublicControls } from "./support/publicControls";
 import { expect, test } from "@playwright/test";
-import { bootstrapStagingContext, clubSlug } from "./support/staging";
+import { bootstrapStagingContext, clubSlug, expectedApiOrigin } from "./support/staging";
 
 test.beforeEach(async ({ context }) => {
   await bootstrapStagingContext(context);
@@ -15,7 +15,10 @@ test("leaderboards default to active overall standings with parity fields and st
   await expect(page.getByRole("columnheader", { name: "Gap" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Qualification" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Badges" })).toHaveCount(0);
-  await expect(page.getByTestId("leaderboard-highlight-card")).toHaveCount(4);
+  const leaderboard = await page.request.get(`${expectedApiOrigin}/clubs/${clubSlug}/leaderboards`);
+  expect(leaderboard.ok(), "staging leaderboard settings should be readable").toBeTruthy();
+  const payload = await leaderboard.json();
+  await expect(page.getByTestId("leaderboard-highlight-card")).toHaveCount(payload.leaderboard_settings.cards.length);
 
   const rows = page.getByTestId("leaderboard-row");
   expect(await rows.count(), "staging leaderboard fixture should contain active players").toBeGreaterThan(0);
