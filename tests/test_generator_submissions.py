@@ -1068,14 +1068,20 @@ def test_starting_level_route_keeps_existing_staging_wave_boundaries():
 
 
 @pytest.mark.parametrize("play_format", ["doubles", "singles", "doubles_singles"])
-@pytest.mark.parametrize("persisted_active", [True, False, None])
+@pytest.mark.parametrize("persisted_active,inactive_at", [
+    (True, "2026-10-01T03:00:00+00:00"),
+    (False, "2026-10-01T03:00:00+00:00"),
+    (None, "2026-10-01T03:00:00+00:00"),
+    (True, "2026-10-20T19:30:00+00:00"),
+    (None, "2026-10-20T19:30:00+00:00"),
+])
 def test_social_approval_reactivates_returning_players_without_rating_changes(
-    db, monkeypatch, real_approval_data, play_format, persisted_active,
+    db, monkeypatch, real_approval_data, play_format, persisted_active, inactive_at,
 ):
     now = datetime(2026, 10, 20, 20, tzinfo=timezone.utc)
     freeze_approval_clock(monkeypatch, now)
     for player in db.db["players"]:
-        player.update(active=persisted_active, inactive_at="2026-10-01T03:00:00+00:00")
+        player.update(active=persisted_active, inactive_at=inactive_at)
         # An unmaterialized singles profile must stay unmaterialized, including
         # its immutable replay seed and its rated-singles last-game timestamp.
         player.update(singles_rating=None, singles_wins=None, singles_losses=None,
@@ -1110,7 +1116,9 @@ def test_social_approval_reactivates_returning_players_without_rating_changes(
 @pytest.mark.parametrize("play_format", ["doubles", "singles"])
 @pytest.mark.parametrize("exclusion", [
     {"active": False, "inactive_at": None},
-    {"active": True, "inactive_at": "2026-10-20T19:30:00+00:00"},
+    # Player Editor sets active=false for an intentional manual exclusion.
+    # active=true plus this timestamp is an automatic same-day signup marker.
+    {"active": False, "inactive_at": "2026-10-20T19:30:00+00:00"},
 ])
 def test_social_approval_preserves_manual_exclusion(db, monkeypatch, real_approval_data, play_format, exclusion):
     now = datetime(2026, 10, 20, 20, tzinfo=timezone.utc)

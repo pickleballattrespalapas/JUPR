@@ -140,3 +140,30 @@ def test_legacy_social_activity_preserves_concurrent_game_and_manual_exclusion(
         assert player["last_game_at"] == newer_game
         assert player["active"] is False
         assert player["inactive_at"] == exclusion
+
+
+@pytest.mark.parametrize("format", ["doubles", "singles"])
+@pytest.mark.parametrize("plan", [True, False], ids=["atomic-plan", "legacy-writer"])
+@pytest.mark.parametrize("scope", ["unrated", "overall_only"])
+def test_new_players_are_visible_immediately_after_date_only_games(fixture_db, format, plan, scope):
+    db = fixture_db
+    for player in db.tables["players"]:
+        player.update(active=True, inactive_at=(NOW - timedelta(hours=1)).isoformat())
+    before = deepcopy(db.tables["players"])
+    scored = match(format, scope, date=NOW.replace(hour=0))
+
+    result = process(db, format, [scored], plan=plan)
+
+    assert result["inserted"] == 1
+    if plan:
+        assert db.tables["players"] == before
+        for update in result["write_plan"]["player_updates"]:
+            next(p for p in db.tables["players"] if p["id"] == update["player_id"]).update(update["after"])
+    played_ids = {1, 3} if format == "singles" else {1, 2, 3, 4}
+    for previous, player in zip(before, db.tables["players"]):
+        if player["id"] in played_ids:
+            assert player["last_game_at"] == scored["date"]
+            assert player["active"] is True
+            assert player["inactive_at"] is None
+        else:
+            assert player == previous

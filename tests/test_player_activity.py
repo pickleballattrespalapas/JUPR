@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+import pytest
 
 from jupr_app.domain.player_activity import (
     add_activity_columns,
@@ -91,7 +92,7 @@ def test_recorded_activity_respects_manual_and_merged_exclusions():
     base = {"name": "Player", "last_game_at": None, "active": True, "inactive_at": None}
     for exclusion in (
         {"active": False},
-        {"inactive_at": now.isoformat()},
+        {"active": False, "inactive_at": now.isoformat()},
         {"name": "Old (MERGED into Player #1)", "active": False},
     ):
         player = {**base, **exclusion}
@@ -113,3 +114,29 @@ def test_recorded_activity_clears_automatic_marker_but_never_rewinds_game_date()
     result = build_recorded_game_activity_update(player, old, now_utc=now)
     assert result["active"] is False
     assert result["last_game_at"] == old.isoformat()
+
+
+@pytest.mark.parametrize("stored_active", [True, None])
+def test_date_only_game_clears_automatic_marker_from_later_profile_creation(stored_active):
+    now = datetime(2026, 11, 11, 20, tzinfo=timezone.utc)
+    game = now.replace(hour=0)
+    player = {"name": "New Player", "active": stored_active, "last_game_at": None,
+              "inactive_at": now.replace(hour=14, minute=46).isoformat()}
+
+    result = build_recorded_game_activity_update(player, game, now_utc=now)
+
+    assert result == {"active": True, "inactive_at": None, "last_game_at": game.isoformat()}
+    assert is_player_leaderboard_active({**player, **result}, now_utc=now)
+
+
+def test_same_day_game_keeps_intentional_manual_exclusion():
+    now = datetime(2026, 11, 11, 20, tzinfo=timezone.utc)
+    game = now.replace(hour=0)
+    player = {"name": "Hidden Player", "active": False, "last_game_at": None,
+              "inactive_at": now.replace(hour=14).isoformat()}
+
+    result = build_recorded_game_activity_update(player, game, now_utc=now)
+
+    assert result["last_game_at"] == game.isoformat()
+    assert result["active"] is False
+    assert result["inactive_at"] == player["inactive_at"]

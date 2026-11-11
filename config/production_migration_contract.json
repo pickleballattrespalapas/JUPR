@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "9781aeffe51c0b27658ef73476f2aeb3b8899248ca5a618c99f9cd00a5158da7",
+  "repository_migration_content_sha256": "4f5d317ba097dfad96746305a7aa75b44dd27014ba8d4d537586974a3da88c2a",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -48,6 +48,7 @@
     "harden_public_data_api",
     "harden_tournament_registration_check_in_privileges",
     "historic_singles_league_rating_backfill",
+    "immediate_player_game_reactivation",
     "independent_singles_registration_rating",
     "interclub_allow_play_up",
     "interclub_club_invitations",
