@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from jupr_app.domain.doubles_rotation_quality import rank_options, window_cost
+
 from jupr_app.domain.moneyball_expectations import (
     is_moneyball, validate_score, standings as moneyball_standings, all_games_saved, substitute_moneyball,
 )
@@ -145,6 +147,8 @@ def _blank_history(event: dict[str, Any]) -> dict[str, Any]:
         "doubles_opponents": defaultdict(int),
         "exact_matches": defaultdict(int),
         "groups": defaultdict(int),
+        "partner_rounds": {},
+        "opponent_rounds": {},
     }
 
 def _round_matches(round_row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -155,7 +159,8 @@ def _round_matches(round_row: dict[str, Any]) -> list[dict[str, Any]]:
         rows.extend(dict(row) for row in court.get("matches") or [])
     return rows
 
-def _apply_match_history(history: dict[str, Any], match: dict[str, Any], play_format: str) -> None:
+def _apply_match_history(history: dict[str, Any], match: dict[str, Any], play_format: str,
+                         round_number: int | None = None) -> None:
     if match.get("status") in {"not_played", "skipped", "cancelled", "canceled"}:
         return
     side_a = [str(x) for x in match.get("sideA") or match.get("teamA") or []]
@@ -173,6 +178,16 @@ def _apply_match_history(history: dict[str, Any], match: dict[str, Any], play_fo
             history["singles_opponents"][key] += 1
             history["exact_matches"][key] += 1
         return
+    number = int(round_number or match.get("round") or 0)
+    if number > 0:
+        roles = {
+            "partner_rounds": [_pair_key(*team) for team in (side_a, side_b) if len(team) == 2],
+            "opponent_rounds": [_pair_key(a, b) for a in side_a for b in side_b],
+        }
+        for role, keys in roles.items():
+            meetings = history.setdefault(role, {})
+            for key in keys:
+                meetings[key] = sorted(set(meetings.get(key, [])) | {number})
     if len(side_a) == 2:
         history["partners"][_pair_key(side_a[0], side_a[1])] += 1
     if len(side_b) == 2:
@@ -392,6 +407,50 @@ def _singles_round(
         for court_number, (a, b) in enumerate(best_matches, start=1)
     ]
     return matches, best_byes, warnings
+
+def _quality_doubles_round(
+    *, active_ids: list[str], court_count: int, history: dict[str, Any],
+    roster_pos: dict[str, int], round_number: int, next_active_ids: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """Choose within fair playing sets, with at most four one-round extensions."""
+    match_count = min(len(active_ids) // 4, max(1, court_count) if court_count else len(active_ids) // 4)
+    slots = match_count * 4
+    if slots < 4:
+        return [], list(active_ids), ["At least four active players are required."]
+    seed = _stable_seed("rotation-quality-v2", round_number, *active_ids)
+    sets = _candidate_playing_sets(active_ids, slots, history, roster_pos, seed=seed, attempts=16)
+    choices = rank_options(sets, history, round_number, seed)
+
+    def matches_for(games, number):
+        return [{"id": f"r{number}-c{court}", "round": number, "court": court,
+                 "playFormat": "doubles", "sideA": list(a), "sideB": list(b),
+                 "teamA": list(a), "teamB": list(b), "scoreA": None, "scoreB": None,
+                 "status": "scheduled"} for court, (a,b) in enumerate(games, 1)]
+
+    ranked = []
+    for cost, games, byes in choices:
+        # Never sacrifice the best immediate partner coverage for speculation.
+        if cost[:2] != choices[0][0][:2]:
+            continue
+        rank = window_cost(cost, cost)
+        if next_active_ids is not None and len(next_active_ids) >= 4:
+            future = copy.deepcopy(history)
+            _update_history_for_generated_round(future, {
+                "number": round_number, "matches": matches_for(games, round_number),
+                "byeParticipantIds": byes,
+            }, "doubles")
+            future_slots = 4 * min(len(next_active_ids) // 4, max(1, court_count) if court_count else len(next_active_ids) // 4)
+            future_sets = _candidate_playing_sets(next_active_ids, future_slots, future, roster_pos,
+                                                 seed=seed, attempts=4)
+            next_cost = rank_options(future_sets, future, round_number + 1, seed, limit=1)[0][0]
+            rank = window_cost(cost, next_cost)
+        ranked.append((rank, games, byes))
+    _, games, byes = min(ranked)
+    matches = matches_for(games, round_number)
+    repeats = sum(history["partners"].get(_pair_key(*team), 0) > 0 for game in games for team in game)
+    warnings = [f"This rotation includes {repeats} repeated partner pairing{'s' if repeats != 1 else ''}."] if repeats else []
+    return matches, list(byes), warnings
+
 
 def _doubles_round(
     *,
@@ -869,7 +928,7 @@ def _update_history_for_generated_round(history: dict[str, Any], round_row: dict
     for pid in round_row.get("byeParticipantIds") or []:
         history["byes"][str(pid)] = int(history["byes"].get(str(pid), 0)) + 1
     for match in matches:
-        _apply_match_history(history, match, play_format)
+        _apply_match_history(history, match, play_format, round_row.get("number"))
 
 
 def _perfect_doubles_round(
@@ -965,13 +1024,23 @@ def _generate_round_robin_round(
         if perfect_round is not None:
             matches, byes, warnings = perfect_round
         else:
-            matches, byes, warnings = _doubles_round(
-                active_ids=active_ids,
-                court_count=int(event.get("courtCount") or 0),
-                history=history,
-                roster_pos=roster_pos,
-                round_number=round_number,
-            )
+            next_row = next((r for r in event.get("rounds") or []
+                             if int(r.get("number") or 0) == round_number + 1), {})
+            lookahead = (bool(event.get("adaptiveFromRound")) and not event.get("roundRobinHubId")
+                         and not event.get("playoff") and not is_moneyball(event)
+                         and next_row.get("status") not in {"saved", "played", "active", "skipped"}
+                         and not _round_has_any_scores(next_row))
+            if not is_moneyball(event) and not event.get("playoff") and not event.get("roundRobinHubId"):
+                matches, byes, warnings = _quality_doubles_round(
+                    active_ids=active_ids, court_count=int(event.get("courtCount") or 0),
+                    history=history, roster_pos=roster_pos, round_number=round_number,
+                    next_active_ids=active_participant_ids(event, round_number + 1) if lookahead else None,
+                )
+            else:
+                matches, byes, warnings = _doubles_round(
+                    active_ids=active_ids, court_count=int(event.get("courtCount") or 0),
+                    history=history, roster_pos=roster_pos, round_number=round_number,
+                )
         format_counts = {"doubles": len(matches), "singles": 0}
     return {
         "number": int(round_number),
@@ -2263,7 +2332,10 @@ def _seat_generator_arrivals(
 def _round_planning_key(event: dict[str, Any], number: int, history: dict[str, Any]) -> str:
     """Reuse a prepared round only while every scheduling input still matches."""
     inputs = {
-        "version": 1, "round": number,
+        "version": 2, "round": number,
+        "next_active": active_participant_ids(event, number + 1),
+        "next_committed": [r for r in event.get("rounds") or [] if int(r.get("number") or 0) == number + 1
+                           and (r.get("status") in {"saved", "played", "active", "skipped"} or _round_has_any_scores(r))],
         "active": active_participant_ids(event, number),
         "roster": [(str(p["id"]), int(p.get("roster_order") or 0)) for p in event.get("participants") or []],
         "settings": {key: event.get(key) for key in (
