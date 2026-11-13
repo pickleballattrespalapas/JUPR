@@ -13,26 +13,35 @@ from starlette.routing import Match
 
 from scripts.staging_write_waves import wave_allows_request
 from jupr_app.observability.request_timing import RequestTiming, current_timing
+from jupr_app.observability.runtime_memory import RequestMemoryTracker
 
 logger = logging.getLogger("jupr.api.request")
 
 
 class StructuredRequestLoggingMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, dispatch=None):
+        super().__init__(app, dispatch=dispatch)
+        self._memory_tracker = RequestMemoryTracker()
+
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         supplied_id = request.headers.get("x-request-id", "")
         request_id = supplied_id if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", supplied_id) else str(uuid.uuid4())
         start = time.perf_counter()
         timing = RequestTiming(request_id)
         token = current_timing.set(timing)
+        memory_start = self._memory_tracker.start()
         try:
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            finally:
+                memory = self._memory_tracker.finish(memory_start)
         except Exception as exc:
-            _log_request("request.failed", request, timing, start, 500, type(exc).__name__)
+            _log_request("request.failed", request, timing, start, 500, type(exc).__name__, memory=memory)
             raise
         finally:
             current_timing.reset(token)
         response.headers.setdefault("x-request-id", request_id)
-        _log_request("request.complete", request, timing, start, response.status_code)
+        _log_request("request.complete", request, timing, start, response.status_code, memory=memory)
         return response
 
 
@@ -50,7 +59,7 @@ def _request_route_template(request):
     return "<unmatched>"
 
 
-def _log_request(event, request, timing, start, status_code, exception_type=None):
+def _log_request(event, request, timing, start, status_code, exception_type=None, *, memory=None):
     try:
         # Matched route templates exclude player IDs, capability paths and names.
         # Unmatched/early-denied paths are not echoed back into the logs.
@@ -65,6 +74,7 @@ def _log_request(event, request, timing, start, status_code, exception_type=None
             "exception_type": exception_type,
             "machine_id": machine if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", machine) else None,
             **timing.snapshot(),
+            **(memory or {}),
         })
     except Exception:
         # An unavailable log sink must never fail the application request.

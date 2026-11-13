@@ -19,6 +19,9 @@ class RequestJSONFormatter(logging.Formatter):
         for field in ("method", "path", "status_code", "elapsed_ms", "request_id", "exception_type",
                       "operation", "queue_ms", "compute_ms", "cpu_ms", "machine_id",
                       "db_calls", "db_errors", "db_elapsed_ms", "db_thread_cpu_ms", "phases",
+                      "process_rss_mb_start", "process_rss_mb_end",
+                      "machine_available_mb_start", "machine_available_mb_end",
+                      "handlers_in_flight_start", "handlers_in_flight_end",
                       "job_id", "club_id", "worker_id", "deployment_sha", "phase",
                       "program_processed", "program_errors", "queue_processed", "queue_errors"):
             value = getattr(record, field, None)
