@@ -9,47 +9,67 @@ import uuid
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.routing import Match
 
 from scripts.staging_write_waves import wave_allows_request
+from jupr_app.observability.runtime_memory import RequestMemoryTracker
 
 logger = logging.getLogger("jupr.api.request")
 
 
 class StructuredRequestLoggingMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, dispatch=None):
+        super().__init__(app, dispatch=dispatch)
+        self._memory_tracker = RequestMemoryTracker()
+
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         supplied_id = request.headers.get("x-request-id", "")
         request_id = supplied_id if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", supplied_id) else str(uuid.uuid4())
         start = time.perf_counter()
+        memory_start = self._memory_tracker.start()
         try:
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            finally:
+                memory = self._memory_tracker.finish(memory_start)
         except Exception as exc:
-            logger.info(
-                "request.failed",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status_code": 500,
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000, 2),
-                    "request_id": request_id,
-                    # Exception messages can embed user input; retain only the type.
-                    "exception_type": type(exc).__name__,
-                },
-            )
+            _log_request("request.failed", request, request_id, start, 500, type(exc).__name__, memory)
             raise
-        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         response.headers.setdefault("x-request-id", request_id)
+        _log_request("request.complete", request, request_id, start, response.status_code, memory=memory)
+        return response
 
+
+def _request_route_template(request):
+    matched = getattr(request.scope.get("route"), "path", None)
+    if matched:
+        return matched
+    for route in getattr(request.app, "routes", ()):
+        match, _ = route.matches(request.scope)
+        if match == Match.FULL:
+            return getattr(route, "path", None) or "<unmatched>"
+    return "<unmatched>"
+
+
+def _log_request(event, request, request_id, start, status_code, exception_type=None, memory=None):
+    try:
+        machine = os.getenv("FLY_MACHINE_ID", "")
         logger.info(
-            "request.complete",
+            event,
             extra={
                 "method": request.method,
-                "path": request.url.path,
-                "status_code": response.status_code,
-                "elapsed_ms": elapsed_ms,
+                "path": _request_route_template(request),
+                "status_code": status_code,
+                "elapsed_ms": round((time.perf_counter() - start) * 1000, 2),
                 "request_id": request_id,
+                "exception_type": exception_type,
+                "machine_id": machine if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", machine) else None,
+                **(memory or {}),
             },
         )
-        return response
+    except Exception:
+        # Unavailable diagnostics must not replace a response or its error.
+        pass
 
 
 class StagingWriteWaveMiddleware(BaseHTTPMiddleware):

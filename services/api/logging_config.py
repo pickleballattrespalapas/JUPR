@@ -17,7 +17,10 @@ class RequestJSONFormatter(logging.Formatter):
             "event": record.getMessage(),
         }
         for field in ("method", "path", "status_code", "elapsed_ms", "request_id", "exception_type",
-                      "operation", "queue_ms", "compute_ms", "cpu_ms"):
+                      "operation", "queue_ms", "compute_ms", "cpu_ms", "machine_id",
+                      "process_rss_mb_start", "process_rss_mb_end",
+                      "machine_available_mb_start", "machine_available_mb_end",
+                      "handlers_in_flight_start", "handlers_in_flight_end"):
             value = getattr(record, field, None)
             if value is not None:
                 payload[field] = value
