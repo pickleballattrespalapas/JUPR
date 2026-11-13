@@ -161,7 +161,7 @@ class SiteDocument(StrictModel):
     display: DisplaySettings = Field(default_factory=DisplaySettings)
     leaderboard: LeaderboardSettings = Field(default_factory=LeaderboardSettings)
     page_visibility: dict[
-        Literal["players", "leaderboards", "leagues", "tournaments", "matches", "play",
+        Literal["players", "leaderboards", "leagues", "tournaments", "round-robins", "matches", "play",
                 "match-explorer", "weekly-recap", "badge-codex", "interclub", "trophies"],
         Literal["public", "private"],
     ] = Field(default_factory=dict)

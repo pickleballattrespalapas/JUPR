@@ -72,6 +72,8 @@ function siteReliabilityReady(openapi) {
     "/public/clubs/{slug}/site/logo",
     "/clubs/{club_slug}/players/{player_id}/share-metadata",
     "/clubs/{club_slug}/play-generators/sessions/{session_key}/share-metadata",
+    "/clubs/{club_slug}/round-robins",
+    "/clubs/{club_slug}/round-robins/{session_key}",
   ].every((path) => Boolean(openapi?.paths?.[path]?.get));
   const batchDeparturesReady = ["GeneratorRosterRequest", "PublicGeneratorRosterRequest"].every((name) => {
     const field = openapi?.components?.schemas?.[name]?.properties?.participant_ids;

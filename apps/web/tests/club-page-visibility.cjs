@@ -83,7 +83,9 @@ global.fetch = async (url, options = {}) => {
 
 (async () => {
   const { CLUB_LINKS, clubPageSection, publicClubPage, publicClubLinks } = load("lib/clubSite.ts");
-  assert.equal(publicClubLinks(initial).length, 10, "Existing documents keep the trophy case and hide retired badges");
+  assert.equal(publicClubLinks(initial).length, 11, "Existing documents include Round Robins and hide retired badges");
+  assert.ok(publicClubLinks(initial).some(([label, path]) => label === "Round Robins" && path === "round-robins"));
+  assert.equal(publicClubPage({ ...initial, page_visibility: { "round-robins": "private" } }, "alpha", "/clubs/alpha/round-robins/session"), false);
   assert.equal(publicClubPage(initial, "alpha", "/clubs/alpha/badge-codex"), false);
   assert.equal(publicClubPage({ ...initial, page_visibility: { "badge-codex": "public" } }, "alpha", "/clubs/alpha/badge-codex?badge=old"), false);
   assert.equal(load("lib/clubSite.ts").visible({ badges: true }, "badges"), false);
