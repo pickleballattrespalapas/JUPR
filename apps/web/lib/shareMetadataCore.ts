@@ -77,6 +77,7 @@ export function dateRange(start: unknown, end: unknown): string {
 const PAGES: Record<string, [string, string]> = {
   tournaments: ["Tournaments", "Explore pickleball tournaments at {club}. Find event dates, registration, player rosters, partners, and results."],
   leagues: ["Leagues", "Explore pickleball leagues at {club}. Follow league schedules, standings, weekly results, and player achievements."],
+  "round-robins": ["Round Robins", "Browse past round robins and Moneyball at {club}. View final standings and round scores."],
   "league-results": ["League Results", "See league standings, weekly results, and player achievements at {club}."],
   "team-leagues": ["Team Leagues", "Follow team leagues, schedules, and results at {club}."],
   "team-league": ["Team Leagues", "Follow team leagues, schedules, and results at {club}."],

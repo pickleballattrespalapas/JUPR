@@ -36,6 +36,8 @@ const reliabilityReads = [
   "/public/clubs/{slug}/site/logo",
   "/clubs/{club_slug}/players/{player_id}/share-metadata",
   "/clubs/{club_slug}/play-generators/sessions/{session_key}/share-metadata",
+  "/clubs/{club_slug}/round-robins",
+  "/clubs/{club_slug}/round-robins/{session_key}",
 ];
 for (const path of reliabilityReads) contract.paths[path] = { get: {} };
 for (const name of ["GeneratorRosterRequest", "PublicGeneratorRosterRequest"]) {
