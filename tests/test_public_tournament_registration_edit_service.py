@@ -1007,6 +1007,115 @@ def test_registration_edit_link_request_missing_email_does_not_enumerate(monkeyp
     assert calls["send"] == 0
 
 
+def _edit_link_request(supabase, key):
+    return request_public_tournament_registration_edit_link(
+        supabase, club_id="club-1", club_slug="tres-palapas",
+        registration_slug="tres-open", email="alex@example.com", idempotency_key=key,
+    )
+
+
+@pytest.fixture
+def delivery_registration(monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    registration = _registered_supabase(monkeypatch)
+    # Keep multi-request tests in the same suppression bucket, including when
+    # CI happens to run at a quarter-hour boundary.
+    instant = datetime(2026, 11, 13, 12, 5, tzinfo=timezone.utc)
+    monkeypatch.setattr(edit_service, "datetime", SimpleNamespace(now=lambda _timezone: instant))
+    return registration
+
+
+def test_confirmed_rejection_allows_one_fresh_request_but_not_an_exact_replay(monkeypatch, delivery_registration):
+    import smtplib
+    from jupr_app.domain.notifications.smtp_delivery import smtp_delivery_failure
+
+    supabase, storage, *_rest = delivery_registration
+    calls = []
+
+    def sender(**_kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            raise smtp_delivery_failure(smtplib.SMTPDataError(451, b"4.3.0 private provider text"), stage="message", attempt_count=2)
+        return {"status": "sent", "provider_message_id": "<accepted@example.com>"}
+
+    monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", sender)
+    first = _edit_link_request(supabase, "request-1")
+    assert _edit_link_request(supabase, "request-1") == first
+    assert len(calls) == 1
+    assert _edit_link_request(supabase, "request-2") == first
+    assert _edit_link_request(supabase, "request-3") == first
+    assert len(calls) == 2
+    receipts = storage["admin_guarded_operations"]
+    assert len(receipts) == 2
+    assert receipts[0]["after_json"]["smtp"]["smtp_codes"] == [451]
+    assert receipts[1]["after_json"]["provider_message_id"] == "<accepted@example.com>"
+    assert "private provider text" not in str(receipts)
+
+
+def test_confirmed_failure_recovery_is_bounded_to_one_extra_slot(monkeypatch, delivery_registration):
+    import smtplib
+    from jupr_app.domain.notifications.smtp_delivery import smtp_delivery_failure
+
+    supabase, storage, *_rest = delivery_registration
+    calls = []
+
+    def sender(**_kwargs):
+        calls.append(True)
+        raise smtp_delivery_failure(smtplib.SMTPDataError(550, b"5.7.1 rejected"), stage="message")
+
+    monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", sender)
+    for key in ("request-1", "request-2", "request-3", "request-4"):
+        assert _edit_link_request(supabase, key)["accepted"] is True
+    assert len(calls) == 2 and len(storage["admin_guarded_operations"]) == 2
+
+
+@pytest.mark.parametrize("error", [TimeoutError("edit_token=private"), RuntimeError("private-password")])
+def test_uncertain_delivery_does_not_replay_or_expose_details(monkeypatch, error, delivery_registration):
+    supabase, storage, *_rest = delivery_registration
+    calls = []
+
+    def sender(**_kwargs):
+        calls.append(True)
+        raise error
+
+    monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", sender)
+    first = _edit_link_request(supabase, "request-1")
+    assert _edit_link_request(supabase, "request-1") == first
+    assert _edit_link_request(supabase, "request-2") == first
+    assert len(calls) == 1
+    receipt = storage["admin_guarded_operations"][0]
+    assert receipt["status"] == "recovery_required"
+    assert receipt["after_json"]["delivery"] == "unknown"
+    assert "private" not in str(receipt) and "private" not in str(first)
+
+
+@pytest.mark.parametrize("rejected", [False, True])
+def test_receipt_write_failure_prevents_another_send(monkeypatch, rejected, delivery_registration):
+    import smtplib
+    from jupr_app.domain.notifications.smtp_delivery import smtp_delivery_failure
+    from jupr_app.services.admin_guarded_write_service import GuardedWriteRecoveryRequired
+
+    supabase, _storage, *_rest = delivery_registration
+    calls = []
+
+    def sender(**_kwargs):
+        calls.append(True)
+        if rejected:
+            raise smtp_delivery_failure(smtplib.SMTPDataError(451, b"4.3.0 rejected"), stage="message")
+        return {"status": "sent"}
+
+    def interrupted_receipt(*_args, **_kwargs):
+        raise GuardedWriteRecoveryRequired("test-operation", "receipt unavailable")
+
+    monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", sender)
+    monkeypatch.setattr(edit_service, "update_guarded_operation", interrupted_receipt)
+    _edit_link_request(supabase, "request-1")
+    _edit_link_request(supabase, "request-2")
+    assert len(calls) == 1
+
+
 def test_registration_edit_link_request_honeypot_is_silent(monkeypatch) -> None:
     supabase, _storage, _registration_id, _token = _registered_supabase(monkeypatch)
     calls = {"send": 0}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -96,6 +97,8 @@ class FakeQuery:
         if self.insert_payload is not None:
             rows = self.insert_payload if isinstance(self.insert_payload, list) else [self.insert_payload]
             for row in rows:
+                if self.table_name == "admin_guarded_operations":
+                    row.setdefault("id", str(uuid.uuid4()))
                 table.append(dict(row))
             return SimpleNamespace(data=rows, count=len(rows))
         if self.upsert_payload is not None:
