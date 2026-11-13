@@ -1030,7 +1030,11 @@ def _generate_round_robin_round(
                          and not event.get("playoff") and not is_moneyball(event)
                          and next_row.get("status") not in {"saved", "played", "active", "skipped"}
                          and not _round_has_any_scores(next_row))
-            if not is_moneyball(event) and not event.get("playoff") and not event.get("roundRobinHubId"):
+            # Initial fixed previews may later join a hub. Preserve their
+            # established lineups; quality planning starts when the standalone
+            # session adapts to attendance or extends beyond its fixed cycle.
+            if (event.get("adaptiveFromRound") and not is_moneyball(event)
+                    and not event.get("playoff") and not event.get("roundRobinHubId")):
                 matches, byes, warnings = _quality_doubles_round(
                     active_ids=active_ids, court_count=int(event.get("courtCount") or 0),
                     history=history, roster_pos=roster_pos, round_number=round_number,
