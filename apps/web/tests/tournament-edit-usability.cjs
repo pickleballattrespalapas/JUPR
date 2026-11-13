@@ -318,15 +318,17 @@ async function verifyRecovery() {
   await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} }));
   assert.equal(requests.length, 1);
   assert.match(text(dialog()), /fixture@example.invalid/);
-  assert.match(text(dialog()), /Open your email and click/);
-  assert.match(text(dialog()), /matches a registration/, "Do not expose whether an address is registered");
+  assert.match(text(dialog()), /look for an email with a secure link/);
+  assert.match(text(dialog()), /matches your registration/, "Do not expose whether an address is registered");
+  assert.match(text(dialog()), /contact tournament staff for help/);
+  assert.doesNotMatch(text(dialog()), /we.ve sent|will arrive shortly/i, "Acknowledging a request does not prove delivery");
   await act(async () => button("OK, I’ll check my email").props.onClick());
   assert.equal(dialog(), undefined);
   assert.match(text(renderer.root.findByProps({ role: "status" })), /fixture@example.invalid/);
   response = { error: "Unavailable" };
   await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} }));
-  assert.equal(dialog(), undefined, "Failed sends do not show the success dialog");
-  assert.match(text(renderer.root.findByProps({ role: "alert" })), /couldn’t send/);
+  assert.equal(dialog(), undefined, "Failed requests do not show the acknowledgement dialog");
+  assert.match(text(renderer.root.findByProps({ role: "alert" })), /couldn’t confirm your request/);
 }
 
 async function verifyNavigation() {

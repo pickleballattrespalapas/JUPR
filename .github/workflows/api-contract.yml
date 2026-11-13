@@ -236,6 +236,14 @@ jobs:
             tests/test_tournament_testing_fixes_static.py \
             tests/test_staging_candidate_handoff.py
 
+      - name: Verify SMTP delivery recovery
+        run: |
+          python -m pytest -q \
+            tests/test_smtp_delivery.py \
+            tests/test_notification_config.py \
+            tests/test_tournament_email_sponsors.py \
+            tests/test_public_tournament_registration_edit_service.py
+
       - name: Verify automatic player update delivery
         run: |
           python -m pytest -q \

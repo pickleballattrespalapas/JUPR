@@ -202,6 +202,8 @@ def test_smtp_message_embeds_png_copies_and_keeps_plain_text(monkeypatch):
         def __exit__(self, *a): pass
         def ehlo(self): pass
         def login(self, *a): pass
+        def quit(self): pass
+        def close(self): pass
         def sendmail(self, sender, recipients, raw): sent.append((recipients, message_from_string(raw)))
     monkeypatch.setattr(smtp_mailer.smtplib, "SMTP", SMTP)
     monkeypatch.setattr(smtp_mailer, "_smtp_config_dict", lambda _: dict(host="fixture", port=25, username="fixture", password="fixture", from_email="organizer@example.com", from_name="Organizers", reply_to="organizer@example.com", use_tls=False))

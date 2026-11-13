@@ -5,6 +5,7 @@ const path = require("node:path");
 const React = require("react");
 const { act, create } = require("react-test-renderer");
 const ts = require("typescript");
+global.IS_REACT_ACT_ENVIRONMENT = true;
 
 function load(relative, overrides = {}) {
   const filename = path.resolve(__dirname, "..", relative);
@@ -33,7 +34,7 @@ const registration = "app/clubs/[clubSlug]/tournament-registration/";
 const api = { requestClubTournamentRegistrationEditLink: () => assert.fail("rendering must not send email") };
 const EditForm = load(registration + "EditLinkRequestForm.tsx", {
   "@/lib/tournamentRegistrationApi": api,
-  "@/components/interaction": { InteractionDialog: () => null }
+  "@/components/interaction": { InteractionDialog: ({ title, children }) => React.createElement("section", { "data-testid": "edit-link-notice" }, title, children) }
 }).default;
 const Form = load(registration + "TournamentRegistrationForm.tsx", {
   "@/lib/tournamentRegistrationApi": api,
@@ -55,6 +56,61 @@ const Page = load(registration + "page.tsx", {
   "./TournamentRegistrationForm": { default: Form }
 }).default;
 const content = node => typeof node === "string" ? node : (node.children || []).map(content).join("");
+
+async function verifyEditLinkOutcomes() {
+  const previousFormData = global.FormData;
+  global.FormData = class { get() { return ""; } };
+  const calls = [];
+  let outcome = { error: { message: "Request timed out" } };
+  api.requestClubTournamentRegistrationEditLink = async (_club, payload) => {
+    calls.push(payload);
+    if (outcome instanceof Error) throw outcome;
+    return outcome;
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(EditForm, { clubSlug: "fixture", tournamentId: "fixture", initialEmail: "player@example.com" })); });
+    const submit = () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} });
+    const button = () => renderer.root.findAllByType("button")[0];
+    await act(submit);
+    assert.match(content(renderer.toJSON()), /couldn’t confirm your request/);
+    assert.match(content(renderer.toJSON()), /contact tournament staff/);
+    assert.equal(renderer.root.findAllByProps({ role: "status" }).length, 0);
+    assert.equal(button().props.disabled, false);
+
+    outcome = new Error("Connection lost");
+    await act(submit);
+    assert.equal(button().props.disabled, false, "a rejected request cannot leave Sending stuck");
+    assert.equal(calls[1].idempotency_key, calls[0].idempotency_key, "an uncertain HTTP retry reuses its request identity");
+
+    outcome = { data: { ok: true, accepted: true } };
+    await act(submit);
+    assert.match(content(renderer.toJSON()), /Request received for/);
+    assert.match(content(renderer.toJSON()), /If this address matches/);
+    assert.match(content(renderer.toJSON()), /If no link arrives within a few minutes/);
+    assert.doesNotMatch(content(renderer.toJSON()), /we.ve sent|has been sent|will arrive shortly/i);
+
+    await act(submit);
+    assert.notEqual(calls[3].idempotency_key, calls[2].idempotency_key, "a fresh acknowledged request gets a new identity for safe rejection recovery");
+
+    let finish;
+    api.requestClubTournamentRegistrationEditLink = (_club, payload) => {
+      calls.push(payload);
+      return new Promise(resolve => { finish = resolve; });
+    };
+    const count = calls.length;
+    await act(async () => {
+      const first = submit();
+      const duplicate = submit();
+      assert.equal(calls.length, count + 1, "rapid duplicate submissions share the in-flight request");
+      finish(outcome);
+      await Promise.all([first, duplicate]);
+    });
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    global.FormData = previousFormData;
+  }
+}
 
 async function main() {
   const previousWindow = global.window;
@@ -85,7 +141,8 @@ async function main() {
     assert.equal(button("Start a registration"), undefined);
     await act(async () => button("Edit my registration").props.onClick());
     assert.equal(forms().length, 1);
-    console.log("Tournament registration recovery: single form, existing anchors and closed registration passed.");
+    await verifyEditLinkOutcomes();
+    console.log("Tournament registration recovery: navigation, honest acknowledgements, failed requests, retry identity and duplicate suppression passed.");
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     global.window = previousWindow;

@@ -160,6 +160,8 @@ class FakeSMTP:
     def starttls(self, *, context): self.calls.append(("starttls", context.check_hostname))
     def login(self, username, password): self.calls.append(("login",))
     def sendmail(self, *args): self.calls.append(("sendmail",))
+    def quit(self): self.calls.append(("quit",)); return (221, b"Goodbye")
+    def close(self): self.calls.append(("close",))
 
 
 @pytest.mark.parametrize("port", [465, 587])
@@ -201,4 +203,4 @@ def test_port_465_uses_implicit_tls_and_does_not_starttls_again(monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP", lambda *_a, **_kw: pytest.fail("wrong transport"))
     message_id = smtp_mailer.send_email_with_inline_chart(to_email="test@example.org", subject="Test", html_body="Test", text_body="Test", smtp_config=cfg)
     assert message_id.endswith("@example.org>")
-    assert FakeSMTP.calls == [("connect", 465, True), ("ehlo",), ("login",), ("sendmail",)]
+    assert FakeSMTP.calls == [("connect", 465, True), ("ehlo",), ("login",), ("sendmail",), ("quit",), ("close",)]

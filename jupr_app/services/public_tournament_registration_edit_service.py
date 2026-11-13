@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.config import get_env_or_default, get_explicit_registration_edit_token_secret, get_public_base_url
 from jupr_app.domain.notifications.tournament_registration_edit_email import send_tournament_registration_edit_email
+from jupr_app.domain.notifications.smtp_delivery import SMTPDeliveryError, smtp_failure_details
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token, verify_registration_edit_token
 from jupr_app.domain.tournament_registration_repo import (
     TournamentRegistrationEditConflictError,
@@ -571,13 +572,15 @@ def _deliver_public_tournament_registration_edit_link(
     bucket = int(datetime.now(timezone.utc).timestamp() // (15 * 60))
     operation_scope = "\x1f".join((str(club_id), tid, registration_id, clean_email, str(bucket)))
     delivery_operation_key = "editlink:" + hashlib.sha256(operation_scope.encode("utf-8")).hexdigest()
-    try:
-        operation, idempotent = begin_guarded_operation(
+    client_request_fingerprint = hashlib.sha256(str(idempotency_key).encode("utf-8")).hexdigest()
+
+    def begin_delivery(operation_key: str) -> tuple[dict[str, Any], bool]:
+        return begin_guarded_operation(
             supabase,
             club_id=str(club_id),
             workflow="public_tournament_edit_link_delivery",
             action="send_tournament_registration_edit_link",
-            operation_key=delivery_operation_key,
+            operation_key=operation_key,
             request_payload={
                 "tournament_id": tid,
                 "registration_id": registration_id,
@@ -587,8 +590,21 @@ def _deliver_public_tournament_registration_edit_link(
             actor_email="public-registration@system.invalid",
             actor_role="public_registration",
             source="next_public_tournament_registration_edit_link",
-            before_json={"client_request_key_fingerprint": hashlib.sha256(str(idempotency_key).encode("utf-8")).hexdigest()},
+            before_json={"client_request_key_fingerprint": client_request_fingerprint},
         )
+
+    try:
+        operation, idempotent = begin_delivery(delivery_operation_key)
+        if (
+            idempotent
+            and (operation.get("after_json") or {}).get("delivery") == "not_accepted"
+            and (operation.get("before_json") or {}).get("client_request_key_fingerprint") != client_request_fingerprint
+        ):
+            # A fresh user request may recover a proven rejection once in this
+            # bucket. The deterministic second slot is claimed durably, so
+            # concurrent requests cannot turn a provider failure into a flood.
+            delivery_operation_key += ":retry"
+            operation, idempotent = begin_delivery(delivery_operation_key)
         if idempotent:
             return str((operation.get("after_json") or {}).get("email_status") or "unavailable")
     except (GuardedWriteRecoveryRequired, RuntimeError, ValueError):
@@ -615,13 +631,22 @@ def _deliver_public_tournament_registration_edit_link(
             email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(club_id), tournament_id=tid),
         )
     except Exception as exc:
+        details = smtp_failure_details(exc)
+        rejected = details["delivery_outcome"] == "not_accepted"
         try:
             update_guarded_operation(
                 supabase,
                 operation_id=operation.get("id"),
                 operation_key=delivery_operation_key,
-                status="recovery_required",
-                error_text=f"Edit-link provider outcome is uncertain: {exc.__class__.__name__}",
+                status="completed" if rejected else "recovery_required",
+                error_text=str(SMTPDeliveryError(details)),
+                after_json={
+                    "delivery": details["delivery_outcome"],
+                    "email_status": "failed" if rejected else "unavailable",
+                    "delivery_bucket": bucket,
+                    "smtp": details,
+                },
+                result_json=_generic_edit_link_response() if rejected else None,
             )
         except GuardedWriteRecoveryRequired:
             pass
@@ -634,7 +659,12 @@ def _deliver_public_tournament_registration_edit_link(
             operation_key=delivery_operation_key,
             status="completed",
             result_json=_generic_edit_link_response(),
-            after_json={"delivery": "accepted", "email_status": email_status, "delivery_bucket": bucket},
+            after_json={
+                "delivery": "accepted" if email_status == "sent" else "prepared",
+                "email_status": email_status,
+                "delivery_bucket": bucket,
+                "provider_message_id": (delivery or {}).get("provider_message_id"),
+            },
         )
     except GuardedWriteRecoveryRequired:
         # The provider may already have accepted the message. Never send again
