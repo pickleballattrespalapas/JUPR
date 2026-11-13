@@ -110,6 +110,9 @@ def test_permanent_and_uncertain_failures_are_not_automatically_retried(transpor
         send()
     assert len(sessions) == 1 and pauses == []
     assert result.value.details["delivery_outcome"] == outcome
+    assert result.value.details["message_id"].endswith("@example.com>")
+    if stage == "message":
+        assert result.value.details["message_id"] == message_from_string(sessions[0].payload)["Message-ID"]
 
 
 def test_quit_error_does_not_turn_an_accepted_message_into_a_failure(transport):

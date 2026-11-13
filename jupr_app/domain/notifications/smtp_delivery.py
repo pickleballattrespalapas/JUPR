@@ -14,7 +14,7 @@ class SMTPDeliveryError(RuntimeError):
 
 
 def smtp_delivery_failure(
-    exc: Exception, *, stage: str = "unknown", attempt_count: int = 1,
+    exc: Exception, *, stage: str = "unknown", attempt_count: int = 1, message_id: str | None = None,
 ) -> SMTPDeliveryError:
     """Only explicit rejection or an error before submission proves non-acceptance."""
     replies = []
@@ -53,6 +53,8 @@ def smtp_delivery_failure(
         details["smtp_codes"] = sorted(set(codes))
     if enhanced_status:
         details["enhanced_status"] = enhanced_status
+    if message_id:
+        details["message_id"] = message_id
     return SMTPDeliveryError(details)
 
 

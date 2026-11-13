@@ -4,8 +4,9 @@ Edit-link delivery records distinguish provider acceptance, a confirmed rejectio
 and an unknown outcome. Private receipts include SMTP phase, exception type,
 numeric response codes, enhanced status code and attempt count. Raw provider text,
 recipient addresses, edit tokens, credentials and message contents are excluded
-from diagnostic errors and logs. Accepted receipts retain the Message-ID for
-provider tracing; acceptance alone does not confirm inbox placement.
+from diagnostic errors and logs. Accepted receipts and transport failure details
+retain the Message-ID for provider tracing, including uncertain attempts;
+acceptance alone does not confirm inbox placement.
 
 The shared SMTP sender makes at most two attempts, with a one-second pause,
 only for temporary explicit rejections or connection failures before submission.

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 SMTP_RETRY_BUDGET_SECONDS = 10
 
 
-def _send_smtp_message(cfg: dict, recipient: str, payload: str) -> None:
+def _send_smtp_message(cfg: dict, recipient: str, payload: str, *, message_id: str) -> None:
     # A retry reuses the same MIME payload and Message-ID. Never repeat an
     # interrupted DATA submission: the provider might already have accepted it.
     started_at = time.monotonic()
@@ -46,7 +46,7 @@ def _send_smtp_message(cfg: dict, recipient: str, payload: str) -> None:
             server.sendmail(cfg["from_email"], [recipient], payload)
             accepted = True
         except Exception as exc:
-            failure = smtp_delivery_failure(exc, stage=stage, attempt_count=attempt)
+            failure = smtp_delivery_failure(exc, stage=stage, attempt_count=attempt, message_id=message_id)
         finally:
             if server is not None:
                 # QUIT cannot revoke DATA acceptance or replace the original
@@ -56,7 +56,7 @@ def _send_smtp_message(cfg: dict, recipient: str, payload: str) -> None:
                     if response is not None and response[0] != 221:
                         raise smtplib.SMTPResponseException(*response)
                 except (smtplib.SMTPException, OSError) as exc:
-                    logger.warning("SMTP cleanup (accepted=%s): %s", accepted, smtp_delivery_failure(exc, stage="quit", attempt_count=attempt))
+                    logger.warning("SMTP cleanup (accepted=%s): %s", accepted, smtp_delivery_failure(exc, stage="quit", attempt_count=attempt, message_id=message_id))
                 finally:
                     try:
                         server.close()
@@ -189,6 +189,6 @@ def send_email_with_inline_chart(
         image_part.add_header("Content-Disposition", "inline", filename=f"{cid}.png")
         msg.attach(image_part)
 
-    _send_smtp_message(cfg, msg["To"], msg.as_string())
+    _send_smtp_message(cfg, msg["To"], msg.as_string(), message_id=rfc_message_id)
 
     return rfc_message_id
