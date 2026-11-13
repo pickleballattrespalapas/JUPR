@@ -64,6 +64,13 @@ def test_send_email_uses_provided_smtp_config(monkeypatch):
             return None
 
         def starttls(self, *, context):
+            assert context.check_hostname
+            return None
+
+        def quit(self):
+            return None
+
+        def close(self):
             return None
 
         def login(self, username, password):
@@ -102,6 +109,7 @@ def test_send_email_uses_provided_smtp_config(monkeypatch):
         smtp_config=cfg,
     )
     assert provider.endswith("@example.org>")
+    assert "Message-ID:" in FakeSMTP.payloads[-1]
     assert "Date:" in FakeSMTP.payloads[-1]
 
     attempt_id = "11111111-1111-1111-1111-111111111111"
