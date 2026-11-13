@@ -258,3 +258,31 @@ def test_lookahead_does_not_trade_an_avoidable_opponent_streak_for_future_partne
     assert partners(row(result, 7)).isdisjoint(prior_partners)
     assert not (opponents(row(result, 5)) & opponents(row(result, 6)) & opponents(row(result, 7)))
     assert_full_round(result, 7)
+
+
+def test_initial_preview_can_join_hub_before_standalone_quality_planning_starts(monkeypatch):
+    from test_round_robin_hub import START, setup
+    from jupr_app.domain.round_robin_hub import build_hub_snapshot
+
+    generated = []
+    original = engine._quality_doubles_round
+
+    def record(**kwargs):
+        generated.append(kwargs["round_number"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(engine, "_quality_doubles_round", record)
+    event = engine.start_generator_event(engine.create_generator_preview(
+        generator_kind="round_robin", play_format="doubles", title="Limited courts",
+        participant_names=[f"Player {i}" for i in range(12)], court_count=1, total_rounds=3,
+    ))
+    first = deepcopy(row(event, 1))
+    hub, attached = setup({"a": deepcopy(event)}, courts=2)
+    ready = build_hub_snapshot(hub, attached, now=START)["eligible_queue"]
+    assert {match["round_number"] for match in ready} == {1, 2}
+    assert generated == []
+
+    adapted = engine.mutate_generator_roster(event, action="remove", participant_id="p-12")
+    assert generated == [2]
+    assert adapted["adaptiveFromRound"]
+    assert row(adapted, 1) == first

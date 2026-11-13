@@ -1,7 +1,9 @@
 # Adaptive doubles rotation quality
 
-Standard standalone Round Robins preserve their fixed perfect rotation while it
-remains valid. Once attendance requires adaptation, the picker uses all recorded
+Standard standalone Round Robins preserve their initial fixed previews, including
+non-perfect schedules that may later join a hub. The improved picker starts when
+attendance requires adaptation or play extends beyond the initial fixed cycle.
+It uses all recorded
 partner/opponent history, including players who have since left. Absences do not
 create catch-up bye debt, and available courts are filled before matchup scoring.
 
