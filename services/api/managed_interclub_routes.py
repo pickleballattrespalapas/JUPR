@@ -229,14 +229,13 @@ def import_legacy(db, club_id, season_id):
 
 
 def install_managed_interclub_routes(app, *, get_supabase_client):
-    root = "/admin/clubs/{club_id}/interclub/managed"
     def admin(club_id, authorization, season_id=None):
         user = site_administrator(get_supabase_client, authorization, club_id)
         db = get_supabase_client()
         season = _one(db, SEASONS, SEASON_FIELDS, id=str(season_id), organizer_club_id=club_id) if season_id else None
         return user, db, season
 
-    @app.get(root)
+    @app.get("/admin/clubs/{club_id}/interclub/managed")
     def seasons(club_id: str, response: Response, authorization: str | None = auth_header()):
         response.headers.update(PRIVATE_HEADERS)
         _, db, _ = admin(club_id, authorization)
@@ -244,13 +243,13 @@ def install_managed_interclub_routes(app, *, get_supabase_client):
         rows.sort(key=lambda s: s["updated_at"], reverse=True)
         return {"seasons": rows}
 
-    @app.get(root + "/{season_id}")
+    @app.get("/admin/clubs/{club_id}/interclub/managed/{season_id}")
     def detail(club_id: str, season_id: UUID, response: Response, authorization: str | None = auth_header()):
         response.headers.update(PRIVATE_HEADERS)
         _, db, season = admin(club_id, authorization, season_id)
         return context(db, season)
 
-    @app.put(root + "/{season_id}")
+    @app.put("/admin/clubs/{club_id}/interclub/managed/{season_id}")
     def save_season(club_id: str, season_id: UUID, body: SaveSeason, response: Response, authorization: str | None = auth_header()):
         response.headers.update(PRIVATE_HEADERS); require_league_manager_write_or_403()
         user, db, _ = admin(club_id, authorization)
@@ -266,7 +265,7 @@ def install_managed_interclub_routes(app, *, get_supabase_client):
                        payload={"details": body.details.model_dump(mode="json")}, user=user, club_id=club_id)
         return context(db, saved)
 
-    @app.post(root + "/{season_id}/import")
+    @app.post("/admin/clubs/{club_id}/interclub/managed/{season_id}/import")
     def import_season(club_id: str, season_id: UUID, response: Response, authorization: str | None = auth_header()):
         response.headers.update(PRIVATE_HEADERS); require_league_manager_write_or_403()
         user, db, _ = admin(club_id, authorization)
@@ -276,7 +275,7 @@ def install_managed_interclub_routes(app, *, get_supabase_client):
         saved = _write(db, season_id=season_id, action="import", revision=0, payload=payload, user=user, club_id=club_id)
         return context(db, saved)
 
-    @app.post(root + "/{season_id}/visibility/{action}")
+    @app.post("/admin/clubs/{club_id}/interclub/managed/{season_id}/visibility/{action}")
     def visibility(club_id: str, season_id: UUID, action: Literal["publish", "unpublish"], body: Revision, response: Response, authorization: str | None = auth_header()):
         response.headers.update(PRIVATE_HEADERS); require_league_manager_write_or_403()
         user, db, season = admin(club_id, authorization, season_id)
@@ -285,7 +284,7 @@ def install_managed_interclub_routes(app, *, get_supabase_client):
         saved = _write(db, season_id=season_id, action=action, revision=body.expected_revision, user=user, club_id=club_id)
         return context(db, saved)
 
-    @app.put(root + "/{season_id}/meets/{meet_id}")
+    @app.put("/admin/clubs/{club_id}/interclub/managed/{season_id}/meets/{meet_id}")
     def save_meet(club_id: str, season_id: UUID, meet_id: UUID, body: SaveMeet, response: Response, authorization: str | None = auth_header()):
         response.headers.update(PRIVATE_HEADERS); require_league_manager_write_or_403()
         user, db, season = admin(club_id, authorization, season_id)
@@ -295,7 +294,7 @@ def install_managed_interclub_routes(app, *, get_supabase_client):
                payload={"details": plan, "season_revision": body.season_revision}, user=user, club_id=club_id)
         return context(db, _one(db, SEASONS, SEASON_FIELDS, id=str(season_id)))
 
-    @app.put(root + "/{season_id}/meets/{meet_id}/scores")
+    @app.put("/admin/clubs/{club_id}/interclub/managed/{season_id}/meets/{meet_id}/scores")
     def save_scores(club_id: str, season_id: UUID, meet_id: UUID, body: SaveScores, response: Response, authorization: str | None = auth_header()):
         response.headers.update(PRIVATE_HEADERS); require_league_manager_write_or_403()
         user, db, _ = admin(club_id, authorization, season_id)
@@ -304,7 +303,7 @@ def install_managed_interclub_routes(app, *, get_supabase_client):
                payload=_score_payload(meet, body), user=user, club_id=club_id)
         return context(db, _one(db, SEASONS, SEASON_FIELDS, id=str(season_id)))
 
-    @app.post(root + "/{season_id}/meets/{meet_id}/{action}")
+    @app.post("/admin/clubs/{club_id}/interclub/managed/{season_id}/meets/{meet_id}/{action}")
     def meet_action(club_id: str, season_id: UUID, meet_id: UUID, action: Literal["generate", "submit", "approve", "reopen", "share", "revoke"], body: Action, response: Response, authorization: str | None = auth_header()):
         response.headers.update(PRIVATE_HEADERS); require_league_manager_write_or_403()
         user, db, season = admin(club_id, authorization, season_id)

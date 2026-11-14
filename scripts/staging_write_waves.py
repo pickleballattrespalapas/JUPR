@@ -132,6 +132,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     "public-intake-auth": (
         ("POST", "/public/round-robin-hubs/{hub_id}/checkins"),
         ("POST", "/public/interclub-signups/{share_id}"),
+        ("POST", "/public/interclub-host/read"),
+        ("POST", "/public/interclub-host/write"),
         ("POST", "/public/interclub-meet-signups/{share_id}"),
         ("POST", "/public/interclub-meet-signups/review"),
         ("POST", "/public/interclub-meet-signups/withdraw"),
@@ -221,6 +223,12 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/support-requests/{request_id}"),
     ),
     "league-manager": (
+        ("PUT", "/admin/clubs/{club_id}/interclub/managed/{season_id}"),
+        ("POST", "/admin/clubs/{club_id}/interclub/managed/{season_id}/import"),
+        ("POST", "/admin/clubs/{club_id}/interclub/managed/{season_id}/visibility/{action}"),
+        ("PUT", "/admin/clubs/{club_id}/interclub/managed/{season_id}/meets/{meet_id}"),
+        ("PUT", "/admin/clubs/{club_id}/interclub/managed/{season_id}/meets/{meet_id}/scores"),
+        ("POST", "/admin/clubs/{club_id}/interclub/managed/{season_id}/meets/{meet_id}/{action}"),
         ("POST", "/admin/clubs/{club_id}/starting-rating-review/preview"),
         ("POST", "/admin/clubs/{club_id}/starting-rating-review/confirm"),
         ("PUT", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/weeks/{week}/highlights"),
