@@ -26,6 +26,7 @@ export function publicShareQuery(query: URLSearchParams): URLSearchParams {
 }
 export function privateShareLink(path: string, query: URLSearchParams): boolean {
   return /\/(admin|auth|account|settings|confirmation|edit|respond|accept-invitation)(\/|$)/i.test(path)
+    || /^\/interclub\/host(?:\/|$)/i.test(path)
     || Array.from(query.keys()).some((key) => /token|email|password|secret|authorization|^edit$/i.test(key));
 }
 export function record(value: unknown): PublicRecord {

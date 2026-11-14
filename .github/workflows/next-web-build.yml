@@ -9,6 +9,8 @@ on:
       - "tests/e2e/hub_registration_api.py"
       - "tests/e2e/round_robin_hub_identity_api.py"
       - "tests/e2e/recap_builder_api.py"
+      - "tests/e2e/managed_interclub_api.py"
+      - "tests/e2e/managed_interclub_db.mjs"
       - ".github/workflows/next-web-build.yml"
   workflow_dispatch:
 
@@ -32,6 +34,7 @@ jobs:
         run: |
           pip install -r requirements.txt -r services/api/requirements.txt pytest uvicorn
           npm ci --prefix apps/web --no-audit --no-fund
+          npm ci --prefix tests/sql --no-audit --no-fund
       - name: Install browser
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
@@ -49,6 +52,13 @@ jobs:
           GENERATOR_BROWSER_NEXT_MODE: start
           GENERATOR_BROWSER_API_PORT: "8042"
         run: node tests/courtreserve-import-browser.cjs
+      - name: Verify organizer interclub setup, private host scoring and official results
+        working-directory: apps/web
+        env:
+          MANAGED_BROWSER_ARTIFACTS: test-results/managed-interclub
+          MANAGED_BROWSER_NEXT_MODE: start
+          MANAGED_BROWSER_API_PORT: "8042"
+        run: npm run test:managed-interclub-browser
       - name: Verify saved session edits and organizer/admin submission
         working-directory: apps/web
         env:

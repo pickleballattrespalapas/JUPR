@@ -13,6 +13,7 @@ export default async function ClubInterclubPage(
       name: string;
       start_date: string;
       end_date: string;
+      url?: string;
     }[];
   }>(`/public/clubs/${encodeURIComponent(params.clubSlug)}/interclub`);
   return (
@@ -26,7 +27,7 @@ export default async function ClubInterclubPage(
         {data?.leagues.map((league) => (
           <Link
             className={styles.cardLink}
-            href={`/interclub/${league.id}`}
+            href={league.url || `/interclub/${league.id}`}
             key={league.id}
           >
             <h2>{league.name}</h2>

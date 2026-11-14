@@ -9,6 +9,7 @@ import styles from "./competition.module.css";
 
 type Props = {
   document: CompetitionDocument; meet: InterclubMeet; seasonName: string; timezone: string; revision: number; players: Map<string, CompetitionPlayer>; clubName: (id: string) => string;
+  showRosterDeadline?: boolean;
 };
 export default function PrintPacket(props: Props) {
   const [target, setTarget] = useState<HTMLElement | null>(null);
@@ -20,13 +21,13 @@ export default function PrintPacket(props: Props) {
   return target ? createPortal(<PrintPacketContent {...props} />, target) : null;
 }
 
-export function PrintPacketContent({ document, meet, seasonName, timezone, revision, players, clubName }: Props) {
+export function PrintPacketContent({ document, meet, seasonName, timezone, revision, players, clubName, showRosterDeadline = true }: Props) {
   const when = (iso: string) => new Date(iso).toLocaleString("en-US", { timeZone: timezone, dateStyle: "medium", timeStyle: "short" });
   return <div className={styles.printRoot} aria-hidden="true">
     <section className={styles.printPage}>
       <p>Southern BCS · Paper meet packet · Revision {revision}</p>
       <h1>{seasonName}</h1><h2>{phaseLabels[document.phase]} · {when(meet.starts_at)}</h2>
-      <p>Host: {clubName(meet.host_club_id)} · Times: {timezone} · Roster deadline: {when(meet.roster_deadline)}</p>
+      <p>Host: {clubName(meet.host_club_id)} · Times: {timezone}{showRosterDeadline && <> · Roster deadline: {when(meet.roster_deadline)}</>}</p>
       <h3>Court assignments</h3>
       <p><strong>{document.phase === "regular" ? regularCourtBlockInstructions : championshipGameInstructions}</strong></p>
       {document.schedule_mode === "staggered" && <p><strong>Staggered starts:</strong> each wave is a full three-game block. Start the next wave after every pairing in the current wave finishes; exact times depend on match length.</p>}
