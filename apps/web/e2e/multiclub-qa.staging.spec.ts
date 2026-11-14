@@ -104,11 +104,13 @@ test("dedicated QA admin switches three clubs and previews website controls", as
 
   const playerSets: Set<number>[] = [];
   const competitionWrites: string[] = [];
+  const managedWrites: string[] = [];
   const lateRequestWrites: string[] = [];
   const operationalReads: string[] = [];
   page.on("request", request => {
     const pathname = new URL(request.url()).pathname;
     if (pathname.includes("/interclub/competition") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) competitionWrites.push(request.method() + " " + pathname);
+    if (pathname.includes("/interclub/managed") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) managedWrites.push(request.method() + " " + pathname);
     if (pathname.endsWith("/pool/late-requests") && request.method() === "POST") lateRequestWrites.push(pathname);
     if (request.method() === "GET" && /\/interclub\/(registrations|competition)\/[^/]+\/meets\//.test(pathname)) operationalReads.push(pathname);
   });
@@ -156,13 +158,25 @@ test("dedicated QA admin switches three clubs and previews website controls", as
       // No saves or publication: preserve Joe's in-progress drafts and live sites.
 
       const invitationsResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/clubs/${club.id}/interclub/registrations` && r.request().method() === "GET");
+      const managedResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/clubs/${club.id}/interclub/managed` && r.request().method() === "GET");
       await page.goto("/admin/interclub");
+      const managed = await managedResponse;
+      expect(managed.status()).toBe(200);
+      expect((await managed.json()).seasons.every((season: { organizer_club_id: string }) => season.organizer_club_id === club.id)).toBe(true);
+      await expect(page.getByRole("heading", { name: "Interclub leagues", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Create season", exact: true })).toBeEnabled();
+      await expect(page.getByText("Participating clubs need only a name and roster. No club accounts or invitations.", { exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Invitations to your club", exact: true })).toHaveCount(0);
       const invitations = await invitationsResponse;
       expect(invitations.status()).toBe(200);
       const seasons = (await invitations.json()).seasons;
       expect(seasons.length, "The isolation season must be available").toBeGreaterThan(0);
+      const previousWorkspaces = page.getByRole("link", { name: "Previous club-account workspaces", exact: true });
+      await expect(previousWorkspaces).toHaveAttribute("href", "/admin/interclub/legacy");
+      await previousWorkspaces.click();
+      await expect(page).toHaveURL(`${origin}/admin/interclub/legacy`);
       for (const season of seasons) {
-        await page.goto("/admin/interclub");
+        await page.goto("/admin/interclub/legacy");
         const usesGuide = season.organizer_club_id === club.id || season.participation?.status === "accepted";
         const invitationLink = page.locator(`a[href="/admin/interclub/${usesGuide ? "season" : "registrations"}?season=${season.id}"]`);
         await expect(invitationLink).toBeVisible();
@@ -436,7 +450,12 @@ test("dedicated QA admin switches three clubs and previews website controls", as
     headers: { Authorization: `Bearer ${token}` }, maxRedirects: 0,
   });
   expect(deniedCompetition.status()).toBe(403);
+  const deniedManaged = await context.request.get(`${expectedApiOrigin}/admin/clubs/tres_palapas/interclub/managed`, {
+    headers: { Authorization: `Bearer ${token}` }, maxRedirects: 0,
+  });
+  expect(deniedManaged.status()).toBe(403);
   expect(competitionWrites, "The competition acceptance check must never generate, save, submit, approve or alter fixture data").toEqual([]);
+  expect(managedWrites, "The simplified workspace acceptance check must never create or import a season or edit results").toEqual([]);
   expect(lateRequestWrites, "Viewing an existing signup must not create another late request").toEqual([]);
   await page.goto("/admin/login");
   const signedOut = page.waitForResponse(r => r.url().startsWith(`${expectedAuthOrigin}/auth/v1/logout`) && r.request().method() === "POST");
