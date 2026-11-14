@@ -15,14 +15,16 @@ export default function PublicInterclubLeague({
   league,
   initialView = "standings",
   history,
+  showHistory = true,
 }: {
   league: PublicLeague;
   initialView?: "standings" | "results" | "history";
   history?: EventHistory | null;
+  showHistory?: boolean;
 }) {
   const [view, setView] = useState<string>(initialView), [resultClub, setResultClub] = useState("");
   const panelId = useId();
-  const tabs = [{ id: "standings", label: "Overall standings" }, { id: "results", label: "Results" }, { id: "schedule", label: "Schedule" }, { id: "history", label: "History" }];
+  const tabs = [{ id: "standings", label: "Overall standings" }, { id: "results", label: "Results" }, { id: "schedule", label: "Schedule" }, ...(showHistory ? [{ id: "history", label: "History" }] : [])];
   const doc = league.document,
     names = Object.fromEntries(doc.clubs.map((c) => [c.id, c.name]));
   const navigation = (
@@ -37,6 +39,7 @@ export default function PublicInterclubLeague({
     <section>
       <p className={styles.eyebrow}>Interclub league</p>
       <h1>{doc.name}</h1>
+      {doc.rules_text && <details><summary>League information & rules</summary><p style={{ whiteSpace: "pre-wrap" }}>{doc.rules_text}</p></details>}
       <p>
         {doc.start_date} – {doc.end_date} · {doc.clubs.length} participating
         clubs

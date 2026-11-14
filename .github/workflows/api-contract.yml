@@ -53,6 +53,7 @@ jobs:
             tests/test_public_tournament_highlights.py \
             tests/test_web_leaderboard_parity_contract.py \
             tests/test_interclub_*.py \
+            tests/test_managed_interclub.py \
             tests/test_admin_tournament_broadcast_service.py \
             tests/test_tournament_broadcast_edit_links.py \
             tests/test_admin_tournament_registration_reporting_service.py \
@@ -105,6 +106,7 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/tournament-pool-sql" --no-save --ignore-scripts @electric-sql/pglite@0.5.10
           export PGLITE_MODULE="$RUNNER_TEMP/tournament-pool-sql/node_modules/@electric-sql/pglite/dist/index.js"
+          node tests/sql/managed_interclub.mjs
           node tests/sql/tournament_draw_pools.mjs
           node tests/sql/tournament_pool_progression.mjs
           node tests/sql/tournament_combined_division_draws.mjs

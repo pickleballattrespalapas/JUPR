@@ -7,9 +7,9 @@ import { CompetitionDocument, CompetitionEncounter, CompetitionGame, Competition
 import styles from "./competition.module.css";
 import InjurySubstitutionEditor from "./InjurySubstitutionEditor";
 
-type Props = { document: CompetitionDocument; detail: MeetCompetition; players: Map<string, CompetitionPlayer>; clubName: (id: string) => string; disabled: boolean; onChange: (document: CompetitionDocument) => void; divisionFilter?: string; onDivisionFilterChange?: (division: string) => void; onScoreEntryEnd?: () => boolean; focusGame?: { id: string; substitution: boolean; sequence: number } | null; gameError?: string; onSubstitution?: (document: CompetitionDocument) => void };
+type Props = { document: CompetitionDocument; detail: MeetCompetition; players: Map<string, CompetitionPlayer>; clubName: (id: string) => string; disabled: boolean; onChange: (document: CompetitionDocument) => void; divisionFilter?: string; onDivisionFilterChange?: (division: string) => void; onScoreEntryEnd?: () => boolean; focusGame?: { id: string; substitution: boolean; sequence: number } | null; gameError?: string; onSubstitution?: (document: CompetitionDocument) => void; allowStartingLineupChanges?: boolean };
 
-export default function ScoreEditor({ document, detail, players, clubName, disabled, onChange, divisionFilter, onDivisionFilterChange, onScoreEntryEnd, focusGame, gameError, onSubstitution }: Props) {
+export default function ScoreEditor({ document, detail, players, clubName, disabled, onChange, divisionFilter, onDivisionFilterChange, onScoreEntryEnd, focusGame, gameError, onSubstitution, allowStartingLineupChanges = true }: Props) {
   const [localDivision, setLocalDivision] = useState("");
   const scoreEntry = useRef<HTMLElement | null>(null);
   const division = divisionFilter ?? localDivision, setDivision = onDivisionFilterChange ?? setLocalDivision;
@@ -53,7 +53,7 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
     }) });
   }
   const divisions = Array.from(new Set(document.encounters.map(encounter => encounter.division)));
-  const canChangePartners = !disabled && document.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game =>
+  const canChangePartners = allowStartingLineupChanges && !disabled && document.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game =>
     game.status === "pending" && game.a === null && game.b === null ||
     ["forfeit", "double_forfeit"].includes(game.status) && (!pairing.players_a.length || !pairing.players_b.length))));
   return <section ref={scoreEntry} className={styles.section} aria-labelledby="score-entry-heading">

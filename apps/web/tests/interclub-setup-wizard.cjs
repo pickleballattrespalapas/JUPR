@@ -229,7 +229,7 @@ async function invitationDashboard() {
     if (url.endsWith('/registrations')) return reply({ seasons: registrations });
     return reply({ clubs, next_offset: null });
   };
-  const Home = load('app/admin/interclub/page.tsx', {
+  const Home = load('app/admin/interclub/LegacyInterclubHome.tsx', {
     'next/link': Link, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId }) },
     '@/lib/useAdminSession': { useAdminSession: () => ({ accessToken: 'home-token', loading: false, session: { user: { id: 'staff' }, capabilities: { assignments: [{ club_id: clubId, role: 'administrator' }] } } }) },
     '@/lib/adminPlayerEditorApi': { getAdminPlayerEditorApiBaseUrl: () => 'https://api.test' },

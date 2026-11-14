@@ -1602,6 +1602,9 @@ install_staff_invitation_routes(app, get_supabase_client=get_supabase_client)
 
 from services.api.interclub_setup_routes import install_interclub_setup_routes
 install_interclub_setup_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.managed_interclub_routes import install_managed_interclub_routes
+install_managed_interclub_routes(app, get_supabase_client=get_supabase_client)
 from services.api.club_join_invitation_routes import install_club_join_invitation_routes
 install_club_join_invitation_routes(app, get_supabase_client=get_supabase_client)
 from services.api.interclub_registration_routes import install_interclub_registration_routes

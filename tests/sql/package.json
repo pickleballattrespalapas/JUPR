@@ -6,7 +6,8 @@
     "test:badge-worker-leases": "node badge_queue_worker_leases.mjs",
     "test:weekly-highlights": "node league_weekly_highlights.mjs",
     "test:generator-journal": "node play_generator_operation_surface.mjs",
-    "test:round-robin-hub": "node round_robin_hub_atomic.mjs && node round_robin_hub_participant_identities.mjs && node round_robin_hub_checkins.mjs"
+    "test:round-robin-hub": "node round_robin_hub_atomic.mjs && node round_robin_hub_participant_identities.mjs && node round_robin_hub_checkins.mjs",
+    "test:managed-interclub": "node managed_interclub.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.10"

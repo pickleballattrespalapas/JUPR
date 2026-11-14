@@ -185,8 +185,13 @@ def install_interclub_public_routes(app, *, get_supabase_client):
         memberships = db.table("pcs_interclub_participations").select("season_id").eq("club_id", site["club_id"]).eq("status", "accepted").execute().data or []
         ids = [m["season_id"] for m in memberships]
         rows = db.table("pcs_interclub_publications").select("season_id,published,published_at").in_("season_id", ids).execute().data if ids else []
-        return {"leagues": [{"id": r["season_id"], "name": r["published"]["name"], "start_date": r["published"]["start_date"],
-            "end_date": r["published"]["end_date"]} for r in rows or [] if r.get("published") and any(c["id"] == site["club_id"] for c in r["published"]["clubs"])]}
+        managed = db.table("pcs_managed_interclub_seasons").select("id,details").eq("organizer_club_id", site["club_id"]).eq("published", True).execute().data or []
+        replaced = {r["id"] for r in managed}
+        leagues = [{"id": r["season_id"], "name": r["published"]["name"], "start_date": r["published"]["start_date"],
+            "end_date": r["published"]["end_date"]} for r in rows or [] if r.get("published") and r["season_id"] not in replaced and any(c["id"] == site["club_id"] for c in r["published"]["clubs"])]
+        leagues.extend({"id": r["id"], "name": r["details"]["name"], "start_date": r["details"].get("start_date"),
+                        "end_date": r["details"].get("end_date"), "url": f"/interclub/managed/{r['id']}"} for r in managed)
+        return {"leagues": leagues}
 
     @app.get("/public/interclub/{season_id}")
     def league(season_id: UUID, response: Response):

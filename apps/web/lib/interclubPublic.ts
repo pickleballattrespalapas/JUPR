@@ -16,6 +16,7 @@ export type PublicMeet = {
   courts: number;
 };
 export type PublicLeagueDocument = {
+  rules_text?: string;
   name: string;
   start_date: string;
   end_date: string;
