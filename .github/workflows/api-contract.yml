@@ -39,6 +39,7 @@ jobs:
             tests/test_player_trophy_room.py \
             tests/test_badge_retirement_legacy.py \
             tests/test_match_exclusion_badge_retirement.py \
+            tests/test_public_provisional_ratings.py \
             tests/test_api_contract_*.py \
             tests/test_admin_tournament_broadcast_service.py \
             tests/test_tournament_broadcast_edit_links.py \

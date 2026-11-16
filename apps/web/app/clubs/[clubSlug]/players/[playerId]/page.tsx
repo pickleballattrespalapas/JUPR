@@ -70,8 +70,8 @@ function pageHref({ clubSlug, playerId, section, league, history, page }: { club
   return `/clubs/${clubSlug}/players/${encodeURIComponent(playerId)}${query ? `?${query}` : ""}`;
 }
 
-function ratingLabel(value?: number | null): string {
-  return value == null || Number.isNaN(Number(value)) ? "—" : Number(value).toFixed(3);
+function ratingLabel(value?: number | null, missing = "—"): string {
+  return value == null || Number.isNaN(Number(value)) ? missing : Number(value).toFixed(3);
 }
 
 function signedRating(value?: number | null): string {
@@ -224,8 +224,8 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
 
   const summaryCards = (
 <div data-testid="player-summary-cards" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-        <Display field="ratings"><article style={cardStyle}><strong>Doubles / overall</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.rating_jupr)}</div></article></Display>
-        <Display field="singles"><article style={cardStyle}><strong>Singles</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating_jupr)}</div></article></Display>
+        <Display field="ratings"><article style={cardStyle}><strong>Doubles / overall</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.rating_jupr, "Not rated")}</div></article></Display>
+        <Display field="singles"><article style={cardStyle}><strong>Singles</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating_jupr, "Not rated")}</div></article></Display>
         <Display field="records"><article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.wins ?? 0}-{player.losses ?? 0}</div><small>{pctLabel(player.wins, player.losses)}</small></article></Display>
         <Display field="singles"><article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.singles_wins ?? 0}-{player.singles_losses ?? 0}</div><small>{pctLabel(player.singles_wins, player.singles_losses)}</small></article></Display>
         <Display field="profile_trophies"><article style={cardStyle}><strong>Major honors</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{trophies.length}</div><small>Trophy case</small></article></Display>
@@ -305,7 +305,7 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
                 <h3 style={{ marginTop: 0 }}>{position.leagueName}</h3>
                 {position.error || !summary ? <p style={{ color: "#92400e" }}>We can’t show this player’s league position right now.</p> : <>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: "0.65rem", marginBottom: "0.85rem" }}>
-                    <div><strong>League rating</strong><br />{ratingLabel(summary.rating_jupr)}</div>
+                    <div><strong>League rating</strong><br />{ratingLabel(summary.rating_jupr, "Not rated")}</div>
                     <div><strong>Record</strong><br />{summary.wins ?? 0}-{summary.losses ?? 0}</div>
                     <div><strong>Qualification</strong><br />{eligible ? `Eligible (${gameLabel(games)})` : `${gameLabel(needed)} needed`}</div>
                   </div>
@@ -325,9 +325,9 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Rating history</h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.65rem", marginBottom: "1rem" }}>
-              <div><strong>Starting JUPR</strong><br />{ratingLabel(data.rating_summary.starting_rating_jupr)}</div>
-              <div><strong>Highest JUPR</strong><br />{ratingLabel(data.rating_summary.highest_rating_jupr)}</div>
-              <div><strong>Lowest JUPR</strong><br />{ratingLabel(data.rating_summary.lowest_rating_jupr)}</div>
+              <div><strong>Starting JUPR</strong><br />{ratingLabel(data.rating_summary.starting_rating_jupr, "Not rated")}</div>
+              <div><strong>Highest JUPR</strong><br />{ratingLabel(data.rating_summary.highest_rating_jupr, "Not rated")}</div>
+              <div><strong>Lowest JUPR</strong><br />{ratingLabel(data.rating_summary.lowest_rating_jupr, "Not rated")}</div>
               <div><strong>Last 10</strong><br />{data.rating_summary.last_10_record}</div>
               <div><strong>Change over last 10</strong><br />{signedRating(data.rating_summary.last_10_delta_jupr)}</div>
               <div><strong>Current streak</strong><br />{data.rating_summary.current_streak ?? "—"}</div>
@@ -346,7 +346,7 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
             <h2 style={{ marginTop: 0 }}>League rating breakdown</h2>
             {leagueRatings.length === 0 ? <p style={{ color: "#475569" }}>No league-specific ratings yet.</p> : (
               <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "700px" }}><thead><tr><th style={thStyle}>League</th><th style={thStyle}>JUPR</th><th style={thStyle}>Gain</th><th style={thStyle}>Matches</th><th style={thStyle}>Record</th><th style={thStyle}>Status</th></tr></thead><tbody>
-                {leagueRatings.map((row, index) => <tr key={`${row.league_name ?? "league"}-${index}`}><td style={tdStyle}>{row.league_name ?? "Overall"}</td><td style={tdStyle}>{ratingLabel(row.rating_jupr)}</td><td style={tdStyle}>{signedRating(row.rating_gain_jupr)}</td><td style={tdStyle}>{row.matches_played ?? 0}</td><td style={tdStyle}>{row.wins ?? 0}-{row.losses ?? 0}</td><td style={tdStyle}>{row.is_active === false ? "Inactive" : "Active"}</td></tr>)}
+                {leagueRatings.map((row, index) => <tr key={`${row.league_name ?? "league"}-${index}`}><td style={tdStyle}>{row.league_name ?? "Overall"}</td><td style={tdStyle}>{ratingLabel(row.rating_jupr, "Not rated")}</td><td style={tdStyle}>{signedRating(row.rating_gain_jupr)}</td><td style={tdStyle}>{row.matches_played ?? 0}</td><td style={tdStyle}>{row.wins ?? 0}-{row.losses ?? 0}</td><td style={tdStyle}>{row.is_active === false ? "Inactive" : "Active"}</td></tr>)}
               </tbody></table></div>
             )}
           </article>
@@ -395,7 +395,7 @@ export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
           <h2 style={{ marginTop: 0 }}>{historyView === "all" ? "Full match history" : "Recent matches"}</h2>
           <p style={{ color: "#475569" }}>Each match is labeled Singles or Doubles. Rating changes appear when they&apos;re available.</p>
           {matches.length === 0 ? <p data-testid="player-match-empty" style={{ color: "#475569" }}>No matches match this view.</p> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1040px" }}><thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Format</th><th style={thStyle}>Result</th><th style={thStyle}>Team 1</th><th style={thStyle}>Score</th><th style={thStyle}>Team 2</th><th style={thStyle}>JUPR before → after</th><th style={thStyle}>League</th></tr></thead><tbody>
-            {matches.map((match, index) => { const detailHref = match.id != null ? `/clubs/${clubSlug}/matches/${match.id}` : `/clubs/${clubSlug}/matches`; return <tr key={`${match.id ?? index}`} data-testid="player-match-row" data-format={match.match_format ?? "doubles"}><td style={tdStyle}><Link href={detailHref}>{formatDate(match.date)}</Link></td><td style={tdStyle}>{match.match_format_label ?? (match.match_format === "singles" ? "Singles" : "Doubles")}</td><td style={tdStyle}>{match.player_result === "win" ? "Win" : match.player_result === "loss" ? "Loss" : "—"}</td><td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td><td style={tdStyle}><Link href={detailHref}>{matchScore(match)}</Link></td><td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td><td style={tdStyle}>{ratingLabel(match.player_rating_before_jupr)} → {ratingLabel(match.player_rating_after_jupr)} ({signedRating(match.player_rating_delta_jupr)})</td><td style={tdStyle}>{match.league ?? "—"}</td></tr>; })}
+            {matches.map((match, index) => { const detailHref = match.id != null ? `/clubs/${clubSlug}/matches/${match.id}` : `/clubs/${clubSlug}/matches`; return <tr key={`${match.id ?? index}`} data-testid="player-match-row" data-format={match.match_format ?? "doubles"}><td style={tdStyle}><Link href={detailHref}>{formatDate(match.date)}</Link></td><td style={tdStyle}>{match.match_format_label ?? (match.match_format === "singles" ? "Singles" : "Doubles")}</td><td style={tdStyle}>{match.player_result === "win" ? "Win" : match.player_result === "loss" ? "Loss" : "—"}</td><td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td><td style={tdStyle}><Link href={detailHref}>{matchScore(match)}</Link></td><td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td><td style={tdStyle}>{match.rating_scope === "unrated" ? "Not rated" : <>{ratingLabel(match.player_rating_before_jupr)} → {ratingLabel(match.player_rating_after_jupr)} ({signedRating(match.player_rating_delta_jupr)})</>}</td><td style={tdStyle}>{match.league ?? "—"}</td></tr>; })}
           </tbody></table></div>}
           {historyView === "all" && historyTotal > 0 ? <nav data-testid="player-history-pagination" aria-label="Match history pages" style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginTop: "1rem" }}>
             {historyOffset > 0 ? <Link data-testid="player-history-newer" href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "all", page: currentHistoryPage - 1 })} style={pillStyle}>Newer matches</Link> : null}

@@ -429,7 +429,7 @@ def _standing_rows(
         wins = _safe_int(row.get("wins"), 0) or 0
         losses = _safe_int(row.get("losses"), 0) or 0
         matches_played = _safe_int(row.get("matches_played"), wins + losses) or (wins + losses)
-        rating = _safe_float(row.get("rating"), players_by_id[int(pid)].get("rating"))
+        rating = _safe_float(row.get("rating"), players_by_id[int(pid)].get("rating")) if matches_played > 0 else None
         starting_rating = _safe_float(row.get("starting_rating"), rating)
         rating_delta = None if rating is None or starting_rating is None else float(rating) - float(starting_rating)
         output.append(

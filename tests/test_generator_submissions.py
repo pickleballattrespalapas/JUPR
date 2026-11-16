@@ -408,7 +408,9 @@ def test_organizer_choice_controls_approved_matches_ratings_stats_and_recap(db, 
     assert sum(f["matches"] for f in projection["formats"]) == len(player_records)
     if rating_mode == "unrated":
         assert all(p["delta_jupr"] == 0 for p in stats.values())
-        assert all(p["rating_delta_jupr"] == 0 for p in projection["history"])
+        assert all(p[field] is None for p in projection["history"] for field in (
+            "rating_before_jupr", "rating_after_jupr", "rating_delta_jupr"
+        ))
     count = len(records)
     assert service.review_generator_submission(db, **review_args(session))["idempotent_replay"]
     assert len(db.db["matches"]) == count

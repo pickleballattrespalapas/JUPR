@@ -35,7 +35,7 @@ export default function PublicPlayerSearch({ clubSlug, defaultValue = "", id, st
         const rows = (scope === "players" ? payload.players : payload.leaderboard) || [];
         const options = rows.map((row: { id?: number; player_id?: number; name?: string; player_name?: string; rating_jupr?: number }) => ({
           value: String(row.id ?? row.player_id),
-          label: `${row.name || row.player_name || "Player"}${row.rating_jupr != null ? ` · ${Number(row.rating_jupr).toFixed(2)}` : ""}`,
+          label: `${row.name || row.player_name || "Player"} · ${row.rating_jupr != null ? Number(row.rating_jupr).toFixed(2) : "Not rated"}`,
         }));
         if (!controller.signal.aborted) setResult({ key, options });
       } catch (error) {

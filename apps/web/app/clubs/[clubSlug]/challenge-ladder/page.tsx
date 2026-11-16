@@ -39,7 +39,7 @@ function normalizeSection(value: string | null): SectionKey {
 }
 
 function juprLabel(value?: number | null): string {
-  if (value == null || Number.isNaN(Number(value))) return "—";
+  if (value == null || Number.isNaN(Number(value))) return "Not rated";
   return Number(value).toFixed(3);
 }
 

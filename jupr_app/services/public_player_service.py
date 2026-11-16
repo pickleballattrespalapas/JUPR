@@ -4,6 +4,7 @@ from jupr_app.domain.gamification.badge_policy import badges_enabled
 
 from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.domain.player_activity import is_player_leaderboard_active
+from jupr_app.domain.public_rating import public_rating
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.player_search import matches_player_search
 from jupr_app.domain.gamification.presentation import badge_category, badge_requirement, category_sort_key
@@ -142,15 +143,15 @@ def _player_base(row: dict[str, Any]) -> dict[str, Any]:
         "id": _int_or_none(row.get("id")) or row.get("id"),
         "name": display_name,
         "display_name": display_name,
-        "rating": _float_or_none(row.get("rating")),
-        "rating_jupr": _to_jupr(row.get("rating")),
-        "starting_rating": _float_or_none(row.get("starting_rating")),
-        "starting_rating_jupr": _to_jupr(row.get("starting_rating")),
+        "rating": public_rating(row),
+        "rating_jupr": _to_jupr(public_rating(row)),
+        "starting_rating": public_rating(row, "starting_rating"),
+        "starting_rating_jupr": _to_jupr(public_rating(row, "starting_rating")),
         "wins": wins,
         "losses": losses,
         "matches_played": matches_played,
-        "singles_rating": _float_or_none(row.get("singles_rating")),
-        "singles_rating_jupr": _to_jupr(row.get("singles_rating")),
+        "singles_rating": public_rating(row, "singles_rating", singles=True),
+        "singles_rating_jupr": _to_jupr(public_rating(row, "singles_rating", singles=True)),
         "singles_wins": singles_wins,
         "singles_losses": singles_losses,
         "singles_matches_played": singles_matches_played,
@@ -166,14 +167,14 @@ def _public_league_rating(row: dict[str, Any]) -> dict[str, Any]:
     matches_played = _int_or_none(row.get("matches_played"))
     if matches_played is None:
         matches_played = wins + losses
-    rating_jupr = _to_jupr(row.get("rating"))
-    starting_jupr = _to_jupr(row.get("starting_rating"))
+    rating_jupr = _to_jupr(public_rating(row))
+    starting_jupr = _to_jupr(public_rating(row, "starting_rating"))
     return {
         "id": row.get("id"),
         "league_name": _plain_text(row.get("league_name"), limit=120),
-        "rating": _float_or_none(row.get("rating")),
+        "rating": public_rating(row),
         "rating_jupr": rating_jupr,
-        "starting_rating": _float_or_none(row.get("starting_rating")),
+        "starting_rating": public_rating(row, "starting_rating"),
         "starting_rating_jupr": starting_jupr,
         "rating_gain_jupr": (
             round(float(rating_jupr) - float(starting_jupr), 6)
@@ -430,9 +431,9 @@ def _public_match(row: dict[str, Any], name_by_id: dict[str, str], *, include_ra
         "score_t1": score_t1,
         "score_t2": score_t2,
         "winner": winner,
-        "elo_delta": _float_or_none(row.get("elo_delta")),
+        "elo_delta": _float_or_none(row.get("elo_delta")) if row.get("rating_scope") != "unrated" else None,
     }
-    if include_rating_snapshot:
+    if include_rating_snapshot and row.get("rating_scope") != "unrated":
         payload["rating_snapshot"] = _rating_snapshot(row)
     return payload
 
@@ -691,10 +692,11 @@ def _rating_history(matches: list[dict[str, Any]], *, player_id: int | str) -> l
         if position is None:
             continue
         slot, team = position
-        before = _to_jupr(row.get(f"{slot}_r"))
-        after = _to_jupr(row.get(f"{slot}_r_end"))
+        rated = row.get("rating_scope") != "unrated"
+        before = _to_jupr(row.get(f"{slot}_r")) if rated else None
+        after = _to_jupr(row.get(f"{slot}_r_end")) if rated else None
         result = _match_result(row, team)
-        raw_elo_delta = _float_or_none(row.get("elo_delta"))
+        raw_elo_delta = _float_or_none(row.get("elo_delta")) if rated else None
         raw_delta = (raw_elo_delta / 400.0) if raw_elo_delta is not None else None
         if after is None and before is not None and raw_delta is not None and result:
             after = before + (abs(raw_delta) if result == "win" else -abs(raw_delta))
