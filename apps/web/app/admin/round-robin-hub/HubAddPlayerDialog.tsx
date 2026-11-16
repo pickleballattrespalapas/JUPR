@@ -33,12 +33,11 @@ export default function HubAddPlayerDialog({ apiBase, clubId, accessToken, group
   const [directory, setDirectory] = useState<DirectoryPlayer[]>([]);
   const [directoryLoading, setDirectoryLoading] = useState(true);
   const [directoryError, setDirectoryError] = useState("");
-  const publicClubSlug = clubId.replace(/_/g, "-");
 
   useEffect(() => {
     const controller = new AbortController();
     void fetchAllPublicPlayers<DirectoryPlayer>(
-      `${apiBase.replace(/\/$/, "")}/clubs/${encodeURIComponent(publicClubSlug)}/players?status=all&sort=name`, controller.signal
+      `${apiBase.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/players/roster`, controller.signal, accessToken
     ).then(players => {
       if (!controller.signal.aborted) setDirectory(players);
     }).catch(() => {
@@ -47,7 +46,7 @@ export default function HubAddPlayerDialog({ apiBase, clubId, accessToken, group
       if (!controller.signal.aborted) setDirectoryLoading(false);
     });
     return () => controller.abort();
-  }, [apiBase, publicClubSlug]);
+  }, [apiBase, clubId, accessToken]);
 
   const frozen = disabled || busy || pending;
   const selectedGroup = groups.find(group => group.session_key === sessionKey);

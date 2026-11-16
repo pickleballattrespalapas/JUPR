@@ -606,3 +606,20 @@ def test_league_rating_exact_retry_replays_before_current_state_check(monkeypatc
 
     assert replay["idempotent"] is True
     assert replay["league_rating"] == first["league_rating"]
+
+
+def test_public_alias_edit_and_clear_preserve_import_name_and_matches(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    storage["players"][0]["name"] = "Carol Becker"
+    db = FakeSupabase(storage)
+    for index, alias in enumerate(("Ann Johnson", None)):
+        before = get_admin_player_editor_detail(db, club_id="club", player_id=1)["player"]
+        result = update_admin_player_editor_player(db, club_id="club", player_id=1,
+            patch={"public_alias": alias}, actor_email="owner@example.com", actor_role="club_owner",
+            expected_state_fingerprint=before["state_fingerprint"], idempotency_key=f"alias-update-{index}")
+        assert result["player"]["public_alias"] == alias
+        assert result["player"]["name"] == "Carol Becker"
+        assert result["player"]["id"] == 1
+        assert result["player"]["matches_played"] == before["matches_played"]
+        assert result["player"]["rating"] == before["rating"]

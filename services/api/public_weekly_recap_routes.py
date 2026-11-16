@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from jupr_app.domain.player_aliases import load_player_aliases, public_alias_projection
+
 from fastapi import HTTPException, Query, Response
 from supabase import Client
 
@@ -68,7 +70,7 @@ def install_public_weekly_recap_routes(
         if not selected:
             raise HTTPException(status_code=404, detail="weekly recap not found")
         pdf = build_weekly_recap_pdf_bytes(
-            selected.get("recap") or {},
+            public_alias_projection(selected.get("recap") or {}, load_player_aliases(supabase, club_id)),
             week_start=str(selected.get("week_start") or week_start),
             week_end=str(selected.get("week_end") or ""),
         )

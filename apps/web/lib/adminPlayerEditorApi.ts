@@ -28,6 +28,7 @@ export type AdminPlayerEditorPlayer = {
   id: number;
   club_id?: string;
   name: string;
+  public_alias?: string | null;
   rating?: number | null;
   rating_jupr?: number | null;
   starting_rating?: number | null;

@@ -28,6 +28,7 @@ from jupr_app.services.direct_match_entry_service import (
 )
 from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, LeaderboardPeriodInvalid, LeaderboardStatInvalid, build_public_leaderboard
 from services.api.club_site_models import LeaderboardSettings
+from services.api.public_alias_middleware import install_public_alias_middleware
 from jupr_app.services.public_live_service import is_public_live_session_row, public_live_session_detail, public_live_sessions_from_rows
 from jupr_app.services.public_live_operation_service import (
     PublicLiveConflictError,
@@ -1632,3 +1633,6 @@ install_interclub_meet_signup_routes(app, get_supabase_client=get_supabase_clien
 
 from services.api.interclub_player_email_routes import install_interclub_player_email_routes
 install_interclub_player_email_routes(app, get_supabase_client=get_supabase_client)
+
+
+install_public_alias_middleware(app, get_club=lambda slug: get_club(slug), get_supabase_client=lambda: get_supabase_client())

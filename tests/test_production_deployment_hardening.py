@@ -106,8 +106,8 @@ def _health_payload(*, feature_profile: str = "release") -> dict:
             "worker_run_log_required": True,
             "email_mode": verifier.expected_production_email_mode(profile=feature_profile),
             "live_player_update_email_enabled": features["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"],
-            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "pre_badge_retirement", "release"},
-            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "pre_badge_retirement", "release"},
+            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "pre_badge_retirement", "pre_aliases", "release"},
+            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "pre_badge_retirement", "pre_aliases", "release"},
         },
     }
 
@@ -270,6 +270,7 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
     }
     assert verifier.PRODUCTION_ENABLED_FEATURE_FLAGS == {
         *email_flags,
+        "JUPR_ENABLE_PUBLIC_PLAYER_ALIASES",
         "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT",
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
@@ -305,6 +306,7 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         - verifier.PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS
     ) == {
         *email_flags,
+        "JUPR_ENABLE_PUBLIC_PLAYER_ALIASES",
         "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT",
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
@@ -330,7 +332,7 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
     )
     assert verifier.feature_flag_fingerprint(
         verifier.expected_production_feature_flags(profile="baseline")
-    ) == "8fb4e6ee26a71c5aeaa6cd4634e1541abee3d02b02588e2fa2331f6c4d1c2a85"
+    ) == "a229a4ab42d811fc5adccac4c7155eefbf4d20e3432f883c089f071d9865cc98"
     assert verifier.feature_flag_fingerprint(
         verifier.expected_production_controlled_write_flags(profile="baseline")
     ) == "0545cd0d4e437114b8d93fba7de5aec8057a00c08d3417830d367cfba1756bbb"
@@ -389,7 +391,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 187
+    assert len(versions) == 188
     assert "20261111223919" in versions
     assert "complete_matching_partner_reservations" in contract["required_ledger_names"]
     assert {"20261109011000", "20261109011100"}.issubset(versions)
@@ -424,7 +426,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "tournament_gender_eligibility_reviews" in contract["required_ledger_names"]
     assert {"complete_registration_cancellation", "registration_cancellation_audit_policies"}.issubset(contract["required_ledger_names"])
     assert "20260909203736" in versions
-    assert versions[-51:] == (
+    assert versions[-52:] == (
         "20261030010000",
         "20261030183226",
         "20261030224214",
@@ -476,13 +478,14 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109011000",
         "20261109011100",
         "20261111223919",
+        "20261116224208",
     )
-    assert len(names) == 187
+    assert len(names) == 188
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 174
+    assert len(contract["required_ledger_names"]) == 175
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 174
-    assert contract["deployment_order"][-21:] == (
+    assert len(contract["deployment_order"]) == 175
+    assert contract["deployment_order"][-22:] == (
         "event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder",
         "badge_conflicts_are_not_serialization_failures", "unrated_match_activity",
         "round_robin_hub_atomic_operations", "play_generator_operation_surface", "round_robin_hub_participant_identities",
@@ -498,6 +501,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "admin_tournament_registration_player_link",
         "tournament_combined_division_draws", "combined_division_live_guards",
         "complete_matching_partner_reservations",
+        "player_public_aliases",
     )
     assert {"interclub_season_trophies", "event_season_history"}.issubset(contract["required_ledger_names"])
     assert set(contract["deployment_order"]) == set(
@@ -981,7 +985,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261111223919"
+    assert migrations[-1] == "20261116224208"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
@@ -1905,7 +1909,7 @@ def test_email_release_cannot_attest_missing_sender_or_worker():
 def test_smtp_authentication_probe_runs_before_any_production_mutation():
     workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
     assert workflow.index("production_email_probe.py") < workflow.index("flyctl secrets set")
-    assert "baseline|pre_email|pre_awards|pre_operations|pre_team_leagues|pre_player_editor|pre_match_correction|pre_badge_retirement|release" in workflow
+    assert "baseline|pre_email|pre_awards|pre_operations|pre_team_leagues|pre_player_editor|pre_match_correction|pre_badge_retirement|pre_aliases|release" in workflow
     assert "JUPR_EMAIL_MODE=dry_run" not in workflow
     assert "expected_production_email_mode(profile=" in workflow
 
@@ -1943,8 +1947,20 @@ def test_badge_retirement_preserves_previous_profile_and_live_email():
     assert verifier.expected_production_email_mode(profile="pre_badge_retirement") == "live"
     assert {key for key in previous["feature_flags"]
             if previous["feature_flags"][key] != released["feature_flags"][key]} == {
-        "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS"
+        "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
+        "JUPR_ENABLE_PUBLIC_PLAYER_ALIASES"
     }
     assert not released["feature_flags"]["JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS"]
     workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
     assert "activate_operations_badges --apply" not in workflow
+
+
+def test_alias_release_preserves_exact_preceding_health_schema():
+    previous = _health_payload(feature_profile="pre_aliases")
+    previous["feature_flags"].pop("JUPR_ENABLE_PUBLIC_PLAYER_ALIASES")
+    previous["feature_flag_fingerprint"] = verifier.feature_flag_fingerprint(previous["feature_flags"])
+    assert verifier.production_feature_profile_from_health(previous) == "pre_aliases"
+    assert verifier.expected_production_feature_flags()["JUPR_ENABLE_PUBLIC_PLAYER_ALIASES"] is True
+    previous["feature_flags"]["unexpected"] = True
+    previous["feature_flag_fingerprint"] = verifier.feature_flag_fingerprint(previous["feature_flags"])
+    assert verifier.production_feature_profile_from_health(previous) is None

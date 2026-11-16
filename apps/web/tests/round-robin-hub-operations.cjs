@@ -71,7 +71,7 @@ let detail, requests, receipts, conflictNext, loseNext, holdNext, held, listRead
 function reset() { stored.clear(); detail = fixture(); requests = []; receipts = new Map(); conflictNext = false; loseNext = false; holdNext = false; held = null; listReads = 0; detailReads = 0; }
 const response = data => ({ok: true, json: async () => clone(data)});
 global.fetch = async (url, options = {}) => {
-  if (url.includes("/players?")) return response({players: []});
+  if ((url.includes("/players?") || url.includes("/players/roster?"))) return response({players: []});
   if (!options.body) {
     if (url.endsWith("/round-robin-hubs")) { listReads++; return response({ok: true, hubs: [detail.hub], sessions: []}); }
     detailReads++; return response(detail);

@@ -96,6 +96,7 @@ def _player_payload(row: dict[str, Any]) -> dict[str, Any]:
         "id": int(pid or 0),
         "club_id": str(row.get("club_id") or ""),
         "name": _clean_text(row.get("name"), limit=160),
+        "public_alias": _clean_text(row.get("public_alias"), limit=160) or None,
         "rating": row.get("rating"),
         "rating_jupr": _elo_to_jupr(row.get("rating")),
         "starting_rating": row.get("starting_rating"),
@@ -134,7 +135,7 @@ def _fetch_players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
     while True:
         query = (
             supabase.table("players")
-            .select("id,club_id,name,rating,starting_rating,wins,losses,matches_played,active,inactive_at,last_game_at")
+            .select("id,club_id,name,public_alias,rating,starting_rating,wins,losses,matches_played,active,inactive_at,last_game_at")
             .eq("club_id", str(club_id))
             .order("name", desc=False)
             .order("id", desc=False)
@@ -149,7 +150,7 @@ def _fetch_players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
 def _fetch_player_row(supabase: Any, *, club_id: str, player_id: int) -> dict[str, Any] | None:
     rows = _safe_rows(
         supabase.table("players")
-        .select("id,club_id,name,rating,starting_rating,wins,losses,matches_played,active,inactive_at,last_game_at")
+        .select("id,club_id,name,public_alias,rating,starting_rating,wins,losses,matches_played,active,inactive_at,last_game_at")
         .eq("club_id", str(club_id))
         .eq("id", int(player_id))
         .limit(1)
@@ -770,6 +771,12 @@ def update_admin_player_editor_player(
             raise ValueError("Player name is required.")
         update_payload["name"] = name
         request_patch["name"] = name
+    if "public_alias" in patch:
+        alias = _clean_text(patch.get("public_alias"), limit=160) or None
+        if alias and any(ord(char) < 32 for char in alias):
+            raise ValueError("Public alias must be a single line.")
+        update_payload["public_alias"] = alias
+        request_patch["public_alias"] = alias
     if "rating_jupr" in patch:
         update_payload["rating"] = _jupr_to_elo(patch.get("rating_jupr"), field_name="Overall JUPR")
         request_patch["rating"] = update_payload["rating"]
@@ -853,6 +860,10 @@ def update_admin_player_editor_player(
     for field in ("name", "rating", "starting_rating", "wins", "losses", "matches_played"):
         value = before_row.get(field)
         update_query = update_query.is_(field, None) if value is None else update_query.eq(field, value)
+    if before_row.get("public_alias") is None:
+        update_query = update_query.is_("public_alias", None)
+    else:
+        update_query = update_query.eq("public_alias", before_row["public_alias"])
     if before_row.get("inactive_at") is None:
         update_query = update_query.is_("inactive_at", None)
     else:

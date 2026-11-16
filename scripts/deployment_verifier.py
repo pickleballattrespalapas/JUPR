@@ -130,6 +130,7 @@ select pg_catalog.json_build_object(
 # Read surfaces are also projected so a production deploy cannot silently enable
 # an admin replacement before its guarded staging acceptance is complete.
 PRODUCTION_READ_FEATURE_FLAGS = (
+    "JUPR_ENABLE_PUBLIC_PLAYER_ALIASES",
     "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
     "JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER",
     "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
@@ -222,11 +223,13 @@ PRODUCTION_PRE_BADGE_RETIREMENT_ENABLED_FEATURE_FLAGS = frozenset({
     "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
     "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
 })
-PRODUCTION_ENABLED_FEATURE_FLAGS = (
+PRODUCTION_PRE_ALIASES_ENABLED_FEATURE_FLAGS = (
     PRODUCTION_PRE_BADGE_RETIREMENT_ENABLED_FEATURE_FLAGS
     - {"JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS"}
 )
+PRODUCTION_ENABLED_FEATURE_FLAGS = PRODUCTION_PRE_ALIASES_ENABLED_FEATURE_FLAGS | {"JUPR_ENABLE_PUBLIC_PLAYER_ALIASES"}
 PRODUCTION_FEATURE_PROFILES = {
+    "pre_aliases": PRODUCTION_PRE_ALIASES_ENABLED_FEATURE_FLAGS,
     "pre_badge_retirement": PRODUCTION_PRE_BADGE_RETIREMENT_ENABLED_FEATURE_FLAGS,
     "pre_match_correction": PRODUCTION_PRE_MATCH_CORRECTION_ENABLED_FEATURE_FLAGS,
     "pre_email": PRODUCTION_PRE_EMAIL_ENABLED_FEATURE_FLAGS,
@@ -912,7 +915,7 @@ def expected_production_controlled_write_flags(
 def expected_production_email_mode(*, profile: str = "release") -> str:
     if profile not in PRODUCTION_FEATURE_PROFILES:
         raise ValueError(f"Unknown production feature profile: {profile}")
-    return "live" if profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "pre_badge_retirement", "release"} else "dry_run"
+    return "live" if profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "pre_badge_retirement", "pre_aliases", "release"} else "dry_run"
 
 
 def production_feature_profile_from_health(health: Any) -> str | None:
@@ -933,6 +936,9 @@ def production_feature_profile_from_health(health: Any) -> str | None:
         return None
     for profile in PRODUCTION_FEATURE_PROFILES:
         expected_flags = expected_production_feature_flags(profile=profile)
+        # The preceding image predates the alias flag in its health schema.
+        if profile == "pre_aliases" and "JUPR_ENABLE_PUBLIC_PLAYER_ALIASES" not in health.get("feature_flags", {}):
+            expected_flags.pop("JUPR_ENABLE_PUBLIC_PLAYER_ALIASES")
         expected_controlled = expected_production_controlled_write_flags(
             profile=profile
         )
@@ -1492,6 +1498,8 @@ def runtime_identity_errors(
         errors.append("Expected production migration profile is invalid.")
 
     expected_flags = expected_production_feature_flags(profile=feature_profile)
+    if feature_profile == "pre_aliases" and "JUPR_ENABLE_PUBLIC_PLAYER_ALIASES" not in health.get("feature_flags", {}):
+        expected_flags.pop("JUPR_ENABLE_PUBLIC_PLAYER_ALIASES")
     expected_controlled_write_flags = (
         expected_production_controlled_write_flags(profile=feature_profile)
     )
