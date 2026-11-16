@@ -288,7 +288,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "interclub_commissioner_registration_window" in contract["required_ledger_names"]
     assert "interclub_pool_profile_matching_bulk_add" in contract["required_ledger_names"]
     assert {"20260906004056", "20260906005541", "20260906052216", "20260908052027", "20260908060747", "20260908060948", "20260908151701", "20260908173710"}.issubset(versions)
-    assert versions[-54:] == (
+    assert versions[-55:] == (
         "20261030010000",
         "20261030183226",
         "20261030224214",
