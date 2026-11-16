@@ -688,16 +688,15 @@ def _rating_history(matches: list[dict[str, Any]], *, player_id: int | str) -> l
     points: list[dict[str, Any]] = []
     ordered = sorted(matches, key=_match_sort_key)
     for index, row in enumerate(ordered, start=1):
-        if row.get("rating_scope") == "unrated":
-            continue
         position = _player_position(row, player_id)
         if position is None:
             continue
         slot, team = position
-        before = _to_jupr(row.get(f"{slot}_r"))
-        after = _to_jupr(row.get(f"{slot}_r_end"))
+        rated = row.get("rating_scope") != "unrated"
+        before = _to_jupr(row.get(f"{slot}_r")) if rated else None
+        after = _to_jupr(row.get(f"{slot}_r_end")) if rated else None
         result = _match_result(row, team)
-        raw_elo_delta = _float_or_none(row.get("elo_delta"))
+        raw_elo_delta = _float_or_none(row.get("elo_delta")) if rated else None
         raw_delta = (raw_elo_delta / 400.0) if raw_elo_delta is not None else None
         if after is None and before is not None and raw_delta is not None and result:
             after = before + (abs(raw_delta) if result == "win" else -abs(raw_delta))

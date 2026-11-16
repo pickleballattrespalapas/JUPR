@@ -75,7 +75,12 @@ def test_unrated_match_snapshots_never_reintroduce_estimates_into_profile():
     match["rating_scope"] = "unrated"
     db.rows_by_table["matches"] = [match]
     profile = get_public_player_profile(db, club_id="club-1", player_id=1)
-    assert profile["rating_history"] == []
+    assert len(profile["rating_history"]) == 1
+    assert all(profile["rating_history"][0][key] is None for key in [
+        "rating_before_jupr", "rating_after_jupr", "rating_delta_jupr"
+    ])
+    assert profile["rating_breakdowns"][0]["matches"] == 1
+    assert profile["rating_breakdowns"][0]["wins"] == 1
     assert profile["rating_summary"]["highest_rating_jupr"] is None
     assert profile["match_history"][0]["player_rating_before_jupr"] is None
     assert profile["match_history"][0]["elo_delta"] is None
