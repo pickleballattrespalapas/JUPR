@@ -8,13 +8,13 @@ export function matchesPlayerSearch(name: string, query: string): boolean {
   return playerSearchKey(query).split(" ").every(part => haystack.includes(part));
 }
 
-export async function fetchAllPublicPlayers<T>(url: string, signal: AbortSignal): Promise<T[]> {
+export async function fetchAllPublicPlayers<T>(url: string, signal: AbortSignal, accessToken?: string): Promise<T[]> {
   const rows: T[] = [];
   for (;;) {
     const pageUrl = new URL(url);
     pageUrl.searchParams.set("limit", "1000");
     pageUrl.searchParams.set("offset", String(rows.length));
-    const response = await fetch(pageUrl.toString(), { cache: "no-store", signal });
+    const response = await fetch(pageUrl.toString(), { cache: "no-store", signal, ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}) });
     if (!response.ok) throw new Error("Player search is temporarily unavailable.");
     const page = await response.json() as { players?: T[]; pagination?: { has_more?: boolean } };
     const players = page.players || [];

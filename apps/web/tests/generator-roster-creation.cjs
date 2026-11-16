@@ -61,7 +61,7 @@ const change = async (node, value) => act(async () => node.props.onChange({targe
           if (scenario === "duplicate" && players.length === 5) players.push({id: 6, name: "New Player"});
           return reply({players});
         }
-        if (url.includes("/players?")) return reply({players});
+        if ((url.includes("/players?") || url.includes("/players/roster?"))) return reply({players});
         if (url.endsWith("/preview")) {
           const body = JSON.parse(options.body);
           assert.equal(body.participant_player_ids["New Player"], 6);
@@ -133,7 +133,7 @@ const change = async (node, value) => act(async () => node.props.onChange({targe
           if (scenario === "full_duplicate" && players.length === 4) players.push({id: 5, name: "New Player"});
           return reply({players});
         }
-        if (url.includes("/players?")) return reply({players});
+        if ((url.includes("/players?") || url.includes("/players/roster?"))) return reply({players});
         if (url.endsWith("/preview")) {
           const body = JSON.parse(options.body);
           assert.deepEqual(body.participant_names, ["Player 1", "New Player", "Player 2", "Pláyer Four", "Player 3"]);

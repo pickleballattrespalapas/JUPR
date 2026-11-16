@@ -373,14 +373,16 @@ export default function GeneratorRosterSetup({
     setDirectoryError(null);
     setDirectoryPlayers([]);
     void fetchAllPublicPlayers<DirectoryPlayer>(
-      apiUrl(apiBase, `/clubs/${encodeURIComponent(publicClubSlug)}/players?status=all&sort=name`), controller.signal
+      apiUrl(apiBase, creationClubId && ratingReviewAccessToken
+        ? `/admin/clubs/${encodeURIComponent(creationClubId)}/players/roster`
+        : `/clubs/${encodeURIComponent(publicClubSlug)}/players?status=all&sort=name`), controller.signal, ratingReviewAccessToken
     ).then(players => {
       if (!controller.signal.aborted) setDirectoryPlayers(players);
     }).catch(() => {
       if (!controller.signal.aborted) setDirectoryError("Player search isn’t available right now. You can still type names below.");
     });
     return () => controller.abort();
-  }, [apiBase, publicClubSlug]);
+  }, [apiBase, publicClubSlug, creationClubId, ratingReviewAccessToken]);
 
   const filteredPlayerOptions = useMemo(() => {
     const query = normalizeRosterName(playerSearch);

@@ -275,6 +275,15 @@ def _error(exc: Exception) -> None:
 
 
 def install_admin_round_robin_hub_routes(app, *, get_supabase_client) -> None:
+    @app.get("/admin/clubs/{club_id}/players/roster")
+    def staff_player_roster(club_id: str, authorization: str | None = auth_header()) -> dict[str, Any]:
+        from jupr_app.data.paged_reads import read_all_rows
+        from jupr_app.domain.player_visibility import is_merged_player
+        db = get_supabase_client()
+        _resolve_role_or_403(supabase=db, club_id=club_id, authorization=authorization, source="round_robin_staff_roster")
+        rows = read_all_rows(lambda: db.table("players").select("id,name,active").eq("club_id", club_id))
+        return {"players": sorted([row for row in rows if not is_merged_player(row)], key=lambda row: str(row.get("name") or "").casefold())}
+
     @app.get("/admin/clubs/{club_id}/round-robin-hubs")
     def list_hubs(club_id: str, authorization: str | None = auth_header()) -> dict[str, Any]:
         db = get_supabase_client()

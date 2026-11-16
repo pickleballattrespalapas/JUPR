@@ -834,7 +834,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       onSubmitMany={(sessionKey, participantIds) => { void command("remove_players", { session_key: sessionKey, participant_ids: participantIds }); }} /> : null}
 
     {playerEditor && detail && apiBase ? <HubEditPlayersDialog key={`${playerEditor.match.session_key}:${playerEditor.match.match_id}`}
-      apiBase={apiBase} clubId={clubId} match={playerEditor.match} group={groupMap.get(playerEditor.match.session_key)}
+      apiBase={apiBase} clubId={clubId} accessToken={accessToken} match={playerEditor.match} group={groupMap.get(playerEditor.match.session_key)}
       stale={String(playerEditor.version) !== String(detail.hub.version)} available={playerEditorAvailable}
       busy={busy} disabled={disabled} pending={Boolean(pending)} error={error}
       onClose={() => setPlayerEditor(null)} onRetry={() => { if (pending) void execute(pending); }}

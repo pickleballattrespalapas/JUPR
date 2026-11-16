@@ -13,6 +13,7 @@ kill_timeout = 300
   dockerfile = "Dockerfile.api"
 
 [env]
+  JUPR_ENABLE_PUBLIC_PLAYER_ALIASES = "true"
   PORT = "8080"
   JUPR_ENV = "staging"
   JUPR_BADGE_WORKER_MODE = "disabled"

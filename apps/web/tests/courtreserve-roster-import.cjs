@@ -26,6 +26,9 @@ function compile(file) {
   return compiled.exports;
 }
 const parser = compile(path.join(root, 'lib/courtReserveRosterImport.ts'));
+const aliasImport = parser.matchCourtReserveRows(parser.parseCourtReserveReport('Full Name,Skill Level\nCarol Becker,3.5'), [{id: 77, name: 'Carol Becker', public_alias: 'Ann Johnson'}]);
+assert.equal(aliasImport[0].playerId, 77);
+assert.equal(aliasImport[0].name, 'Carol Becker');
 const Component = compile(path.join(root, 'components/CourtReserveRosterImport.tsx')).default;
 const text = node => typeof node === 'string' ? node : (node?.children || []).map(text).join('');
 const button = (tree, value) => tree.root.findAllByType('button').find(node => text(node) === value);

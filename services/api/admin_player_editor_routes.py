@@ -52,6 +52,7 @@ class AdminPlayerEditorCreateRequest(BaseModel):
 
 class AdminPlayerEditorUpdateRequest(BaseModel):
     name: str | None = None
+    public_alias: str | None = Field(default=None, max_length=160)
     rating_jupr: float | None = Field(default=None, ge=1.0, le=7.0)
     starting_jupr: float | None = Field(default=None, ge=1.0, le=7.0)
     active: bool | None = None
@@ -258,7 +259,7 @@ def install_admin_player_editor_routes(app, *, get_supabase_client) -> None:
     def patch_admin_player_editor_player(club_id: str, player_id: int, payload: AdminPlayerEditorUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); expected_state_fingerprint = str(patch.pop("expected_state_fingerprint", payload.expected_state_fingerprint)); idempotency_key = str(patch.pop("idempotency_key", payload.idempotency_key))
+        patch = payload.model_dump(exclude_unset=True); source = str(patch.pop("source", payload.source)); expected_state_fingerprint = str(patch.pop("expected_state_fingerprint", payload.expected_state_fingerprint)); idempotency_key = str(patch.pop("idempotency_key", payload.idempotency_key))
         try: return update_admin_player_editor_player(supabase, club_id=str(club_id), player_id=int(player_id), patch=patch, actor_email=actor_email, actor_role=actor_role, expected_state_fingerprint=expected_state_fingerprint, idempotency_key=idempotency_key, source=source)
         except Exception as exc: _handle_common(exc)
 

@@ -8,14 +8,14 @@ import { hubPlayerLabel, type HubGroup, type HubGroupPlayer, type HubMatch } fro
 import styles from "./RoundRobinHubPanel.module.css";
 
 type Props = {
-  apiBase: string; clubId: string; match: HubMatch; group?: HubGroup;
+  apiBase: string; clubId: string; accessToken?: string; match: HubMatch; group?: HubGroup;
   stale: boolean; available: boolean; busy: boolean; disabled: boolean; pending: boolean; error: string;
   onClose: () => void; onRetry: () => void; onReview: () => void;
   onSubmit: (payload: Record<string, unknown>) => void;
   onSubmitExact?: (payload: Record<string, unknown>) => void;
 };
 
-export default function HubEditPlayersDialog({ apiBase, clubId, match, group, stale, available,
+export default function HubEditPlayersDialog({ apiBase, clubId, accessToken, match, group, stale, available,
   busy, disabled, pending, error, onClose, onRetry, onReview, onSubmit, onSubmitExact }: Props) {
   const [mode, setMode] = useState<"replace" | "exact">("replace");
   const [teams, setTeams] = useState(() => [...match.side_a, ...match.side_b].map(player => player.id));
@@ -29,12 +29,12 @@ export default function HubEditPlayersDialog({ apiBase, clubId, match, group, st
   useEffect(() => {
     const controller = new AbortController();
     void fetchAllPublicPlayers<{ id: string | number; name: string }>(
-      `${apiBase.replace(/\/$/, "")}/clubs/${encodeURIComponent(clubId.replace(/_/g, "-"))}/players?status=all&sort=name`, controller.signal
+      `${apiBase.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/players/roster`, controller.signal, accessToken
     ).then(players => { if (!controller.signal.aborted) setDirectory(players); })
       .catch(() => { if (!controller.signal.aborted) setDirectoryError("Club search is unavailable. You can still enter a guest name."); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [apiBase, clubId]);
+  }, [apiBase, clubId, accessToken]);
 
   const lineup = [...match.side_a, ...match.side_b];
   const roster = [...(group?.players || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
