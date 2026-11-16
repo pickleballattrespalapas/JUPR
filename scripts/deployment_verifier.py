@@ -67,6 +67,7 @@ MIGRATION_SCHEMA_CONTRACT_KEYS = (
 # Read surfaces are also projected so a production deploy cannot silently enable
 # an admin replacement before its guarded staging acceptance is complete.
 PRODUCTION_READ_FEATURE_FLAGS = (
+    "JUPR_ENABLE_PUBLIC_PLAYER_ALIASES",
     "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
     "JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER",
     "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",

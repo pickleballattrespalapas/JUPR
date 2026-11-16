@@ -55,7 +55,7 @@ def install_public_alias_middleware(app, *, get_club, get_supabase_client):
         response = await call_next(request)
         slug = public_club_slug(request.url.path)
         season = re.match(r"^/public/(interclub|managed-interclub|interclub-signups)/([^/]+)(?:/|$)", request.url.path)
-        if (os.getenv("JUPR_ENABLE_PUBLIC_PLAYER_ALIASES", "").lower() != "true"
+        if (os.getenv("JUPR_ENABLE_PUBLIC_PLAYER_ALIASES", "").lower() not in {"1", "true", "yes", "on"}
                 or not (slug or season)
                 or response.status_code >= 400
                 or not any(kind in response.headers.get("content-type", "")
