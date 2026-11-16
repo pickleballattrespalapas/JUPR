@@ -78,10 +78,10 @@ def fake_supabase() -> FakeSupabase:
                 }
             ],
             "players": [
-                {"id": 1, "club_id": "club", "name": "Alex", "rating": 1700, "active": True, "private_email": "hidden"},
-                {"id": 2, "club_id": "club", "name": "Blair", "rating": 1600, "active": True},
-                {"id": 3, "club_id": "club", "name": "Casey", "rating": 1500, "active": True},
-                {"id": 4, "club_id": "club", "name": "Devon", "rating": 1400, "active": False},
+                {"id": 1, "club_id": "club", "name": "Alex", "rating": 1700, "matches_played": 1, "active": True, "private_email": "hidden"},
+                {"id": 2, "club_id": "club", "name": "Blair", "rating": 1600, "matches_played": 1, "active": True},
+                {"id": 3, "club_id": "club", "name": "Casey", "rating": 1500, "matches_played": 1, "active": True},
+                {"id": 4, "club_id": "club", "name": "Devon", "rating": 1400, "matches_played": 1, "active": False},
             ],
             "ladder_roster": [
                 {"id": 10, "club_id": "club", "player_id": 1, "tier_id": "PREM", "rank": 1, "is_active": True, "notes": "private"},

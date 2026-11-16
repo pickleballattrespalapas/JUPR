@@ -70,10 +70,10 @@ def fake_supabase() -> FakeSupabase:
                 {"id": 4, "club_id": "club", "name": "Devon", "rating": 1200, "wins": 0, "losses": 1, "matches_played": 1, "active": True},
             ],
             "league_ratings": [
-                {"player_id": 1, "club_id": "club", "league_name": "Open", "rating": 1500, "is_active": True},
-                {"player_id": 2, "club_id": "club", "league_name": "Open", "rating": 1450, "is_active": True},
-                {"player_id": 3, "club_id": "club", "league_name": "Open", "rating": 1300, "is_active": True},
-                {"player_id": 4, "club_id": "club", "league_name": "Open", "rating": 1250, "is_active": True},
+                {"player_id": 1, "club_id": "club", "league_name": "Open", "rating": 1500, "matches_played": 1, "is_active": True},
+                {"player_id": 2, "club_id": "club", "league_name": "Open", "rating": 1450, "matches_played": 1, "is_active": True},
+                {"player_id": 3, "club_id": "club", "league_name": "Open", "rating": 1300, "matches_played": 1, "is_active": True},
+                {"player_id": 4, "club_id": "club", "league_name": "Open", "rating": 1250, "matches_played": 1, "is_active": True},
             ],
             "leagues_metadata": [
                 {"club_id": "club", "league_name": "Open", "is_active": True, "status": "active", "k_factor": 24},

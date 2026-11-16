@@ -72,7 +72,7 @@ function ratingValue(raw?: number | null, normalized?: number | null): number | 
 
 function ratingLabel(raw?: number | null, normalized?: number | null): string {
   const value = ratingValue(raw, normalized);
-  return value == null ? "—" : value.toFixed(3);
+  return value == null ? "Not rated" : value.toFixed(3);
 }
 
 function winPctLabel(player: PublicPlayer): string {

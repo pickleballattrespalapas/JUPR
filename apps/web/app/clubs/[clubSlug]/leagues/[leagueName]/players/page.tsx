@@ -33,7 +33,7 @@ function firstParam(searchParams: Awaited<Props["searchParams"]>, key: string): 
 }
 
 function ratingLabel(value?: number | null): string {
-  if (value == null || Number.isNaN(Number(value))) return "—";
+  if (value == null || Number.isNaN(Number(value))) return "Not rated";
   return Number(value).toFixed(3);
 }
 
