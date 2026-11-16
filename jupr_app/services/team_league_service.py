@@ -12,6 +12,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jupr_app.domain.player_visibility import is_merged_player
+from jupr_app.domain.public_rating import public_rating
 from jupr_app.data.load import load_data
 from jupr_app.domain.league_analytics import compute_team_league_standings
 from jupr_app.domain.team_league_roster import (
@@ -702,8 +703,8 @@ def get_public_team_league(
                 "player_id": int(row["id"]),
                 "player_name": _text(row.get("name"), 160),
                 "rating_jupr": (
-                    round(float(row.get("rating")) / 400.0, 3)
-                    if row.get("rating") not in (None, "")
+                    round(public_rating(row) / 400.0, 3)
+                    if public_rating(row) is not None
                     else None
                 ),
                 "gender": row.get("gender"),

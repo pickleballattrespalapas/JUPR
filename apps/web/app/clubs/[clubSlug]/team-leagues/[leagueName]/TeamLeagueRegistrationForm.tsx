@@ -163,7 +163,7 @@ export default function TeamLeagueRegistrationForm({
           Your player profile
           <SearchablePlayerSelect aria-label="Your player profile" style={input} value={playerId} onValueChange={playerValue => setPlayerId(playerValue)}>
             <option value="">Choose a player</option>
-            {players.map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name}{player.rating_jupr ? ` · ${player.rating_jupr.toFixed(2)}` : ""}</option>)}
+            {players.map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name}{player.rating_jupr != null ? ` · ${player.rating_jupr.toFixed(2)}` : " · Not rated"}</option>)}
           </SearchablePlayerSelect>
         </label>
         {signupType === "team" ? (
@@ -171,7 +171,7 @@ export default function TeamLeagueRegistrationForm({
             Partner
             <SearchablePlayerSelect aria-label="Partner" style={input} value={partnerId} onValueChange={playerValue => setPartnerId(playerValue)}>
               <option value="">Choose a partner</option>
-              {players.filter((player) => String(player.player_id) !== playerId).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name}{player.rating_jupr ? ` · ${player.rating_jupr.toFixed(2)}` : ""}</option>)}
+              {players.filter((player) => String(player.player_id) !== playerId).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name}{player.rating_jupr != null ? ` · ${player.rating_jupr.toFixed(2)}` : " · Not rated"}</option>)}
             </SearchablePlayerSelect>
           </label>
         ) : null}

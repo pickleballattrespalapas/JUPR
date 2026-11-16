@@ -51,10 +51,12 @@ function Harness({ multiple = false, disabled = false }) {
   await act(async () => { tree = create(h(PublicSearch, { clubSlug: 'club-a', filters: { status: 'inactive' } })); });
   await type('va'); await settle(); await type('al'); await settle();
   assert.ok(pending[0].init.signal.aborted); assert.match(pending[1].url, /clubs\/club-a\/players\?status=inactive/);
-  await act(async () => pending[1].resolve({ ok: true, json: async () => ({ players: [{ id: 30, name: 'Alina Example', rating_jupr: 4.2 }] }) }));
-  assert.match(text(choices()[0]), /Alina Example/);
+  await act(async () => pending[1].resolve({ ok: true, json: async () => ({ players: [{ id: 30, name: 'Alina Example', rating_jupr: 4.2 }, { id: 32, name: 'Albert Social', rating_jupr: null }] }) }));
+  assert.match(text(choices()[0]), /Alina Example.*4\.20/);
+  assert.match(text(choices()[1]), /Albert Social.*Not rated/);
   await act(async () => pending[0].resolve({ ok: true, json: async () => ({ players: [{ id: 31, name: 'Valé Verdugo' }] }) }));
-  assert.equal(choices().length, 1); assert.match(text(choices()[0]), /Alina Example/);
+  assert.equal(choices().length, 2); assert.match(text(choices()[0]), /Alina Example.*4\.20/);
+  assert.match(text(choices()[1]), /Albert Social.*Not rated/);
   await pick('Alina'); assert.equal(selected, '/clubs/club-a/players/30');
   await act(async () => tree.update(h(PublicSearch, { clubSlug: 'club-b', filters: { status: 'active' } })));
   assert.equal(input().props.value, ''); await type('al'); assert.equal(choices().length, 0, 'Changing clubs never reuses the prior club results');

@@ -61,11 +61,11 @@ def client(monkeypatch):
         "clubs": [{"id": "club-1", "slug": "tres-palapas", "name": "Tres Palapas", "admin_notes": "private"}],
         "ladder_settings": [{"club_id": "club-1", "challenge_range": 7, "accept_window_hours": 48, "play_window_days": 7, "cooldown_hours": 72, "protected_hours": 72, "pass_hold_hours": 72}],
         "players": [
-            {"id": 1, "club_id": "club-1", "name": "Alex", "rating": 1700, "active": True, "private_email": "hidden"},
-            {"id": 2, "club_id": "club-1", "name": "Blair", "rating": 1600, "active": True},
-            {"id": 3, "club_id": "club-1", "name": "Casey", "rating": 1500, "active": True},
-            {"id": 4, "club_id": "club-1", "name": "Dana", "rating": 1480, "active": False},
-            {"id": 5, "club_id": "club-1", "name": "Eli", "rating": 1460, "active": False},
+            {"id": 1, "club_id": "club-1", "name": "Alex", "rating": 1700, "matches_played": 1, "active": True, "private_email": "hidden"},
+            {"id": 2, "club_id": "club-1", "name": "Blair", "rating": 1600, "matches_played": 1, "active": True},
+            {"id": 3, "club_id": "club-1", "name": "Casey", "rating": 1500, "matches_played": 1, "active": True},
+            {"id": 4, "club_id": "club-1", "name": "Dana", "rating": 1480, "matches_played": 1, "active": False},
+            {"id": 5, "club_id": "club-1", "name": "Eli", "rating": 1460, "matches_played": 1, "active": False},
         ],
         "ladder_roster": [
             {"id": 10, "club_id": "club-1", "player_id": 1, "tier_id": "PREM", "rank": 1, "is_active": True, "notes": "private"},

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
+from jupr_app.domain.public_rating import public_rating
 from jupr_app.domain.match_explorer import build_match_explorer_projection
 from jupr_app.services.public_league_visibility import (
     ACTIVE_LEAGUE_VIEW,
@@ -10,7 +11,7 @@ from jupr_app.services.public_league_visibility import (
 )
 from jupr_app.services.public_player_service import get_public_players
 
-LEAGUE_RATING_SELECT = "player_id,league_name,rating,is_active"
+LEAGUE_RATING_SELECT = "player_id,league_name,rating,is_active,matches_played,wins,losses"
 LEAGUE_META_SELECT = "league_name,is_active,status,k_factor"
 
 
@@ -116,7 +117,7 @@ def _league_rating_map(supabase: Any, *, club_id: str, context_name: str, player
         if row.get("is_active") is False:
             continue
         pid = _safe_int(row.get("player_id"))
-        rating = _safe_float(row.get("rating"))
+        rating = public_rating(row)
         if pid is not None and rating is not None:
             ratings[int(pid)] = float(rating)
     return ratings
@@ -176,6 +177,8 @@ def build_public_match_explorer_preview(
     missing = [pid for pid in player_ids if pid not in players_by_id]
     if missing:
         raise ValueError("One or more selected players are unavailable.")
+    if any(players_by_id[pid].get("rating") is None for pid in player_ids):
+        raise ValueError("One or more selected players are Not rated. Match Explorer needs four players with rated doubles history.")
 
     league_ratings = _league_rating_map(
         supabase,

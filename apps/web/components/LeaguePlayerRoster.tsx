@@ -16,7 +16,7 @@ function number(value: number | null | undefined): number {
 }
 
 function ratingLabel(value?: number | null): string {
-  return value == null || Number.isNaN(Number(value)) ? "—" : Number(value).toFixed(3);
+  return value == null || Number.isNaN(Number(value)) ? "Not rated" : Number(value).toFixed(3);
 }
 
 function percentLabel(value?: number | null): string {

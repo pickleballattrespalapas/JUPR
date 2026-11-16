@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 import pandas as pd
+from jupr_app.domain.public_rating import public_rating
 
 from jupr_app.domain.challenge_ladder import (
     TIER_DEFS,
@@ -194,7 +195,7 @@ def _settings(supabase: Any, *, club_id: str) -> dict[str, int]:
 
 
 def _player_maps(supabase: Any, *, club_id: str) -> tuple[dict[int, str], set[int], dict[int, float]]:
-    rows = _fetch_table(supabase, "players", "id,club_id,name,rating,active,inactive_at", club_id=club_id, limit=5000)
+    rows = _fetch_table(supabase, "players", "id,club_id,name,rating,active,inactive_at,matches_played,wins,losses", club_id=club_id, limit=5000)
     id_to_name: dict[int, str] = {}
     active_ids: set[int] = set()
     rating_map: dict[int, float] = {}
@@ -205,7 +206,9 @@ def _player_maps(supabase: Any, *, club_id: str) -> tuple[dict[int, str], set[in
         pid = int(pid)
         name = str(row.get("name") or f"Player {pid}")
         id_to_name[pid] = name
-        rating_map[pid] = _safe_float(row.get("rating"), 1200.0) or 1200.0
+        rating = public_rating(row)
+        if rating is not None:
+            rating_map[pid] = rating
         if row.get("active") is not False and not row.get("inactive_at"):
             active_ids.add(pid)
     return id_to_name, active_ids, rating_map
