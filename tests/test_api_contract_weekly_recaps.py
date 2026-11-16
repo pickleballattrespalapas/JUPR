@@ -30,6 +30,14 @@ class FakeQuery:
         self._filters[key] = value
         return self
 
+    def neq(self, key, value):
+        self._rows = [row for row in self._rows if row.get(key) is not None and row.get(key) != value]
+        return self
+
+    def range(self, start, end):
+        self._bounds = (start, end)
+        return self
+
     def limit(self, value):
         self._limit = int(value)
         return self
@@ -47,6 +55,8 @@ class FakeQuery:
             rows = sorted(rows, key=lambda row: str(row.get(self._order_key) or ""), reverse=self._order_desc)
         if self._limit is not None:
             rows = rows[: self._limit]
+        if hasattr(self, "_bounds"):
+            rows = rows[self._bounds[0]:self._bounds[1]+1]
         return SimpleNamespace(data=rows)
 
 

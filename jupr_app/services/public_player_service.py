@@ -5,6 +5,7 @@ from jupr_app.domain.gamification.badge_policy import badges_enabled
 from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.domain.player_activity import is_player_leaderboard_active
 from jupr_app.domain.public_rating import public_rating
+from jupr_app.domain.player_aliases import public_player_name
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.player_search import matches_player_search
 from jupr_app.domain.gamification.presentation import badge_category, badge_requirement, category_sort_key
@@ -17,9 +18,9 @@ from typing import Any
 
 from jupr_app.services.public_league_visibility import league_is_public
 
-PLAYER_SELECT = "id,club_id,name,rating,starting_rating,wins,losses,matches_played,active,last_game_at,inactive_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at"
-PLAYER_BASE_SELECT = "id,club_id,name,rating,wins,losses,matches_played,active,last_game_at,inactive_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at"
-PLAYER_MINIMAL_SELECT = "id,club_id,name,rating,wins,losses,matches_played"
+PLAYER_SELECT = "id,club_id,name,public_alias,rating,starting_rating,wins,losses,matches_played,active,last_game_at,inactive_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at"
+PLAYER_BASE_SELECT = "id,club_id,name,public_alias,rating,wins,losses,matches_played,active,last_game_at,inactive_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at"
+PLAYER_MINIMAL_SELECT = "id,club_id,name,public_alias,rating,wins,losses,matches_played"
 LEAGUE_RATINGS_SELECT = "id,club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active"
 LEAGUE_META_VISIBILITY_SELECT = "club_id,league_name,is_active,status"
 MATCH_SELECT = "*"
@@ -138,7 +139,7 @@ def _player_base(row: dict[str, Any]) -> dict[str, Any]:
     singles_matches_played = _int_or_none(row.get("singles_matches_played"))
     if singles_matches_played is None:
         singles_matches_played = singles_wins + singles_losses
-    display_name = _plain_text(row.get("name"), limit=160) or "Player"
+    display_name = _plain_text(public_player_name(row), limit=160) or "Player"
     return {
         "id": _int_or_none(row.get("id")) or row.get("id"),
         "name": display_name,
@@ -209,10 +210,10 @@ def _match_player_names(supabase: Any, club_id: str, matches: list[dict[str, Any
     for start in range(0, len(ids), 100):
         batch = ids[start:start + 100]
         rows = read_all_rows(
-            lambda: supabase.table("players").select("id,name").eq("club_id", club_id).in_("id", batch),
+            lambda: supabase.table("players").select("id,name,public_alias").eq("club_id", club_id).in_("id", batch),
             order="id",
         )
-        names.update({str(row["id"]): (_plain_text(row.get("name"), limit=160) or "Player") for row in rows})
+        names.update({str(row["id"]): (_plain_text(public_player_name(row), limit=160) or "Player") for row in rows})
     return names
 
 

@@ -248,3 +248,15 @@ def test_remove_player_command_is_scoped_and_replays_without_reason(api):
     assert first.status_code == replay.status_code == 200 and replay.json()["replayed"]
     player = next(p for p in first.json()["workspace"]["groups"][0]["players"] if p["participant_id"] == pid)
     assert not player["active"] and not player["can_remove"]
+
+
+def test_staff_roster_requires_club_permission_and_preserves_canonical_names(api, monkeypatch):
+    client, db = api
+    path = "/admin/clubs/club-a/players/roster"
+    assert client.get(path).status_code == 401
+    assert client.get("/admin/clubs/club-b/players/roster", headers=HEADERS).status_code == 403
+    monkeypatch.setattr("jupr_app.data.paged_reads.read_all_rows", lambda factory: [
+        {"id": 7, "name": "Carol Becker", "active": True}])
+    response = client.get(path, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["players"] == [{"id": 7, "name": "Carol Becker", "active": True}]

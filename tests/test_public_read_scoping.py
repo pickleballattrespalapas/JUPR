@@ -76,7 +76,7 @@ def test_profile_and_match_names_are_scoped_to_participants():
     profile = get_public_player_profile(sb, club_id="club-1", player_id=1)
     assert profile["match_history"]
     assert all(filters.get("id") == 1 or "id" in in_filters for filters, in_filters, _ in reads)
-    assert all(columns == ["id", "name"] for _, in_filters, columns in reads if in_filters)
+    assert all(columns == ["id", "name", "public_alias"] for _, in_filters, columns in reads if in_filters)
     reads.clear()
     assert get_public_match_detail(sb, club_id="club-1", match_id=99)
     assert all(filters == {"club_id": "club-1"} and in_filters == {"id": {"1", "2", "3", "4"}}

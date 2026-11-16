@@ -51,6 +51,7 @@ jobs:
             tests/test_overall_leaderboard_metrics.py \
             tests/test_public_leaderboard_projection.py \
             tests/test_public_provisional_ratings.py \
+          tests/test_public_player_aliases.py \
             tests/test_public_tournament_highlights.py \
             tests/test_web_leaderboard_parity_contract.py \
             tests/test_interclub_*.py \

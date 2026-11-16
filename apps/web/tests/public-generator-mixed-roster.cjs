@@ -47,7 +47,7 @@ const reply = (body, status = 200) => ({ ok: status < 400, status, json: async (
     rounds: names.map((_, i) => ({ number: i + 1, status: "preview", matches: [], byeParticipantIds: [`p-${i + 1}`] }))
   };
   global.fetch = async (url, options = {}) => {
-    if (url.includes("/players?")) return reply({ players: [{ id: 102, name: "Jose" }, { id: 104, name: "Chay" }] });
+    if ((url.includes("/players?") || url.includes("/players/roster?"))) return reply({ players: [{ id: 102, name: "Jose" }, { id: 104, name: "Chay" }] });
     if (!options.body) return reply({ sessions: [] });
     const body = JSON.parse(options.body);
     requests.push({ url, body });

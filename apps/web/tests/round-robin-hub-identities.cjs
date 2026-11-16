@@ -74,7 +74,7 @@ function setup(reviews = [review()]) {
   } };
 }
 global.fetch = async (url, options = {}) => {
-  if (url.includes("/clubs/club/players?")) return { ok: true, json: async () => ({ players: [{ id: 101, name: "Club Alex" }, { id: 102, name: "Casey Club" }, { id: 103, name: "Return Player" }] }) };
+  if (url.includes("/admin/clubs/club/players/roster?")) return { ok: true, json: async () => ({ players: [{ id: 101, name: "Club Alex" }, { id: 102, name: "Casey Club" }, { id: 103, name: "Return Player" }] }) };
   assert.equal(options.headers.Authorization, "Bearer test-staff");
   if (!options.body) return { ok: true, json: async () => url.endsWith("/round-robin-hubs") ? { ok: true, hubs: [clone(detail.hub)], sessions: [] } : clone(detail) };
   const body = JSON.parse(options.body); requests.push(body);
