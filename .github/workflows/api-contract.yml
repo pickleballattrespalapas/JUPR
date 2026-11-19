@@ -76,6 +76,7 @@ jobs:
             tests/test_generator_incremental_regeneration.py \
             tests/test_generator_share_metadata.py \
             tests/test_public_read_cache.py \
+            tests/test_public_results_reads.py \
             tests/test_public_read_scoping.py
 
       - name: Verify tournament pool schedules and progression

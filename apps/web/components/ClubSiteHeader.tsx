@@ -18,7 +18,7 @@ export default function ClubSiteHeader({
 <nav className={styles.nav} aria-label="Club navigation">
         <Link href={`/clubs/${slug}`}>Home</Link>
         {publicClubLinks(doc).map(([label, path]) => (
-          <Link key={path} href={`/clubs/${slug}/${path}`}>
+          <Link key={path} href={`/clubs/${slug}/${path}`} prefetch={false}>
             {label}
           </Link>
         ))}

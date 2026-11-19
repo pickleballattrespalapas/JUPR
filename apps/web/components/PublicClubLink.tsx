@@ -21,10 +21,10 @@ export default function PublicClubLink({ children, ...props }: ComponentProps<ty
 function PublicPageLink({ children, ...props }: ComponentProps<typeof Link>) {
   const href = typeof props.href === "string" ? props.href : props.href.pathname || "";
   const PageLink = /^\/clubs\/[^/]+\/tournament(?:s|-[^/?#]+)(?:[/?#]|$)/.test(href) ? NavigationLink : Link;
-  // Dense rankings can expose dozens of profiles. Even a partial prefetch runs
-  // each profile's metadata reads; load those only when the player is opened.
-  const playerRecord = /^\/clubs\/[^/?#]+\/players\/[^/?#]+(?:[/?#]|$)/.test(href);
-  return <PageLink {...props} prefetch={playerRecord ? false : props.prefetch}>{children}</PageLink>;
+  // Each results filter or player link can start fresh API calculations, even
+  // during a partial prefetch. Read those only when the visitor opens the link.
+  const resultsRead = /^\/clubs\/[^/?#]+\/(?:players\/[^/?#]+|leaderboards|league-results|leagues|tournament-results)(?:[/?#]|$)/.test(href);
+  return <PageLink {...props} prefetch={resultsRead ? false : props.prefetch}>{children}</PageLink>;
 }
 
 function ClubLink({ context, children, ...props }: ComponentProps<typeof Link> & {
