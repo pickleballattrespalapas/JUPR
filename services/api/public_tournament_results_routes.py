@@ -10,6 +10,7 @@ from jupr_app.services.public_tournament_results_service import (
 )
 from jupr_app.services.public_tournament_highlights_service import public_tournament_gold_highlights
 from services.api.club_site_routes import published_site
+from services.api.public_results_reads import coordinate_public_read
 
 
 def _handle_public_results_error(exc: Exception) -> None:
@@ -60,6 +61,7 @@ def install_public_tournament_results_routes(
         return {"club": public_club_payload(club, club_slug), **result}
 
     @app.get("/clubs/{club_slug}/tournament-results")
+    @coordinate_public_read(app, operation="tournament-results", lane="tournaments")
     def tournament_results(
         club_slug: str,
         tournament_id: str = Query(min_length=1, max_length=160),

@@ -211,11 +211,30 @@ global.fetch = async (url, options = {}) => {
       h(Link, { href: `/clubs/alpha/players/${2 * index + 2}` }, "Second partner")))));
   assert.equal(renderedLinks.length, 100);
   assert.ok(renderedLinks.every(link => link.prefetch === false), "Fifty partnership rows do not trigger 100 speculative profile metadata requests");
-  for (const href of ["/clubs/alpha", "/clubs/alpha/players", "/clubs/alpha/players?sort=rank", "/clubs/alpha/leaderboards", "/clubs/alpha/pages/players/12"]) {
+  const resultHrefs = [
+    "/clubs/alpha/leaderboards", "/clubs/alpha/leaderboards?player=12#player-snapshot",
+    "/clubs/alpha/leaderboards/stats/wins", "/clubs/alpha/league-results?league=Open&week=4",
+    "/clubs/alpha/leagues/Open/standings", "/clubs/alpha/leagues/Open/weekly-history",
+    "/clubs/alpha/tournament-results?tournament_id=live",
+    { pathname: "/clubs/beta/league-results", query: { player: 12 } },
+  ];
+  for (const withProvider of [false, true]) {
+    for (const href of resultHrefs) {
+      renderedLinks.length = 0;
+      const clicked = () => {};
+      const link = h(Link, { href, prefetch: true, onClick: clicked }, "Open results");
+      renderToStaticMarkup(withProvider ? h(Provider, { slug: "alpha", settings: initial }, link) : link);
+      assert.equal(renderedLinks.length, 1);
+      assert.equal(renderedLinks[0].prefetch, false, "Result filters load on navigation, not viewport or hover");
+      assert.equal(renderedLinks[0].href, href);
+      assert.equal(renderedLinks[0].onClick, clicked);
+    }
+  }
+  for (const href of ["/clubs/alpha", "/clubs/alpha/players", "/clubs/alpha/players?sort=rank", "/clubs/alpha/pages/players/12"]) {
     for (const prefetch of [undefined, false, true]) {
       renderedLinks.length = 0;
       renderToStaticMarkup(h(Link, { href, prefetch }, "Navigation"));
-      assert.equal(renderedLinks[0].prefetch, prefetch, "Non-profile navigation keeps its existing prefetch policy");
+      assert.equal(renderedLinks[0].prefetch, prefetch, "Other navigation keeps its existing prefetch policy");
       assert.equal(renderedLinks[0].href, href);
     }
   }

@@ -10,13 +10,12 @@ import csv
 import io
 import os
 import re
-import time
-from functools import lru_cache
 
-from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, Response
 
 from jupr_app.domain.player_aliases import load_player_aliases, public_alias_projection
+from jupr_app.data.public_read_cache import PublicReadCache
+from services.api.public_results_reads import PublicResultsReads
 
 
 def public_club_slug(path: str) -> str | None:
@@ -27,8 +26,10 @@ def public_club_slug(path: str) -> str | None:
 
 
 def install_public_alias_middleware(app, *, get_club, get_supabase_client):
-    @lru_cache(maxsize=128)
-    def aliases_for(kind: str, identity: str, bucket: int):
+    aliases_cache = PublicReadCache(ttl=15, capacity=128)
+    aliases_reads = PublicResultsReads(max_active=2)
+
+    def load_aliases(kind: str, identity: str):
         db = get_supabase_client()
         if kind == "club":
             club = get_club(identity)
@@ -50,6 +51,9 @@ def install_public_alias_middleware(app, *, get_club, get_supabase_client):
             aliases.update(load_player_aliases(db, club_id))
         return aliases
 
+    def aliases_for(kind: str, identity: str):
+        return aliases_cache.get((kind, identity), lambda: load_aliases(kind, identity))
+
     @app.middleware("http")
     async def public_aliases(request, call_next):
         response = await call_next(request)
@@ -63,7 +67,7 @@ def install_public_alias_middleware(app, *, get_club, get_supabase_client):
             return response
         try:
             kind, identity = ("club", slug) if slug else season.groups()
-            aliases = await run_in_threadpool(aliases_for, kind, identity, int(time.monotonic() // 15))
+            aliases = await aliases_reads.run((kind, identity), lambda: aliases_for(kind, identity))
             if not aliases:
                 return response
             body = b"".join([chunk async for chunk in response.body_iterator])

@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
+from services.api.public_results_reads import coordinate_public_read
 from jupr_app.observability.request_timing import instrument_supabase_client
 
 from jupr_app.data.load import load_data
@@ -1181,6 +1182,7 @@ install_admin_tournament_team_competition_routes(app, get_supabase_client=get_su
 
 
 @app.get("/clubs/{club_slug}/leaderboards")
+@coordinate_public_read(app, operation="leaderboards")
 def get_club_leaderboard(
     club_slug: str,
     league_name: str | None = Query(default=None),
@@ -1210,6 +1212,7 @@ def get_club_leaderboard(
 
 
 @app.get("/clubs/{club_slug}/leaderboards/public")
+@coordinate_public_read(app, operation="leaderboards")
 def get_club_leaderboard_compat(
     club_slug: str,
     league_name: str | None = Query(default=None),
