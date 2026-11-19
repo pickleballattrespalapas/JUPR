@@ -16,16 +16,25 @@ ROUND_ROBIN_RANKING_POLICY: dict[str, Any] = {
 }
 
 
-def round_robin_ranking_policy() -> dict[str, Any]:
+def round_robin_ranking_policy(tiebreaks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Return a JSON-safe copy of the authoritative round-robin policy."""
 
-    return {
+    policy = {
         "description": str(ROUND_ROBIN_RANKING_POLICY["description"]),
         "criteria": list(ROUND_ROBIN_RANKING_POLICY["criteria"]),
         "retired_teams_eligible": bool(
             ROUND_ROBIN_RANKING_POLICY["retired_teams_eligible"]
         ),
     }
+    if any(audit.get("director_ruling_id") for audit in (tiebreaks or [])):
+        policy["description"] = (
+            "Teams are ranked by wins. A tournament director ruling applies to the four-way 3–4 tie: "
+            "head-to-head does not separate the group, so all four teams are compared on overall "
+            "point differential. Teams still tied use point differential in their games against "
+            "each other. See the tie explanation below. Other ties follow the standard policy."
+        )
+        policy["criteria"].insert(3, "HEAD_TO_HEAD_POINT_DIFFERENTIAL")
+    return policy
 
 
 def _safe_int(value: Any, default: int | None = None) -> int | None:
@@ -173,6 +182,7 @@ def build_round_robin_tiebreak_explanations(
     criterion_labels = {
         "HEAD_TO_HEAD": "Head-to-head",
         "POINT_DIFFERENTIAL": "Point differential",
+        "HEAD_TO_HEAD_POINT_DIFFERENTIAL": "Head-to-head point differential",
         "POINTS_FOR": "Total points scored",
         "TEAM_NUMBER": "Team number",
     }
@@ -282,6 +292,8 @@ def build_round_robin_tiebreak_explanations(
                             f"Head-to-head records: {'; '.join(records)}. "
                             f"{outcome_sentence}"
                         )
+                if raw_step.get("director_ruling"):
+                    detail += f" Tournament director ruling: {raw_step['director_ruling']}"
             else:
                 descending = criterion != "TEAM_NUMBER"
                 value_groups: list[str] = []
@@ -299,7 +311,7 @@ def build_round_robin_tiebreak_explanations(
                         value = _safe_int(
                             (values_by_id.get(team_id) or {}).get("value"), 0
                         ) or 0
-                        if criterion == "POINT_DIFFERENTIAL":
+                        if criterion in {"POINT_DIFFERENTIAL", "HEAD_TO_HEAD_POINT_DIFFERENTIAL"}:
                             display_value = f"{value:+d}"
                         elif criterion == "TEAM_NUMBER":
                             display_value = f"Team {value}"
@@ -311,6 +323,15 @@ def build_round_robin_tiebreak_explanations(
                     f"{criterion_label}: "
                     f"{'; '.join(value_groups)}. {outcome_sentence}"
                 )
+                if criterion == "HEAD_TO_HEAD_POINT_DIFFERENTIAL":
+                    detail = "Among the teams still tied on overall differential. " + detail
+                    score_detail = _head_to_head_score_detail(
+                        groups_before[0] if len(groups_before) == 1 else [],
+                        rr_games,
+                        team_name,
+                    )
+                    if score_detail:
+                        detail += " " + score_detail
             steps.append(
                 {
                     "criterion": criterion,
@@ -362,6 +383,8 @@ def build_round_robin_tiebreak_explanations(
                 f"{criterion_labels[final_criterion].lower()} decided the order: "
                 f"{final_order}."
             )
+        if audit.get("director_ruling_id"):
+            summary = "Tournament director ruling applied. " + summary
         explanations.append(
             {
                 "title": title,

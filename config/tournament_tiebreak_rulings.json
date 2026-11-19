@@ -1,0 +1,18 @@
+[
+  {
+    "id": "baja-classic-2026-mens-doubles-4-four-way",
+    "tournament_id": "563b7922-ae92-41d4-8286-75fe9846e944",
+    "draw_id": "c3651a17-eba2-4c35-8484-763bead55351",
+    "team_ids": [
+      "a5545669-f528-42da-b51a-6d16c210ff16",
+      "e07be8c7-8c0d-41ce-af30-e79be54c7ba4",
+      "411255a7-dee6-47b9-b957-63d227b83f6b",
+      "eb77773e-8a3d-40f8-8939-47017f207eb3"
+    ],
+    "wins": 3,
+    "losses": 4,
+    "authorized_by": "Tournament director Joe Baumann",
+    "authorized_on": "2026-11-19",
+    "reason": "Head-to-head leaves two teams at 2–1 and two at 1–2, without a single leading team. Under the tournament director's ruling, all four teams move together to point differential across all round-robin games; the 2–1 teams do not retain priority. Any teams still tied on overall differential are compared by point differential in their games against each other."
+  }
+]

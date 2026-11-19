@@ -561,7 +561,9 @@ def build_public_tournament_results(
                     if public_pools
                     else bool(rr_games) and len(resolved_rr_games) == len(rr_games)
                 ),
-                "ranking_policy": round_robin_ranking_policy(),
+                "ranking_policy": round_robin_ranking_policy(
+                    None if pool_config else round_robin_result.get("tiebreaks")
+                ),
                 "tiebreak_explanations": tiebreak_explanations,
                 # Keep the completed-score feed and bracket mutually exclusive:
                 # playoff rows belong in the bracket (including upcoming games),

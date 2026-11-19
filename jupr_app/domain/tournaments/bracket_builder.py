@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .tiebreak_rulings import find_tiebreak_ruling
+
 # Tournament setup permits divisions as large as 16 teams.  Keep one shared
 # executable contract so setup, the operator readiness model, and game
 # generation cannot disagree about a valid draw size.  Preserve the existing
@@ -563,6 +565,14 @@ def _resolve_wins_tie(
         )
     )
     head_to_head_complete = not missing_head_to_head_pairs
+    ruling = find_tiebreak_ruling(initial, games)
+    # This recorded ruling concerns the 2–1/2–1/1–2/1–2 tie only.
+    # Recompute from saved scores; never force a team order or alter results.
+    if not head_to_head_complete or sorted(
+        record["wins"] for record in head_to_head.values()
+    ) != [1, 1, 2, 2]:
+        ruling = None
+    remaining_head_to_head_differential: dict[str, int] = {}
     value_by_criterion = {
         "HEAD_TO_HEAD": lambda standing: (
             head_to_head[standing.team_id]["wins"]
@@ -570,12 +580,14 @@ def _resolve_wins_tie(
             else 0
         ),
         "POINT_DIFFERENTIAL": lambda standing: standing.differential,
+        "HEAD_TO_HEAD_POINT_DIFFERENTIAL": lambda standing: remaining_head_to_head_differential[standing.team_id],
         "POINTS_FOR": lambda standing: standing.points_for,
         "TEAM_NUMBER": lambda standing: standing.team_number,
     }
     descending_by_criterion = {
         "HEAD_TO_HEAD": True,
         "POINT_DIFFERENTIAL": True,
+        "HEAD_TO_HEAD_POINT_DIFFERENTIAL": True,
         "POINTS_FOR": True,
         "TEAM_NUMBER": False,
     }
@@ -585,6 +597,7 @@ def _resolve_wins_tie(
     for criterion in (
         "HEAD_TO_HEAD",
         "POINT_DIFFERENTIAL",
+        *(("HEAD_TO_HEAD_POINT_DIFFERENTIAL",) if ruling else ()),
         "POINTS_FOR",
         "TEAM_NUMBER",
     ):
@@ -598,11 +611,22 @@ def _resolve_wins_tie(
             if len(partition) == 1:
                 next_partitions.append(partition)
                 continue
+            if criterion == "HEAD_TO_HEAD_POINT_DIFFERENTIAL":
+                ids = [standing.team_id for standing in partition]
+                _, matchups, _ = _head_to_head_evidence(ids, games)
+                remaining_head_to_head_differential.update({team_id: 0 for team_id in ids})
+                for matchup in matchups:
+                    difference = matchup["score_a"] - matchup["score_b"]
+                    remaining_head_to_head_differential[matchup["team_a_id"]] += difference
+                    remaining_head_to_head_differential[matchup["team_b_id"]] -= difference
             refined = _partition_standings(
                 partition,
                 value=value_by_criterion[criterion],
                 descending=descending_by_criterion[criterion],
             )
+            if criterion == "HEAD_TO_HEAD" and ruling:
+                # Do not retain the two head-to-head tiers for this ruling.
+                refined = [partition]
             next_partitions.extend(refined)
             refined_groups.extend(refined)
 
@@ -651,6 +675,8 @@ def _resolve_wins_tie(
                     "missing_pairs": missing_head_to_head_pairs,
                 }
             )
+            if ruling:
+                step["director_ruling"] = ruling["reason"]
         steps.append(step)
         partitions = next_partitions
 
@@ -660,6 +686,7 @@ def _resolve_wins_tie(
         "team_ids": [standing.team_id for standing in initial],
         "final_team_ids": [standing.team_id for standing in ordered],
         "steps": steps,
+        **({"director_ruling_id": ruling["id"]} if ruling else {}),
     }
 
 

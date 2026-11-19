@@ -1820,7 +1820,7 @@ def build_admin_tournament_day_live_snapshot(
                 standings_summary,
                 rr_games,
             ),
-            "ranking_policy": round_robin_ranking_policy(),
+            "ranking_policy": round_robin_ranking_policy(round_robin_result.get("tiebreaks")),
         }
         playoff_review = {
             "configured_advance_count": pool_advance_count,

@@ -619,6 +619,7 @@ function tiebreakCriterionLabel(criterion: string): string {
     WINS: "Wins",
     HEAD_TO_HEAD: "Head-to-head",
     POINT_DIFFERENTIAL: "Point differential",
+    HEAD_TO_HEAD_POINT_DIFFERENTIAL: "Head-to-head point differential",
     POINTS_FOR: "Total points scored",
     TEAM_NUMBER: "Original team number"
   };
