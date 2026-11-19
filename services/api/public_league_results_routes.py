@@ -6,6 +6,7 @@ from fastapi import Query
 from supabase import Client
 
 from jupr_app.services.public_league_results_service import build_public_league_results
+from services.api.public_results_reads import coordinate_public_read
 
 
 def install_public_league_results_routes(
@@ -18,6 +19,7 @@ def install_public_league_results_routes(
     """Register public League Results routes on the main FastAPI app."""
 
     @app.get("/clubs/{club_slug}/league-results")
+    @coordinate_public_read(app, operation="league-results")
     def get_club_league_results(
         club_slug: str,
         league_name: str | None = Query(default=None),
