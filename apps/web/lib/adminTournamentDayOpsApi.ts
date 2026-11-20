@@ -250,6 +250,7 @@ export type AdminTournamentDayPoolStanding = {
 export type AdminTournamentDayDraw = {
   pool_config?: TournamentDrawPoolConfiguration | null;
   pool_standings?: AdminTournamentDayPoolStanding[];
+  team_rows?: { id: string; team_number?: number | null; seed?: number | null }[];
   id: string;
   name: string;
   state: string;

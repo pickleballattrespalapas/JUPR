@@ -6,7 +6,7 @@ const ts = require('typescript');
 function load(file) {
   const module = {exports:{}};
   const code = ts.transpileModule(fs.readFileSync(file,'utf8'), {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,esModuleInterop:true}}).outputText;
-  new Function('require','module','exports',code)(require,module,module.exports);
+  new Function('require','module','exports',code)(require('node:module').createRequire(file),module,module.exports);
   return module.exports;
 }
 const {buildTournamentPrintPdf,tournamentPrintDraws,tournamentPrintPools,tournamentPrintMatches,tournamentCardPages,tournamentTallyPages,printScoring,printSource} = load(path.join(__dirname,'../lib/tournamentPrintPacket.ts'));
@@ -156,6 +156,7 @@ function poolFixture(sizes) {
       const members=new Set(snapshot.draws[0].pool_config.pools[index].team_ids);
       assert.ok(pool.rounds.every(round=>round.byes.length===sizes[index]%2),'byes belong to their own pool only');
       assert.ok(pool.teams.every(team=>members.has(team.id)));
+      assert.deepEqual(pool.teams.map(team=>team.number),Array.from({length:sizes[index]},(_,i)=>i+1),'each pool restarts at Team 1');
       assert.deepEqual(pool.games,snapshot.games.filter(game=>game.pool_id===snapshot.draws[0].pool_config.pools[index].id),'pool charts preserve saved global slot order');
     }
     const admin=await buildTournamentPrintPdf(snapshot,{drawIds:ids},'admin');
@@ -167,6 +168,27 @@ function poolFixture(sizes) {
     const withFinal=await buildTournamentPrintPdf({...snapshot,games:[...snapshot.games,sharedFinal]},{drawIds:ids},'admin');
     assert.equal(withFinal.pdf.getNumberOfPages(),sizes.length+1,'the shared division playoff worksheet appears only once');
   }
+  const numbered=poolFixture([6,5]),numberedDraw=numbered.draws[0];
+  const initialSeeds=[11,9,7,5,3,1,10,8,6,4,2];
+  numberedDraw.team_rows=numberedDraw.round_robin_summary.standings.map((s,i)=>({id:s.team_id,team_number:s.team_number,seed:initialSeeds[i]}));
+  // Standing.seed is the current place, not the saved initial skill seed.
+  numberedDraw.round_robin_summary.standings.forEach((s,i)=>{s.seed=11-i;});
+  const numberedBefore=JSON.stringify(numbered);
+  const numberedModel=tournamentPrintDraws(numbered,[numberedDraw.id])[0];
+  const numberedPools=tournamentPrintPools(numberedModel);
+  assert.deepEqual(numberedPools.map(pool=>pool.teams.map(team=>team.pool.seed)),[[1,3,5,7,9,11],[2,4,6,8,10]]);
+  assert.deepEqual(numberedPools.map(pool=>pool.teams.map(team=>team.id)),numberedDraw.pool_config.pools.map(pool=>[...pool.team_ids].reverse()),'pool labels follow initial skill seeds instead of registration order');
+  const numberedText=contents((await buildTournamentPrintPdf(numbered,{drawIds:[numberedDraw.id]},'admin')).pdf);
+  assert.ok(numberedText.includes('Overall seed 1') && numberedText.includes('Overall seed 10'));
+  assert.ok(numberedText.includes('Pool place'));
+  assert.ok(!numberedText.includes('Team 7') && !numberedText.includes('Team 11'),'pool tally columns never show the old draw-wide numbers');
+  assert.equal(JSON.stringify(numbered),numberedBefore,'labels do not rewrite saved IDs, team numbers, schedules, seeds or scores');
+  numberedDraw.round_robin_summary.standings.reverse().forEach((s,i)=>{s.seed=i+1;s.wins=i;});
+  assert.deepEqual(tournamentPrintPools(tournamentPrintDraws(numbered,[numberedDraw.id])[0]).map(pool=>pool.teams.map(team=>[team.id,team.number])),numberedPools.map(pool=>pool.teams.map(team=>[team.id,team.number])),'labels stay fixed when results change standings order');
+  const finalistSide=team=>({team_id:team.id,name:team.name,participant_names:team.name.split(' / ')});
+  const numberedFinal={...numbered.games[0],id:'numbered-final',stage:'PLAYOFF',pool_id:null,pool_name:null,round_label:'Final',playoff_round:'FINAL',playoff_game_code:'P1',team_a:finalistSide(numberedPools[0].teams[0]),team_b:finalistSide(numberedPools[1].teams[0])};
+  const numberedFinalText=contents((await buildTournamentPrintPdf({...numbered,games:[...numbered.games,numberedFinal]},{drawIds:[numberedDraw.id]},'admin')).pdf);
+  assert.ok(numberedFinalText.includes('Pool A / Team 1') && numberedFinalText.includes('Pool B / Team 1'),'shared playoff worksheets qualify duplicate local numbers with their pool');
   const invalidPool=poolFixture([3,3]);
   invalidPool.games[0].team_b=invalidPool.games.at(-1).team_b;
   await assert.rejects(buildTournamentPrintPdf(invalidPool,{drawIds:[invalidPool.draws[0].id]},'cards'),/does not belong to one pool/);

@@ -8,6 +8,25 @@ const ts = require('typescript');
 const helpers = require('../lib/tournamentDrawPools.mjs');
 const { validatePlayoffReviewConfiguration } = require('../lib/tournamentDayWorkspaceState.mjs');
 const teams = count => Array.from({ length: count }, (_, i) => ({ id: `team-${i + 1}`, team_number: i + 1, seed: i + 1, label: `Player ${i + 1} / Partner ${i + 1}` }));
+const mixedSeeds=[4,8,2,7,11,1,3,5,9,10,6];
+const mixedRoster=teams(11).map((team,i)=>({...team,seed:mixedSeeds[i]}));
+const mixedPools={version:1,pools:[
+  {id:'A',name:'Pool 1',team_ids:['team-4','team-5','team-6','team-7','team-8','team-9'],advance_count:6},
+  {id:'B',name:'Pool 2',team_ids:['team-1','team-2','team-3','team-10','team-11'],advance_count:5},
+]};
+const original=JSON.stringify({mixedRoster,mixedPools});
+const labels=helpers.poolTeamLabels(mixedPools,mixedRoster);
+assert.deepEqual([...labels.entries()].map(([id,label])=>[id,label.poolName,label.number,label.seed]),[
+  ['team-6','Pool 1',1,1],['team-7','Pool 1',2,3],['team-8','Pool 1',3,5],['team-4','Pool 1',4,7],['team-9','Pool 1',5,9],['team-5','Pool 1',6,11],
+  ['team-3','Pool 2',1,2],['team-1','Pool 2',2,4],['team-11','Pool 2',3,6],['team-2','Pool 2',4,8],['team-10','Pool 2',5,10],
+]);
+assert.deepEqual(helpers.poolTeamLabels(mixedPools,[...mixedRoster].reverse()),labels,'API roster ordering cannot change pool numbers');
+assert.equal(JSON.stringify({mixedRoster,mixedPools}),original);
+assert.equal(helpers.poolTeamLabels(null,mixedRoster).size,0,'unsplit draws keep existing numbers');
+const unseeded=helpers.poolTeamLabels(mixedPools);
+assert.equal(unseeded.get('team-4').number,1,'old snapshots use saved pool order, never a live standings rank');
+assert.equal(unseeded.get('team-1').number,1);
+assert.equal(unseeded.get('team-1').seed,null);
 for (const [count, sizes, matches] of [[8, [4, 4], 12], [6, [3, 3], 6], [7, [3, 4], 9]]) {
   const config = helpers.seededPoolConfiguration(teams(count));
   assert.deepEqual(config.pools.map(p => p.team_ids.length).sort(), sizes);
@@ -87,6 +106,12 @@ async function main() {
   assert.match(text(renderer.root), /Pool assignments are locked/);
   assert.equal(renderer.root.findAllByType('select').every(node => node.props.disabled), true);
   assert.equal(button('Remove pool split').props.disabled, true);
+  await act(async () => renderer.update(React.createElement(loaded.exports.default, {...props,key:'numbered',teams:mixedRoster,savedConfiguration:mixedPools,hasGames:true})));
+  const assignmentRows=renderer.root.findByType('tbody').findAllByType('tr');
+  assert.deepEqual(assignmentRows.map(row=>text(row.findByType('th'))),['Team 1','Team 2','Team 3','Team 4','Team 5','Team 6','Team 1','Team 2','Team 3','Team 4','Team 5']);
+  assert.match(text(assignmentRows[0]),/Player 6 \/ Partner 6/);
+  assert.match(text(assignmentRows[6]),/Player 3 \/ Partner 3/);
+  assert.match(text(renderer.root),/Overall seed/);
   await act(async () => renderer.unmount());
   console.log('tournament draw pool editor and playoff override contract: ok');
 }
