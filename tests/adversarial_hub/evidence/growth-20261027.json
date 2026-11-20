@@ -1,0 +1,2068 @@
+{
+  "tested_on": "2026-10-27",
+  "production_commit": "b17c0003d01e591c31dfc65249764af0729a9858",
+  "synthetic_data_only": true,
+  "initial_players": {
+    "A": 4,
+    "B": 6
+  },
+  "final_players_per_group": 25,
+  "seed": 7,
+  "controls": {
+    "existing_generator_tests_passed": 90,
+    "new_regression_tests_failed": 3
+  },
+  "total_commands": 2377,
+  "total_scored_games": 977,
+  "total_protected_match_checks": 211496,
+  "total_queue_priority_checks": 890,
+  "scenarios": [
+    {
+      "scenario": "burst",
+      "shared_courts": 10,
+      "commands": 497,
+      "simulated_minutes": 213.63,
+      "runtime_seconds": 270.76,
+      "protected_match_checks": 47168,
+      "queue_priority_checks": 187,
+      "groups": {
+        "A": {
+          "started_with": 4,
+          "final_roster": 25,
+          "completed_rounds": 17,
+          "scored_games": 105,
+          "max_consecutive_byes": 17,
+          "players_with_repeated_byes": 1,
+          "first_repeated_byes": [
+            {
+              "name": "A Player 25",
+              "rounds": [
+                1,
+                2
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "A Player 1",
+              "id": "p-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 4",
+              "id": "p-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 5",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "A Player 6",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "A Player 7",
+              "id": "p-new-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "A Player 8",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 9",
+              "id": "p-new-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "A Player 10",
+              "id": "p-new-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "A Player 11",
+              "id": "p-new-7",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "A Player 12",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 13",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "A Player 14",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "A Player 15",
+              "id": "p-new-11",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "A Player 16",
+              "id": "p-new-12",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 17",
+              "id": "p-new-13",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "A Player 18",
+              "id": "p-new-14",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "A Player 19",
+              "id": "p-new-15",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "A Player 20",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 21",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.19
+            },
+            {
+              "name": "A Player 22",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.18
+            },
+            {
+              "name": "A Player 23",
+              "id": "p-new-19",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.17
+            },
+            {
+              "name": "A Player 24",
+              "id": "p-new-20",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.16
+            },
+            {
+              "name": "A Player 25",
+              "id": "p-new-21",
+              "byes": 17,
+              "max_consecutive_byes": 17,
+              "first_game_wait_minutes": 212.43
+            }
+          ]
+        },
+        "B": {
+          "started_with": 6,
+          "final_roster": 25,
+          "completed_rounds": 17,
+          "scored_games": 102,
+          "max_consecutive_byes": 16,
+          "players_with_repeated_byes": 1,
+          "first_repeated_byes": [
+            {
+              "name": "B Player 25",
+              "rounds": [
+                1,
+                2
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "B Player 1",
+              "id": "p-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 4",
+              "id": "p-4",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 5",
+              "id": "p-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 1.01
+            },
+            {
+              "name": "B Player 6",
+              "id": "p-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 1.01
+            },
+            {
+              "name": "B Player 7",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "B Player 8",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 9",
+              "id": "p-new-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "B Player 10",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "B Player 11",
+              "id": "p-new-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "B Player 12",
+              "id": "p-new-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 13",
+              "id": "p-new-7",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "B Player 14",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "B Player 15",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "B Player 16",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 17",
+              "id": "p-new-11",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "B Player 18",
+              "id": "p-new-12",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "B Player 19",
+              "id": "p-new-13",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "B Player 20",
+              "id": "p-new-14",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 21",
+              "id": "p-new-15",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.77
+            },
+            {
+              "name": "B Player 22",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.76
+            },
+            {
+              "name": "B Player 23",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.75
+            },
+            {
+              "name": "B Player 24",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.74
+            },
+            {
+              "name": "B Player 25",
+              "id": "p-new-19",
+              "byes": 16,
+              "max_consecutive_byes": 16,
+              "first_game_wait_minutes": 193.01
+            }
+          ]
+        }
+      },
+      "passed_bye_fairness": false
+    },
+    {
+      "scenario": "gradual",
+      "shared_courts": 10,
+      "commands": 485,
+      "simulated_minutes": 223.88,
+      "runtime_seconds": 214.77,
+      "protected_match_checks": 45052,
+      "queue_priority_checks": 173,
+      "groups": {
+        "A": {
+          "started_with": 4,
+          "final_roster": 25,
+          "completed_rounds": 17,
+          "scored_games": 101,
+          "max_consecutive_byes": 15,
+          "players_with_repeated_byes": 1,
+          "first_repeated_byes": [
+            {
+              "name": "A Player 25",
+              "rounds": [
+                3,
+                4
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "A Player 1",
+              "id": "p-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 4",
+              "id": "p-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 5",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "A Player 6",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "A Player 7",
+              "id": "p-new-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "A Player 8",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "A Player 9",
+              "id": "p-new-5",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "A Player 10",
+              "id": "p-new-6",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "A Player 11",
+              "id": "p-new-7",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "A Player 12",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "A Player 13",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "A Player 14",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "A Player 15",
+              "id": "p-new-11",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "A Player 16",
+              "id": "p-new-12",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "A Player 17",
+              "id": "p-new-13",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "A Player 18",
+              "id": "p-new-14",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "A Player 19",
+              "id": "p-new-15",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "A Player 20",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "A Player 21",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 8.49
+            },
+            {
+              "name": "A Player 22",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.49
+            },
+            {
+              "name": "A Player 23",
+              "id": "p-new-19",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4.49
+            },
+            {
+              "name": "A Player 24",
+              "id": "p-new-20",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2.49
+            },
+            {
+              "name": "A Player 25",
+              "id": "p-new-21",
+              "byes": 15,
+              "max_consecutive_byes": 15,
+              "first_game_wait_minutes": 181.88
+            }
+          ]
+        },
+        "B": {
+          "started_with": 6,
+          "final_roster": 25,
+          "completed_rounds": 17,
+          "scored_games": 100,
+          "max_consecutive_byes": 15,
+          "players_with_repeated_byes": 1,
+          "first_repeated_byes": [
+            {
+              "name": "B Player 25",
+              "rounds": [
+                2,
+                3
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "B Player 1",
+              "id": "p-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 4",
+              "id": "p-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 5",
+              "id": "p-5",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 6",
+              "id": "p-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 7",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "B Player 8",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "B Player 9",
+              "id": "p-new-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "B Player 10",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 11",
+              "id": "p-new-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "B Player 12",
+              "id": "p-new-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "B Player 13",
+              "id": "p-new-7",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "B Player 14",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 15",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "B Player 16",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "B Player 17",
+              "id": "p-new-11",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "B Player 18",
+              "id": "p-new-12",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 19",
+              "id": "p-new-13",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "B Player 20",
+              "id": "p-new-14",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "B Player 21",
+              "id": "p-new-15",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.38
+            },
+            {
+              "name": "B Player 22",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 5.38
+            },
+            {
+              "name": "B Player 23",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 3.38
+            },
+            {
+              "name": "B Player 24",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 1.38
+            },
+            {
+              "name": "B Player 25",
+              "id": "p-new-19",
+              "byes": 15,
+              "max_consecutive_byes": 15,
+              "first_game_wait_minutes": 166.73
+            }
+          ]
+        }
+      },
+      "passed_bye_fairness": false
+    },
+    {
+      "scenario": "single_preview",
+      "shared_courts": 10,
+      "commands": 455,
+      "simulated_minutes": 193.38,
+      "runtime_seconds": 257.61,
+      "protected_match_checks": 38498,
+      "queue_priority_checks": 163,
+      "groups": {
+        "A": {
+          "started_with": 4,
+          "final_roster": 25,
+          "completed_rounds": 16,
+          "scored_games": 96,
+          "max_consecutive_byes": 16,
+          "players_with_repeated_byes": 1,
+          "first_repeated_byes": [
+            {
+              "name": "A Player 25",
+              "rounds": [
+                1,
+                2
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "A Player 1",
+              "id": "p-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 4",
+              "id": "p-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 5",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "A Player 6",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "A Player 7",
+              "id": "p-new-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "A Player 8",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 9",
+              "id": "p-new-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "A Player 10",
+              "id": "p-new-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "A Player 11",
+              "id": "p-new-7",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "A Player 12",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 13",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "A Player 14",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "A Player 15",
+              "id": "p-new-11",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "A Player 16",
+              "id": "p-new-12",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 17",
+              "id": "p-new-13",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "A Player 18",
+              "id": "p-new-14",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "A Player 19",
+              "id": "p-new-15",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "A Player 20",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 21",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.19
+            },
+            {
+              "name": "A Player 22",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.18
+            },
+            {
+              "name": "A Player 23",
+              "id": "p-new-19",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.17
+            },
+            {
+              "name": "A Player 24",
+              "id": "p-new-20",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.16
+            },
+            {
+              "name": "A Player 25",
+              "id": "p-new-21",
+              "byes": 16,
+              "max_consecutive_byes": 16,
+              "first_game_wait_minutes": 192.18
+            }
+          ]
+        },
+        "B": {
+          "started_with": 6,
+          "final_roster": 25,
+          "completed_rounds": 15,
+          "scored_games": 90,
+          "max_consecutive_byes": 15,
+          "players_with_repeated_byes": 1,
+          "first_repeated_byes": [
+            {
+              "name": "B Player 25",
+              "rounds": [
+                1,
+                2
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "B Player 1",
+              "id": "p-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 4",
+              "id": "p-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 5",
+              "id": "p-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 1.01
+            },
+            {
+              "name": "B Player 6",
+              "id": "p-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 1.01
+            },
+            {
+              "name": "B Player 7",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "B Player 8",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 9",
+              "id": "p-new-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "B Player 10",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "B Player 11",
+              "id": "p-new-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "B Player 12",
+              "id": "p-new-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 13",
+              "id": "p-new-7",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "B Player 14",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "B Player 15",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "B Player 16",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 17",
+              "id": "p-new-11",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.03
+            },
+            {
+              "name": "B Player 18",
+              "id": "p-new-12",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.02
+            },
+            {
+              "name": "B Player 19",
+              "id": "p-new-13",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.01
+            },
+            {
+              "name": "B Player 20",
+              "id": "p-new-14",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 21",
+              "id": "p-new-15",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.77
+            },
+            {
+              "name": "B Player 22",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.76
+            },
+            {
+              "name": "B Player 23",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.75
+            },
+            {
+              "name": "B Player 24",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.74
+            },
+            {
+              "name": "B Player 25",
+              "id": "p-new-19",
+              "byes": 15,
+              "max_consecutive_byes": 15,
+              "first_game_wait_minutes": 182.0
+            }
+          ]
+        }
+      },
+      "passed_bye_fairness": false
+    },
+    {
+      "scenario": "limited_courts",
+      "shared_courts": 4,
+      "commands": 511,
+      "simulated_minutes": 725.55,
+      "runtime_seconds": 229.81,
+      "protected_match_checks": 47936,
+      "queue_priority_checks": 216,
+      "groups": {
+        "A": {
+          "started_with": 4,
+          "final_roster": 25,
+          "completed_rounds": 20,
+          "scored_games": 120,
+          "max_consecutive_byes": 17,
+          "players_with_repeated_byes": 1,
+          "first_repeated_byes": [
+            {
+              "name": "A Player 25",
+              "rounds": [
+                2,
+                3
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "A Player 1",
+              "id": "p-1",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 4",
+              "id": "p-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 5",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "A Player 6",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "A Player 7",
+              "id": "p-new-3",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "A Player 8",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "A Player 9",
+              "id": "p-new-5",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 9.16
+            },
+            {
+              "name": "A Player 10",
+              "id": "p-new-6",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 7.16
+            },
+            {
+              "name": "A Player 11",
+              "id": "p-new-7",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 5.16
+            },
+            {
+              "name": "A Player 12",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 3.16
+            },
+            {
+              "name": "A Player 13",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 12.78
+            },
+            {
+              "name": "A Player 14",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 10.78
+            },
+            {
+              "name": "A Player 15",
+              "id": "p-new-11",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 8.78
+            },
+            {
+              "name": "A Player 16",
+              "id": "p-new-12",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.78
+            },
+            {
+              "name": "A Player 17",
+              "id": "p-new-13",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 16.56
+            },
+            {
+              "name": "A Player 18",
+              "id": "p-new-14",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 14.56
+            },
+            {
+              "name": "A Player 19",
+              "id": "p-new-15",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 12.56
+            },
+            {
+              "name": "A Player 20",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 10.56
+            },
+            {
+              "name": "A Player 21",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 22.1
+            },
+            {
+              "name": "A Player 22",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 20.1
+            },
+            {
+              "name": "A Player 23",
+              "id": "p-new-19",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 18.1
+            },
+            {
+              "name": "A Player 24",
+              "id": "p-new-20",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 16.1
+            },
+            {
+              "name": "A Player 25",
+              "id": "p-new-21",
+              "byes": 17,
+              "max_consecutive_byes": 17,
+              "first_game_wait_minutes": 576.46
+            }
+          ]
+        },
+        "B": {
+          "started_with": 6,
+          "final_roster": 25,
+          "completed_rounds": 15,
+          "scored_games": 94,
+          "max_consecutive_byes": 15,
+          "players_with_repeated_byes": 1,
+          "first_repeated_byes": [
+            {
+              "name": "B Player 25",
+              "rounds": [
+                1,
+                2
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "B Player 1",
+              "id": "p-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 4",
+              "id": "p-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 5",
+              "id": "p-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 6",
+              "id": "p-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 7",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "B Player 8",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "B Player 9",
+              "id": "p-new-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 8.23
+            },
+            {
+              "name": "B Player 10",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.23
+            },
+            {
+              "name": "B Player 11",
+              "id": "p-new-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4.23
+            },
+            {
+              "name": "B Player 12",
+              "id": "p-new-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2.23
+            },
+            {
+              "name": "B Player 13",
+              "id": "p-new-7",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 8.78
+            },
+            {
+              "name": "B Player 14",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.78
+            },
+            {
+              "name": "B Player 15",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4.78
+            },
+            {
+              "name": "B Player 16",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2.78
+            },
+            {
+              "name": "B Player 17",
+              "id": "p-new-11",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 16.32
+            },
+            {
+              "name": "B Player 18",
+              "id": "p-new-12",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 14.32
+            },
+            {
+              "name": "B Player 19",
+              "id": "p-new-13",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 12.32
+            },
+            {
+              "name": "B Player 20",
+              "id": "p-new-14",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 10.32
+            },
+            {
+              "name": "B Player 21",
+              "id": "p-new-15",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 18.66
+            },
+            {
+              "name": "B Player 22",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 16.66
+            },
+            {
+              "name": "B Player 23",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 14.66
+            },
+            {
+              "name": "B Player 24",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 12.66
+            },
+            {
+              "name": "B Player 25",
+              "id": "p-new-19",
+              "byes": 15,
+              "max_consecutive_byes": 15,
+              "first_game_wait_minutes": 687.55
+            }
+          ]
+        }
+      },
+      "passed_bye_fairness": false
+    },
+    {
+      "scenario": "pause_return",
+      "shared_courts": 10,
+      "commands": 429,
+      "simulated_minutes": 244.77,
+      "runtime_seconds": 169.98,
+      "protected_match_checks": 32842,
+      "queue_priority_checks": 151,
+      "groups": {
+        "A": {
+          "started_with": 4,
+          "final_roster": 25,
+          "completed_rounds": 18,
+          "scored_games": 106,
+          "max_consecutive_byes": 11,
+          "players_with_repeated_byes": 1,
+          "first_repeated_byes": [
+            {
+              "name": "A Player 25",
+              "rounds": [
+                2,
+                3
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            },
+            {
+              "name": "A Player 25",
+              "rounds": [
+                8,
+                9
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "A Player 1",
+              "id": "p-1",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 4",
+              "id": "p-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "A Player 5",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "A Player 6",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "A Player 7",
+              "id": "p-new-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "A Player 8",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "A Player 9",
+              "id": "p-new-5",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "A Player 10",
+              "id": "p-new-6",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "A Player 11",
+              "id": "p-new-7",
+              "byes": 1,
+              "max_consecutive_byes": 1,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "A Player 12",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "A Player 13",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "A Player 14",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "A Player 15",
+              "id": "p-new-11",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "A Player 16",
+              "id": "p-new-12",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "A Player 17",
+              "id": "p-new-13",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "A Player 18",
+              "id": "p-new-14",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "A Player 19",
+              "id": "p-new-15",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "A Player 20",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "A Player 21",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6.66
+            },
+            {
+              "name": "A Player 22",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4.66
+            },
+            {
+              "name": "A Player 23",
+              "id": "p-new-19",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2.66
+            },
+            {
+              "name": "A Player 24",
+              "id": "p-new-20",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.66
+            },
+            {
+              "name": "A Player 25",
+              "id": "p-new-21",
+              "byes": 16,
+              "max_consecutive_byes": 11,
+              "first_game_wait_minutes": 30.14
+            }
+          ]
+        },
+        "B": {
+          "started_with": 6,
+          "final_roster": 25,
+          "completed_rounds": 10,
+          "scored_games": 63,
+          "max_consecutive_byes": 5,
+          "players_with_repeated_byes": 2,
+          "first_repeated_byes": [
+            {
+              "name": "B Player 25",
+              "rounds": [
+                1,
+                2
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            },
+            {
+              "name": "B Player 1",
+              "rounds": [
+                4,
+                5
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            },
+            {
+              "name": "B Player 25",
+              "rounds": [
+                6,
+                7
+              ],
+              "roster_count": 25,
+              "bye_count": 1
+            }
+          ],
+          "players": [
+            {
+              "name": "B Player 1",
+              "id": "p-1",
+              "byes": 2,
+              "max_consecutive_byes": 2,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 2",
+              "id": "p-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 3",
+              "id": "p-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 4",
+              "id": "p-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0.0
+            },
+            {
+              "name": "B Player 5",
+              "id": "p-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 6",
+              "id": "p-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 7",
+              "id": "p-new-1",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "B Player 8",
+              "id": "p-new-2",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "B Player 9",
+              "id": "p-new-3",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "B Player 10",
+              "id": "p-new-4",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 11",
+              "id": "p-new-5",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "B Player 12",
+              "id": "p-new-6",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "B Player 13",
+              "id": "p-new-7",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "B Player 14",
+              "id": "p-new-8",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 15",
+              "id": "p-new-9",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "B Player 16",
+              "id": "p-new-10",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "B Player 17",
+              "id": "p-new-11",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 6
+            },
+            {
+              "name": "B Player 18",
+              "id": "p-new-12",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 4
+            },
+            {
+              "name": "B Player 19",
+              "id": "p-new-13",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 2
+            },
+            {
+              "name": "B Player 20",
+              "id": "p-new-14",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 0
+            },
+            {
+              "name": "B Player 21",
+              "id": "p-new-15",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 7.21
+            },
+            {
+              "name": "B Player 22",
+              "id": "p-new-16",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 5.21
+            },
+            {
+              "name": "B Player 23",
+              "id": "p-new-17",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 3.21
+            },
+            {
+              "name": "B Player 24",
+              "id": "p-new-18",
+              "byes": 0,
+              "max_consecutive_byes": 0,
+              "first_game_wait_minutes": 1.21
+            },
+            {
+              "name": "B Player 25",
+              "id": "p-new-19",
+              "byes": 8,
+              "max_consecutive_byes": 5,
+              "first_game_wait_minutes": 19.31
+            }
+          ]
+        }
+      },
+      "passed_bye_fairness": false
+    }
+  ]
+}
