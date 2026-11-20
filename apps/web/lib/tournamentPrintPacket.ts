@@ -1,4 +1,5 @@
 import type { jsPDF } from "jspdf";
+import { poolTeamLabels, type PoolTeamLabel } from "./tournamentDrawPools.mjs";
 import type {
   AdminTournamentDayDraw as Draw,
   AdminTournamentDayGame as Game,
@@ -15,7 +16,7 @@ export type TournamentPrintOptions = {
   blankCards?: number;
   cardLayout?: "cut-stack" | "consecutive";
 };
-export type PrintTeam = { id: string; number: number; name: string; standing?: Standing };
+export type PrintTeam = { id: string; number: number; name: string; standing?: Standing; pool?: PoolTeamLabel };
 export type PrintRound = { key: string; label: string; games: Game[]; byes: PrintTeam[] };
 export type PrintDraw = { draw: Draw; teams: PrintTeam[]; games: Game[]; rounds: PrintRound[]; playoffs: Game[] };
 export type PrintMatch = { game: Game | null; model?: PrintDraw };
@@ -105,15 +106,17 @@ export function tournamentPrintDraws(snapshot: Snapshot, drawIds: string[]): Pri
   return snapshot.draws.filter(draw => requested.has(draw.id)).map(draw => {
     const games = snapshot.games.filter(game => game.draw_id === draw.id);
     const standings = draw.round_robin_summary?.standings || [];
+    const poolLabels = poolTeamLabels(draw.pool_config, draw.team_rows);
     const teams: PrintTeam[] = standings.map(s => ({
       id: s.team_id, number: s.team_number || 0,
       name: s.participant_names.filter(Boolean).join(" / ") || s.team_name,
       standing: s,
+      pool: poolLabels.get(s.team_id),
     }));
     // Retain named teams even if older snapshot versions omit standings.
     for (const game of games) for (const side of [game.team_a, game.team_b]) {
       if (side.team_id && !teams.some(team => team.id === side.team_id)) {
-        teams.push({ id: side.team_id, number: 0, name: printSideName(side) });
+        teams.push({ id: side.team_id, number: 0, name: printSideName(side), pool: poolLabels.get(side.team_id) });
       }
     }
     const used = new Set(teams.map(team => team.number).filter(Boolean));
@@ -161,7 +164,9 @@ export function tournamentPrintPools(model: PrintDraw): PrintDraw[] {
     }
   }
   return pools.map(pool=>{
-    const teams=model.teams.filter(team=>memberships.get(team.id)===pool.id);
+    const teams=model.teams.filter(team=>memberships.get(team.id)===pool.id)
+      .map(team=>({...team,number:team.pool?.number ?? pool.team_ids.indexOf(team.id)+1}))
+      .sort((a,b)=>a.number-b.number);
     const rounds=model.rounds.map(round=>{
       const games=round.games.filter(game=>memberships.get(game.team_a.team_id || "")===pool.id);
       const playing=new Set(games.flatMap(game=>[game.team_a.team_id,game.team_b.team_id]));
@@ -244,7 +249,8 @@ export function tournamentTallyPages(model: PrintDraw): PrintTallyPage[] {
 function sideText(game: Game, side: "a" | "b", model?: PrintDraw): string {
   const value = game[`team_${side}`];
   const team = model?.teams.find(candidate => candidate.id === value.team_id);
-  if (value.team_id) return `${team ? `Team ${team.number} - ` : ""}${printSideName(value)}`;
+  const label = team?.pool ? `${team.pool.poolName} / Team ${team.pool.number}` : team ? `Team ${team.number}` : "";
+  if (value.team_id) return `${label ? `${label} - ` : ""}${printSideName(value)}`;
   return `${printSource(game[`team_${side}_source`]) || "To be determined"}\n________________________________`;
 }
 
@@ -379,7 +385,8 @@ function tally(paper: Paper, model: PrintDraw) {
     for (const [ti,team] of teamChunk.entries()) {
       const tx=x+scheduleW+ti*teamW;
       paper.box(`Team ${team.number}`,tx,top,teamW,labelH,9,true,"center",240);
-      paper.box(team.name,tx,top+labelH,teamW,nameH,9,false,"center");
+      const name=team.pool?.seed ? `${team.name}\nOverall seed ${team.pool.seed}` : team.name;
+      paper.box(name,tx,top+labelH,teamW,nameH,9,false,"center");
       paper.box("For",tx,top+labelH+nameH,teamW/2,headH,8,false,"center",240);
       paper.box("Against",tx+teamW/2,top+labelH+nameH,teamW/2,headH,8,false,"center",240);
     }
@@ -420,7 +427,7 @@ function tally(paper: Paper, model: PrintDraw) {
       y+=50;
     }
     if (page.final) {
-      for (const label of ["Wins / Losses","Total points","Differential +/-","Seed / place"]) {
+      for (const label of ["Wins / Losses","Total points","Differential +/-",draw.pool_config?.pools.length ? "Pool place" : "Seed / place"]) {
         paper.box(label,x,y,scheduleW,24,9,true,"left");
         for (const [ti,team] of teamChunk.entries()) {
           const tx=x+scheduleW+ti*teamW, s=paper.includeResults ? team.standing : undefined;

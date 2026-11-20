@@ -62,6 +62,7 @@ import {
   workspaceScopeKey
 } from "@/lib/tournamentDayWorkspaceState.mjs";
 import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
+import { poolTeamLabels } from "@/lib/tournamentDrawPools.mjs";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import styles from "./TournamentDayWorkspacePanel.module.css";
@@ -639,6 +640,7 @@ function tiebreakOutcomeLabel(outcome: string): string {
 
 function PoolStandings({ draw, selectedSeeds }: { draw: AdminTournamentDayDraw; selectedSeeds?: string[] }) {
   const pools = draw.round_robin_summary?.pools || draw.pool_standings || [];
+  const labels = poolTeamLabels(draw.pool_config, draw.team_rows);
   if (!pools.length) return null;
   return <div>
     <p className={styles.muted}>Each pool is ranked independently. {draw.round_robin_complete ? "Recommended qualifiers are highlighted below." : "Qualifiers remain provisional until every pool match is complete."}</p>
@@ -647,12 +649,13 @@ function PoolStandings({ draw, selectedSeeds }: { draw: AdminTournamentDayDraw; 
       <h4>{pool.pool_name} · {pool.advance_count} advance</h4>
       <div className={styles.standingsTableWrap}><table className={styles.standingsTable}>
         <caption>{pool.pool_name} standings</caption>
-        <thead><tr><th scope="col">Pool rank</th><th scope="col">Team</th><th scope="col">W–L</th><th scope="col">PF</th><th scope="col">PA</th><th scope="col">+/−</th><th scope="col">Advancement</th></tr></thead>
+        <thead><tr><th scope="col">Pool rank</th><th scope="col">Team</th><th scope="col">Overall seed</th><th scope="col">W–L</th><th scope="col">PF</th><th scope="col">PA</th><th scope="col">+/−</th><th scope="col">Advancement</th></tr></thead>
         <tbody>{pool.standings.map((standing, index) => {
           const selectedSeed = selectedSeeds?.indexOf(standing.team_id) ?? -1;
           const retired = standing.retired || standing.eligible_for_playoffs === false;
+          const label = labels.get(standing.team_id);
           return <tr key={standing.team_id} className={`${(selectedSeeds ? selectedSeed >= 0 : standing.recommended_qualifier) ? styles.qualifierRow : ""} ${retired ? styles.retiredStanding : ""}`}>
-            <td>{standing.pool_rank || index + 1}</td><th scope="row">{standingLabel(standing)}</th><td>{standing.wins}–{standing.losses}</td><td>{standing.points_for}</td><td>{standing.points_against}</td><td>{standing.differential > 0 ? "+" : ""}{standing.differential}</td>
+            <td>{standing.pool_rank || index + 1}</td><th scope="row">{label ? `Team ${label.number} · ` : ""}{standingLabel(standing)}</th><td>{label?.seed ?? "—"}</td><td>{standing.wins}–{standing.losses}</td><td>{standing.points_for}</td><td>{standing.points_against}</td><td>{standing.differential > 0 ? "+" : ""}{standing.differential}</td>
             <td>{retired ? "Retired · ineligible" : selectedSeed >= 0 ? `Selected seed ${selectedSeed + 1}${standing.recommended_qualifier ? " · recommended" : " · override"}` : standing.recommended_qualifier ? selectedSeeds ? "Recommended · not selected" : draw.round_robin_complete ? "Recommended qualifier" : "Projected qualifier" : "Eligible for override"}</td>
           </tr>;
         })}</tbody>

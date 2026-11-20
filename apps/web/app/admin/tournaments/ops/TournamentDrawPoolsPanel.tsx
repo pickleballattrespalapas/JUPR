@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type { ActionCompletion } from "@/components/interaction";
 import type { TournamentDrawPoolConfiguration } from "@/lib/adminTournamentApi";
-import { inspectPoolConfiguration, moveTeamToPool, seededPoolConfiguration, type PoolEditorTeam } from "@/lib/tournamentDrawPools.mjs";
+import { inspectPoolConfiguration, moveTeamToPool, poolTeamLabels, seededPoolConfiguration, type PoolEditorTeam } from "@/lib/tournamentDrawPools.mjs";
 
 const field = { padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit", width: "100%" };
 const button = { padding: "0.55rem 0.8rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit", background: "white" };
@@ -25,6 +25,9 @@ export default function TournamentDrawPoolsPanel({ teams, savedConfiguration, ha
   const dirty = JSON.stringify(configuration) !== JSON.stringify(savedConfiguration);
   const locked = disabled || busy || hasGames;
   const canSplit = teams.length >= 4 && teams.length <= 16;
+  const labels = poolTeamLabels(configuration, teams);
+  const teamOrder = new Map([...labels.keys()].map((id, index) => [id, index]));
+  const displayedTeams = [...teams].sort((a, b) => (teamOrder.get(a.id) ?? Infinity) - (teamOrder.get(b.id) ?? Infinity));
   function change(next: TournamentDrawPoolConfiguration | null) {
     setConfiguration(next);
     onDirtyChange(JSON.stringify(next) !== JSON.stringify(savedConfiguration));
@@ -58,13 +61,14 @@ export default function TournamentDrawPoolsPanel({ teams, savedConfiguration, ha
       </div>
       <div style={{ overflowX: "auto", marginTop: "1rem" }}><table style={{ width: "100%", textAlign: "left" }}>
         <caption style={{ textAlign: "left", fontWeight: 700, marginBottom: "0.5rem" }}>Team assignments</caption>
-        <thead><tr><th>Team</th><th>Pool</th></tr></thead>
-        <tbody>{teams.map(team => <tr key={team.id}><th scope="row" style={{ padding: "0.5rem" }}>{team.label || `Team ${team.team_number}`}</th><td style={{ padding: "0.5rem" }}>
+        <thead><tr><th>Pool team</th><th>Players</th><th>Overall seed</th><th>Pool</th></tr></thead>
+        <tbody>{displayedTeams.map(team => <tr key={team.id}><th scope="row" style={{ padding: "0.5rem" }}>{labels.has(team.id) ? `Team ${labels.get(team.id)!.number}` : "Unassigned"}</th><td>{team.label || "Unnamed team"}</td><td>{labels.get(team.id)?.seed ?? "—"}</td><td style={{ padding: "0.5rem" }}>
           <select aria-label={`Pool for ${team.label || `Team ${team.team_number}`}`} style={field} value={configuration.pools.find(pool => pool.team_ids.includes(team.id))?.id || ""} disabled={locked} onChange={event => change(moveTeamToPool(configuration, team.id, event.target.value))}>
             <option value="" disabled>Choose a pool…</option>{configuration.pools.map(pool => <option key={pool.id} value={pool.id}>{pool.name}</option>)}
           </select>
         </td></tr>)}</tbody>
       </table></div>
+      <p>Team numbers restart at 1 in each pool, in seed order. These labels stay fixed as standings change.</p>
       <p><strong>{review.totalMatches} pool matches · {review.totalQualifiers} playoff teams</strong></p>
       {review.uneven ? <p>Uneven pools: teams play different numbers of matches. Qualifiers are selected within each pool; raw wins are not compared across pools.</p> : null}
       <p>Standings use wins, tied-team head-to-head, point differential, points scored, then original team number. Review ties and confirm or override the advancing teams before generating playoffs.</p>

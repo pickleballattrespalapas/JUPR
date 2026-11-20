@@ -1,4 +1,22 @@
 /** Pool editor values are deliberately independent from registration divisions. */
+export function poolTeamLabels(configuration, teams = []) {
+  const seeds = new Map(teams.map(team => {
+    const seed = Number(team.seed);
+    return [String(team.id), Number.isInteger(seed) && seed > 0 ? seed : null];
+  }));
+  const labels = new Map();
+  for (const pool of configuration?.pools || []) {
+    // Only the saved initial seed determines these labels. Standings and
+    // playoff ranks change during play; unseeded teams retain pool order.
+    const ordered = pool.team_ids.map((id, position) => ({ id, position, seed: seeds.get(id) ?? null }))
+      .sort((a, b) => (a.seed ?? Infinity) - (b.seed ?? Infinity) || a.position - b.position);
+    ordered.forEach((team, index) => labels.set(team.id, {
+      poolId: pool.id, poolName: pool.name, number: index + 1, seed: team.seed,
+    }));
+  }
+  return labels;
+}
+
 export function seededPoolConfiguration(teams, poolCount = 2) {
   if (!Number.isInteger(poolCount) || poolCount < 2 || poolCount > Math.floor(teams.length / 2)) {
     throw new Error("Each pool needs at least two teams.");
