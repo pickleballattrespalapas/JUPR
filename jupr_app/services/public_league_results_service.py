@@ -20,7 +20,7 @@ LEAGUE_META_SELECT = (
     "schedule_config,awards_config"
 )
 LEAGUE_RATINGS_SELECT = "club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active,inactive_at"
-PLAYER_SELECT = "id,club_id,name,rating,active,inactive_at"
+PLAYER_SELECT = "id,club_id,name,rating,active"
 MATCH_SELECT = (
     "id,club_id,date,league,match_type,week_tag,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,"
     "t1_p1_r,t1_p1_r_end,t1_p2_r,t1_p2_r_end,t2_p1_r,t2_p1_r_end,t2_p2_r,t2_p2_r_end,"
@@ -92,14 +92,6 @@ def _week_label(week_num: int | None) -> str:
     return f"Week {int(week_num)}" if week_num is not None else "Unspecified"
 
 
-def _is_active_player(row: dict[str, Any]) -> bool:
-    if row.get("inactive_at"):
-        return False
-    if row.get("active") is False:
-        return False
-    return True
-
-
 def _fetch_table(
     supabase: Any,
     table_name: str,
@@ -126,10 +118,10 @@ def _fetch_result_players(
     supabase: Any,
     club_id: str,
 ) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
-    """Read public identities once, separately from current leaderboard eligibility."""
+    """Read identities for match history and manually visible league members."""
     rows = _fetch_table(supabase, "players", PLAYER_SELECT, club_id=club_id)
     all_players: dict[int, dict[str, Any]] = {}
-    active_players: dict[int, dict[str, Any]] = {}
+    season_players: dict[int, dict[str, Any]] = {}
     for row in rows:
         pid = _safe_int(row.get("id"))
         if pid is None or is_merged_player(row):
@@ -140,9 +132,11 @@ def _fetch_result_players(
             "rating": _safe_float(row.get("rating"), 1200.0) or 1200.0,
         }
         all_players[int(pid)] = player
-        if _is_active_player(row):
-            active_players[int(pid)] = player
-    return all_players, active_players
+        # Automatic club inactivity does not erase a member’s league record.
+        # League withdrawals are checked against the league rating row below.
+        if row.get("active") is not False:
+            season_players[int(pid)] = player
+    return all_players, season_players
 
 
 def _league_sort_key(name: str) -> tuple[int, str]:
@@ -833,8 +827,8 @@ def _build_resolved_league_results(
             "award_progress": {"awards": [], "award_count": 0},
         }
 
-    history_players, active_players = _fetch_result_players(supabase, cid)
-    players_by_id = history_players if include_inactive_players else active_players
+    history_players, season_players = _fetch_result_players(supabase, cid)
+    players_by_id = history_players if include_inactive_players else season_players
     league = _league_meta(overview, selected)
     rating_rows = _league_rating_rows(
         supabase, club_id=cid, league_name=selected
