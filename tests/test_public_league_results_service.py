@@ -749,3 +749,21 @@ def test_weekly_history_keeps_identity_and_tenant_boundaries():
     assert {row["player_id"] for row in payload["players"]} == {1, 2, 3}
     assert "Other club" not in str(payload)
     assert "Former identity" not in str(payload)
+
+
+def test_club_inactivity_keeps_season_records_and_awards_for_league_members():
+    db = fake_supabase()
+    db._tables["leagues_metadata"][0].update(
+        min_games=1,
+        awards_config={"categories": {"most_wins": {"enabled": True, "minimum": 1, "depth": 1}}},
+    )
+    before = build_public_league_results(db, club_id="club", league_name="Open")
+    assert {row["player_id"] for row in before["standings"]} == {1, 2, 3}
+    assert before["award_progress"]["races"][0]["eligible_count"] == 3
+
+    # An automatic club inactivity marker can be newer than a date-only match.
+    db._tables["players"][0]["inactive_at"] = "2026-01-08T03:00:00Z"
+    after = build_public_league_results(db, club_id="club", league_name="Open")
+
+    for key in ("standings", "cumulative", "weekly_results", "season_stat_rankings", "award_progress"):
+        assert after[key] == before[key], key
