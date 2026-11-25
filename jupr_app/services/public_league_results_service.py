@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Any, Mapping
 
 from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.player_visibility import is_merged_player
 
 from jupr_app.services.public_league_visibility import (
     ACTIVE_LEAGUE_VIEW,
@@ -19,7 +20,7 @@ LEAGUE_META_SELECT = (
     "schedule_config,awards_config"
 )
 LEAGUE_RATINGS_SELECT = "club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active,inactive_at"
-PLAYER_SELECT = "id,club_id,name,rating,active,inactive_at"
+PLAYER_SELECT = "id,club_id,name,rating,active"
 MATCH_SELECT = (
     "id,club_id,date,league,match_type,week_tag,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,"
     "t1_p1_r,t1_p1_r_end,t1_p2_r,t1_p2_r_end,t2_p1_r,t2_p1_r_end,t2_p2_r,t2_p2_r_end,"
@@ -91,14 +92,6 @@ def _week_label(week_num: int | None) -> str:
     return f"Week {int(week_num)}" if week_num is not None else "Unspecified"
 
 
-def _is_active_player(row: dict[str, Any]) -> bool:
-    if row.get("inactive_at"):
-        return False
-    if row.get("active") is False:
-        return False
-    return True
-
-
 def _fetch_table(
     supabase: Any,
     table_name: str,
@@ -121,24 +114,29 @@ def _fetch_table(
     return read_all_rows(query_factory, order=order)
 
 
-def _fetch_players(
+def _fetch_result_players(
     supabase: Any,
     club_id: str,
-    *,
-    include_inactive: bool = False,
-) -> dict[int, dict[str, Any]]:
+) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
+    """Read identities for match history and manually visible league members."""
     rows = _fetch_table(supabase, "players", PLAYER_SELECT, club_id=club_id)
-    players: dict[int, dict[str, Any]] = {}
+    all_players: dict[int, dict[str, Any]] = {}
+    season_players: dict[int, dict[str, Any]] = {}
     for row in rows:
         pid = _safe_int(row.get("id"))
-        if pid is None or (not include_inactive and not _is_active_player(row)):
+        if pid is None or is_merged_player(row):
             continue
-        players[int(pid)] = {
+        player = {
             "id": int(pid),
             "name": str(row.get("name") or f"Player {pid}"),
             "rating": _safe_float(row.get("rating"), 1200.0) or 1200.0,
         }
-    return players
+        all_players[int(pid)] = player
+        # Automatic club inactivity does not erase a member’s league record.
+        # League withdrawals are checked against the league rating row below.
+        if row.get("active") is not False:
+            season_players[int(pid)] = player
+    return all_players, season_players
 
 
 def _league_sort_key(name: str) -> tuple[int, str]:
@@ -829,11 +827,8 @@ def _build_resolved_league_results(
             "award_progress": {"awards": [], "award_count": 0},
         }
 
-    players_by_id = _fetch_players(
-        supabase,
-        cid,
-        include_inactive=include_inactive_players,
-    )
+    history_players, season_players = _fetch_result_players(supabase, cid)
+    players_by_id = history_players if include_inactive_players else season_players
     league = _league_meta(overview, selected)
     rating_rows = _league_rating_rows(
         supabase, club_id=cid, league_name=selected
@@ -867,7 +862,9 @@ def _build_resolved_league_results(
         }
     )
     matches = _league_matches(supabase, club_id=cid, league_name=selected)
-    expanded = _expand_matches(matches, scoped_players)
+    # A played week is a historical record. Current profile/league activity
+    # controls season standings and awards, never whether a saved game exists.
+    expanded = _expand_matches(matches, history_players)
     weekly = _summarize(expanded, ("week_num", "player_id", "player_name"))
     weekly_ratings = _weekly_rating_rankings(expanded)
     for row in weekly:
@@ -892,7 +889,10 @@ def _build_resolved_league_results(
             str(row.get("player_name") or "").lower(),
         )
     )
-    cumulative = _canonical_season_rows(rating_standings, match_cumulative)
+    eligible_match_cumulative = [
+        row for row in match_cumulative if int(row["player_id"]) in scoped_players
+    ]
+    cumulative = _canonical_season_rows(rating_standings, eligible_match_cumulative)
     standings = _standings_with_fallback_players(rating_standings, cumulative)
     standing_by_player = {
         int(row["player_id"]): row for row in standings if _safe_int(row.get("player_id")) is not None
@@ -931,14 +931,15 @@ def _build_resolved_league_results(
         scope="season",
         min_games=season_min_games,
     )
-    player_options = _player_options(standings, cumulative)
+    player_options = _player_options(standings, match_cumulative)
     valid_player_ids = {int(row["player_id"]) for row in player_options}
     selected_player_id = int(player_id) if player_id is not None and int(player_id) in valid_player_ids else None
     if selected_player_id is None and player_options:
         selected_player_id = int(player_options[0]["player_id"])
     selected_standing = standing_by_player.get(int(selected_player_id or 0), {})
     selected_cumulative = next(
-        (row for row in cumulative if int(row.get("player_id") or 0) == int(selected_player_id or 0)),
+        (row for row in [*cumulative, *match_cumulative]
+         if int(row.get("player_id") or 0) == int(selected_player_id or 0)),
         {},
     )
     player_summary = (
@@ -966,7 +967,7 @@ def _build_resolved_league_results(
 
     highlight_selection = build_weekly_highlights(
         supabase, club_id=cid, league_name=selected, week_num=selected_week,
-        matches=matches, players=scoped_players, include_candidates=include_highlight_candidates,
+        matches=matches, players=history_players, include_candidates=include_highlight_candidates,
     )
 
     return {
@@ -985,12 +986,12 @@ def _build_resolved_league_results(
         "recent_matches": _recent_player_matches(
             matches,
             player_id=selected_player_id,
-            players_by_id=players_by_id,
+            players_by_id=history_players,
         ),
         "weekly_highlights": weekly_highlights,
         "weekly_highlight_selection": highlight_selection,
         "weekly_stat_rankings": {
-            **weekly_stat_rankings(matches, players=scoped_players, week_num=selected_week),
+            **weekly_stat_rankings(matches, players=history_players, week_num=selected_week),
             **_record_stat_rankings(selected_week_rows, min_games=weekly_min_games),
         },
         "season_highlights": season_highlights,
