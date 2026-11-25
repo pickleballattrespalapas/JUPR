@@ -109,7 +109,7 @@ def test_admin_results_require_one_exact_metadata_row() -> None:
         )
 
 
-def test_active_admin_results_only_include_current_league_members() -> None:
+def test_active_admin_standings_keep_eligibility_but_weekly_history_includes_former_members() -> None:
     tables = {
         "leagues_metadata": [
             {
@@ -165,4 +165,6 @@ def test_active_admin_results_only_include_current_league_members() -> None:
     assert {row["player_name"] for row in payload["weekly_results"]} == {
         "Current A",
         "Current B",
+        "Former A",
+        "Former B",
     }
