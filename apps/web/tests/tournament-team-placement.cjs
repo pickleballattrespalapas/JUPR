@@ -22,7 +22,9 @@ function load(relative, overrides = {}) {
   }).outputText, filename);
   return compiled.exports;
 }
-const { playersNeedingTeam } = load("lib/tournamentTeamPlacement.ts");
+const { playersNeedingTeam, teamOpeningsLabel } = load("lib/tournamentTeamPlacement.ts");
+assert.equal(teamOpeningsLabel(["WOMAN_2"]), "1 woman");
+assert.equal(teamOpeningsLabel(["MAN_1", "WOMAN_1", "WOMAN_2"]), "1 man and 2 women");
 const ids = snapshot => playersNeedingTeam(snapshot, "e1").map(row => row.id);
 const registration = (id, extra = {}) => ({ id, email: `${id}@example.invalid`, status: "CONFIRMED", ...extra });
 const playerIds = ["solo", "assigned", "invited", "captain", "declined", "removed", "other-division", "cancelled", "cancelled-selection", "inactive-selection"];
@@ -81,6 +83,7 @@ async function testPublicRosterPlacementStatus() {
   const entries = [
     { public_entry_key: "solo", status: "Needs Team", entry_type: "Registration", members: [{ display_name: "Solo Entrant" }] },
     { public_entry_key: "review", status: "Review", entry_type: "Team", members: [{ display_name: "Review Entrant" }] },
+    { public_entry_key: "partial", status: "Needs Players", entry_type: "Team", team_name: "Kitchen Crew", open_team_slots: ["WOMAN_2"], members: [{ display_name: "Partial Captain" }] },
     { public_entry_key: "confirmed", status: "Registered", entry_type: "Team", members: [{ display_name: "Confirmed Entrant" }] },
   ].map(row => ({ ...row, event_day_label: "Day 1", event_family: "Team Tournament", division: "Mixed 5.0" }));
   const RosterPage = load("app/clubs/[clubSlug]/tournament-roster/page.tsx", {
@@ -93,13 +96,17 @@ async function testPublicRosterPlacementStatus() {
       roster: { registrations_by_event: entries }, summary: { total_registrations: 3, total_players: 3 },
     } }) },
   }).default;
-  for (const [status, name] of [["Needs a team", "Solo Entrant"], ["Under review", "Review Entrant"], ["Registered", "Confirmed Entrant"]]) {
+  for (const [status, name] of [["Needs a team", "Solo Entrant"], ["Under review", "Review Entrant"], ["Needs players", "Partial Captain"], ["Registered", "Confirmed Entrant"]]) {
     const page = await RosterPage({ params: { clubSlug: "fixture" }, searchParams: { tournament: "fixture", status } });
     act(() => { renderer = create(page); });
     const output = JSON.stringify(renderer.toJSON());
     assert.ok(output.includes(name));
-    for (const other of ["Solo Entrant", "Review Entrant", "Confirmed Entrant"].filter(value => value !== name)) assert.ok(!output.includes(other));
-    assert.equal(output.includes("Registered individually; awaiting team assignment."), status === "Needs a team");
+    for (const other of ["Solo Entrant", "Review Entrant", "Partial Captain", "Confirmed Entrant"].filter(value => value !== name)) assert.ok(!output.includes(other));
+    assert.equal(output.includes("Registered individually and awaiting team assignment."), status === "Needs a team");
+    if (status === "Needs players") {
+      assert.ok(output.includes("Kitchen Crew"));
+      assert.ok(output.includes("1 woman"));
+    }
     const statusOptions = renderer.root.findAllByType("select").find(node => node.props.name === "status").findAllByType("option");
     assert.ok(statusOptions.some(option => option.props.value === "Needs a team"));
     assert.ok(statusOptions.some(option => option.props.value === "Under review"));

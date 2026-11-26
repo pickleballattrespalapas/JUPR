@@ -105,6 +105,7 @@ async function main() {
     "@/components/PublicTournamentSponsors": { __esModule: true, default: () => null },
     "@/components/PublicTournamentModuleHeader": { __esModule: true, default: () => null },
     "@/lib/tournamentRosterCounts": load("lib/tournamentRosterCounts.ts"),
+    "@/lib/tournamentTeamPlacement": load("lib/tournamentTeamPlacement.ts"),
     "@/lib/tournamentRegistrationApi": { getClubTournamentRoster: async () => ({ data: {
       tournament: { id: "fixture", name: "Fixture Tournament" }, settings: { registration_slug: "fixture-tournament" },
       summary: { total_registrations: 1, total_players: 1 },

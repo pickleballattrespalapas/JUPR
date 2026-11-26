@@ -3968,6 +3968,8 @@ def build_public_tournament_roster_state(
         "PARTNER_MISSING": "Review",
         "NEEDS_PARTNER": "Needs Partner",
         "NEEDS_TEAM": "Needs Team",
+        "NEEDS_PLAYERS": "Needs Players",
+        "TEAM_INVITATION_PENDING": "Team Invitation Pending",
         "PENDING_PARTNER_REQUEST": "Pending Partner Request",
         "LEGACY_PARTNER_UNRESOLVED": "Review",
     }
@@ -4039,6 +4041,7 @@ def build_public_tournament_roster_state(
     ) -> float | None:
         if (
             str(event.get("eligibility_mode") or "").strip().upper() != "COMBINED_RATING_CAP"
+            or entry.get("entry_type") == "four_player_team"
             or _public_entry_type(entry.get("entry_type")) != "Team"
             or len(members) != 2
         ):
@@ -4137,13 +4140,16 @@ def build_public_tournament_roster_state(
             if (
                 status == "REVIEW"
                 and entry.get("entry_type") == "four_player_team_setup_required"
+                and state.get("four_player_team_schema_available") is not False
                 and event_option.get("competition_format") == "FOUR_PLAYER_TEAM"
                 and registration_ids
                 and all(value in confirmed_registration_ids for value in registration_ids)
             ):
                 # The signup is confirmed; the player is waiting for placement.
                 # Keep the compiler's draw-readiness blocker unchanged.
-                status = "NEEDS_TEAM"
+                status = "TEAM_INVITATION_PENDING" if entry.get("team_invitation_pending") else "NEEDS_TEAM"
+            if status == "REVIEW" and entry.get("open_team_slots"):
+                status = "NEEDS_PLAYERS"
             entry_source = "|".join(selection_ids or registration_ids)
             public_entry_key = build_public_tournament_reference(
                 tournament_id=str(tournament.get("id") or ""),
@@ -4161,13 +4167,16 @@ def build_public_tournament_roster_state(
                 "members": members,
                 "combined_rating": _public_combined_rating(event_option, entry, members),
             }
+            if entry.get("entry_type") == "four_player_team":
+                event_row["team_name"] = _public_note(entry.get("team_name"))
+                event_row["open_team_slots"] = entry.get("open_team_slots") or []
             registrations_by_event.append(event_row)
             event_rows.append(event_row)
             if status in {"CONFIRMED", "ADMIN_CONFIRMED"}:
                 confirmed_teams.append(event_row)
             elif status == "PENDING_PARTNER_REQUEST":
                 pending_partner_requests.append(event_row)
-            elif status not in {"NEEDS_PARTNER", "NEEDS_TEAM", "WAITLIST"}:
+            elif status not in {"NEEDS_PARTNER", "NEEDS_TEAM", "NEEDS_PLAYERS", "TEAM_INVITATION_PENDING", "WAITLIST"}:
                 unresolved_partner_entries.append(event_row)
 
             if status == "NEEDS_PARTNER":

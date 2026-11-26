@@ -171,11 +171,14 @@ export type PublicFourPlayerTeamSetupRecovery = {
     team_allow_substitutes?: boolean | null;
     setup_state:
       | "COMPLETE"
+      | "NEEDS_TEAM"
       | "SETUP_REQUIRED"
       | "STAFF_RECOVERY_REQUIRED";
     operation_status?: string | null;
     team?: {
       id: string;
+      is_captain?: boolean;
+      open_slots?: FourPlayerTeamMember["slot"][];
       name: string;
       status: string;
       eligibility_state?: string | null;

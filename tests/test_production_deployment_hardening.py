@@ -391,7 +391,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 188
+    assert len(versions) == 190
     assert "20261111223919" in versions
     assert "complete_matching_partner_reservations" in contract["required_ledger_names"]
     assert {"20261109011000", "20261109011100"}.issubset(versions)
@@ -426,7 +426,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "tournament_gender_eligibility_reviews" in contract["required_ledger_names"]
     assert {"complete_registration_cancellation", "registration_cancellation_audit_policies"}.issubset(contract["required_ledger_names"])
     assert "20260909203736" in versions
-    assert versions[-52:] == (
+    assert versions[-54:] == (
         "20261030010000",
         "20261030183226",
         "20261030224214",
@@ -479,13 +479,15 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109011100",
         "20261111223919",
         "20261116224208",
+        "20261126030000",
+        "20261126031000",
     )
-    assert len(names) == 188
+    assert len(names) == 190
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 175
+    assert len(contract["required_ledger_names"]) == 177
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 175
-    assert contract["deployment_order"][-22:] == (
+    assert len(contract["deployment_order"]) == 177
+    assert contract["deployment_order"][-24:] == (
         "event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder",
         "badge_conflicts_are_not_serialization_failures", "unrated_match_activity",
         "round_robin_hub_atomic_operations", "play_generator_operation_surface", "round_robin_hub_participant_identities",
@@ -502,6 +504,8 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "tournament_combined_division_draws", "combined_division_live_guards",
         "complete_matching_partner_reservations",
         "player_public_aliases",
+        "tournament_team_open_roster_spots",
+        "reopen_four_player_team_after_withdrawal",
     )
     assert {"interclub_season_trophies", "event_season_history"}.issubset(contract["required_ledger_names"])
     assert set(contract["deployment_order"]) == set(
@@ -730,6 +734,8 @@ def test_reviewed_migration_contract_is_bound_to_sql_bytes(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("missing_name", [
+    "reopen_four_player_team_after_withdrawal",
+    "tournament_team_open_roster_spots",
     "tournament_draw_pools",
     "tournament_pool_schedule_recovery",
     "tournament_pool_playoff_progression",
@@ -985,7 +991,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261116224208"
+    assert migrations[-1] == "20261126031000"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
@@ -1701,7 +1707,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow
-    assert 'EXPECTED_MIGRATION_HEAD: "20261116231753"' in workflow
+    assert 'EXPECTED_MIGRATION_HEAD: "20261126031222"' in workflow
     assert 'if [ "$GITHUB_REF" != "refs/heads/$PRODUCTION_SOURCE_BRANCH" ]; then' in workflow
     assert '"$HEAD_SHA" != "$GITHUB_SHA"' in workflow
     assert '"$HEAD_SHA" != "$PRODUCTION_SHA"' in workflow

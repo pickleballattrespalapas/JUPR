@@ -181,7 +181,8 @@ export default async function TournamentRegistrationConfirmationPage(props: Conf
                 <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
                   {[selection.skill_label, selection.age_label].filter(Boolean).join(" · ") || "Open division"} · ${Number(selection.price_usd || 0).toFixed(2)}
                 </p>
-                {partnerStatusLabel(selection.partner_mode) ? <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>Partner: {partnerStatusLabel(selection.partner_mode)}{selection.partner_name ? ` · ${selection.partner_name}` : ""}</p> : null}
+                {!teamRecovery && selection.competition_format === "FOUR_PLAYER_TEAM" && selection.partner_mode === "NEEDS_PARTNER" && <p>Needs a team</p>}
+                {selection.competition_format !== "FOUR_PLAYER_TEAM" && partnerStatusLabel(selection.partner_mode) ? <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>Partner: {partnerStatusLabel(selection.partner_mode)}{selection.partner_name ? ` · ${selection.partner_name}` : ""}</p> : null}
                 <p style={{ margin: "0.75rem 0 0" }}>
                   <Link href={manageRegistrationHref} style={{ fontWeight: 800 }}>
                     Edit this event
