@@ -4,6 +4,9 @@ import { useState } from "react";
 import FourPlayerTeamRegistrationCard, {
   TEAM_SLOTS,
   TeamRegistrationDraft,
+  invitedTeamMembers,
+  newTeamMembers,
+  validateTeamInvites,
   newTeamRegistrationDraft,
   teamSlotLabel,
   validateTeamRegistrationDraft
@@ -13,7 +16,6 @@ import {
   createPublicFourPlayerTeam,
   recoverPublicFourPlayerTeamSetup
 } from "@/lib/tournamentTeamCompetitionApi";
-import type { PublicRegistrationEvent } from "@/lib/tournamentRegistrationApi";
 import { publicTournamentEventLabel } from "@/lib/tournamentRegistrationEligibility";
 
 type Props = {
@@ -74,12 +76,10 @@ function initialDrafts(
   recovery: PublicFourPlayerTeamSetupRecovery
 ): Record<string, TeamRegistrationDraft> {
   return Object.fromEntries(
-    recovery.events
-      .filter((event) => event.setup_state === "SETUP_REQUIRED")
-      .map((event) => [
-        event.id,
-        newTeamRegistrationDraft(recovery.captain.gender || "")
-      ])
+    recovery.events.map((event) => [
+      event.id,
+      newTeamRegistrationDraft(recovery.captain.gender || "")
+    ])
   );
 }
 
@@ -93,8 +93,8 @@ export default function FourPlayerTeamSetupRecovery({
   const [drafts, setDrafts] = useState(() => initialDrafts(initialRecovery));
   const [pendingEventId, setPendingEventId] = useState("");
   const [message, setMessage] = useState<string | null>(
-    needsAttention
-      ? "Your registration is saved, but your team still needs to be completed."
+    needsAttention && recovery.events.some((event) => event.setup_state === "SETUP_REQUIRED")
+      ? "Your registration is saved. Enter the teammates you have to finish your team signup."
       : null
   );
 
@@ -109,30 +109,28 @@ export default function FourPlayerTeamSetupRecovery({
       );
       return null;
     }
-    setRecovery(response.data);
+    const updated = response.data;
     setDrafts((current) => {
       const next = { ...current };
-      response.data!.events.forEach((event) => {
-        if (event.setup_state === "SETUP_REQUIRED" && !next[event.id]) {
-          next[event.id] = newTeamRegistrationDraft(
-            response.data!.captain.gender || ""
-          );
-        }
-      });
+      for (const event of updated.events) {
+        next[event.id] ??= newTeamRegistrationDraft(updated.captain.gender || "");
+      }
       return next;
     });
-    return response.data;
+    setRecovery(updated);
+    return updated;
   }
 
   async function submitTeam(eventId: string) {
     const event = recovery.events.find((row) => row.id === eventId);
     const draft = drafts[eventId];
     if (!event || !draft) return;
-    const validation = validateTeamRegistrationDraft(
-      draft,
-      recovery.captain.email,
-      recovery.captain.gender || ""
-    );
+    const team = event.team;
+    const slots = team?.open_slots || [];
+    const captain = recovery.captain;
+    const validation = team
+      ? validateTeamInvites(draft, slots, captain.email)
+      : validateTeamRegistrationDraft(draft, captain.email, captain.gender || "");
     if (validation) {
       setMessage(`${event.division_name}: ${validation}`);
       return;
@@ -152,25 +150,16 @@ export default function FourPlayerTeamSetupRecovery({
     const response = await createPublicFourPlayerTeam(clubSlug, {
       tournament_id: recovery.tournament.id,
       event_option_id: event.id,
-      team_name: draft.teamName.trim(),
+      team_name: team ? team.name : draft.teamName.trim(),
+      fill_team_id: team?.id,
       captain_registration_id: recovery.captain.registration_id,
       confirmation_token: confirmationToken,
-      members: TEAM_SLOTS.map((slot) =>
-        slot === draft.captainSlot
-          ? {
-              slot,
-              registration_id: recovery.captain.registration_id,
-              email: recovery.captain.email,
-              display_name: recovery.captain.display_name,
-              gender: recovery.captain.gender
-            }
-          : {
-              slot,
-              email: draft.teammates[slot].email.trim().toLowerCase(),
-              display_name: draft.teammates[slot].displayName.trim(),
-              gender: slot.startsWith("MAN_") ? "Men" : "Women"
-            }
-      ),
+      members: team ? invitedTeamMembers(draft, slots) : newTeamMembers(draft, {
+        registration_id: captain.registration_id,
+        email: captain.email,
+        display_name: captain.display_name,
+        gender: captain.gender
+      }),
       idempotency_key: draft.idempotencyKey,
       website: ""
     });
@@ -180,13 +169,13 @@ export default function FourPlayerTeamSetupRecovery({
     const refreshed = await refreshRecovery();
     setPendingEventId("");
     const refreshedEvent = refreshed?.events.find((row) => row.id === eventId);
-    if (refreshedEvent?.setup_state === "COMPLETE") {
-      setMessage(response.error ? "Your team is already saved." : "Team saved.");
+    if (!refreshedEvent) return;
+    if (refreshedEvent.team && (!team || !response.error)) {
+      setDrafts((current) => ({ ...current, [eventId]: newTeamRegistrationDraft(captain.gender || "") }));
+      setMessage("Team saved.");
       return;
     }
-    setMessage(
-      "We couldn’t save your team yet. Check the roster and try again."
-    );
+    setMessage(response.error || "We couldn’t save your team yet. Check the roster and try again.");
   }
 
   if (!recovery.events.length) return null;
@@ -212,25 +201,6 @@ export default function FourPlayerTeamSetupRecovery({
       ) : null}
       <div style={{ display: "grid", gap: "1rem" }}>
         {recovery.events.map((event) => {
-          if (event.setup_state === "COMPLETE" && event.team) {
-            return (
-              <article key={event.id} style={cardStyle}>
-                <h3 style={{ marginTop: 0 }}>
-                  {publicTournamentEventLabel(event.event_family_label, event.division_name)}
-                </h3>
-                <p>
-                  <strong>{event.team.name}</strong> · {teamStatusLabel(event.team.status)}
-                </p>
-                <ul>
-                  {event.team.members.map((member) => (
-                    <li key={member.member_id}>
-                      {teamSlotLabel(member.slot)}: {member.display_name} · {memberStatusLabel(member.status)}
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            );
-          }
           if (event.setup_state === "STAFF_RECOVERY_REQUIRED") {
             return (
               <article key={event.id} style={cardStyle}>
@@ -244,31 +214,45 @@ export default function FourPlayerTeamSetupRecovery({
               </article>
             );
           }
-          const draft =
-            drafts[event.id] ||
-            newTeamRegistrationDraft(recovery.captain.gender || "");
-          const registrationEvent: PublicRegistrationEvent = {
-            ...event,
-            selectable: true
-          };
+          const team = event.team;
+          const showEditor = !team || Boolean(team.is_captain && team.status === "FORMING" && team.open_slots?.length);
           return (
             <article key={event.id} style={cardStyle}>
               <h3 style={{ marginTop: 0 }}>{publicTournamentEventLabel(event.event_family_label, event.division_name)}</h3>
-              <p data-testid="team-placement-pending">
-                Your individual registration is saved. You haven’t been assigned to a team yet. The organizer can find you in the players needing a team list.
-              </p>
-              <details open={needsAttention || undefined}>
-                <summary style={{ cursor: "pointer", fontWeight: 700 }}>I have a team to add</summary>
+              {team ? (
+                <>
+                  <p><strong>{team.name}</strong> · {teamStatusLabel(team.status)}</p>
+                  <ul>
+                    {TEAM_SLOTS.map((slot) => {
+                      const member = team.members.find((player) =>
+                        player.slot === slot && ["ACCEPTED", "INVITED"].includes(player.status)
+                      );
+                      return <li key={slot}>{teamSlotLabel(slot)}: {member
+                        ? `${member.display_name} · ${memberStatusLabel(member.status)}`
+                        : "Need a player"}</li>;
+                    })}
+                  </ul>
+                </>
+              ) : (
+                <p data-testid="team-placement-pending">
+                  {needsAttention && event.setup_state === "SETUP_REQUIRED"
+                    ? "Your individual registration is saved. Finish entering your team below."
+                    : "Your individual registration is saved. You’re listed as needing a team until you join one."}
+                </p>
+              )}
+              {showEditor && <details open={(!team && needsAttention) || undefined}>
+                <summary style={{ cursor: "pointer", fontWeight: 700 }}>{team ? "Invite players to open spots" : "I have a team to add"}</summary>
                 <FourPlayerTeamRegistrationCard
-                  event={registrationEvent}
+                  event={{ ...event, selectable: true }}
+                  openSlots={team?.open_slots}
                   captainName={recovery.captain.display_name}
                   captainEmail={recovery.captain.email}
                   captainGender={recovery.captain.gender || ""}
-                  value={draft}
+                  value={drafts[event.id]}
                   onChange={(next) =>
                     setDrafts((current) => ({
                       ...current,
-                      [event.id]: next
+                      [event.id]: { ...next, idempotencyKey: crypto.randomUUID() }
                     }))
                   }
                 />
@@ -289,9 +273,9 @@ export default function FourPlayerTeamSetupRecovery({
                 >
                   {pendingEventId === event.id
                     ? "Saving…"
-                    : "Save team"}
+                    : team ? "Invite players" : "Save team"}
                 </button>
-              </details>
+              </details>}
             </article>
           );
         })}

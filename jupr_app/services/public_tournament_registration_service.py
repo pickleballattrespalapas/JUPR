@@ -1298,14 +1298,15 @@ def validate_and_clean_tournament_selection(
     )
     partner_required = _safe_bool(event.get("partner_required"))
     partner_mode = str(clean_selection.get("partner_mode") or "NONE")
-    # Four-player entrants register individually; the separate roster flow
-    # records their team. Legacy event metadata can still require a doubles
-    # partner, which must not block either a captain or a solo registrant.
-    if four_player_event and partner_mode != "NONE":
-        raise ValueError(f"{_event_label(event)}: register yourself, then choose your team separately.")
-    if not four_player_event and partner_required and partner_mode not in {"HAS_PARTNER", "NEEDS_PARTNER"}:
+    if four_player_event:
+        if partner_mode == "HAS_PARTNER":
+            raise ValueError(f"{_event_label(event)}: register yourself, then choose your team separately.")
+        # Team requests belong on the event roster. The doubles partner board
+        # sends a different request and must never pair two team entrants.
+        clean_selection["show_on_partner_board"] = False
+    elif partner_required and partner_mode not in {"HAS_PARTNER", "NEEDS_PARTNER"}:
         raise ValueError(f"{_event_label(event)}: choose whether you have or need a partner.")
-    if singles_event and partner_mode != "NONE":
+    if not four_player_event and singles_event and partner_mode != "NONE":
         raise ValueError(f"{_event_label(event)} does not accept partner information.")
 
     partner_profile: dict[str, Any] | None = None
@@ -1744,6 +1745,7 @@ def build_public_tournament_registration_confirmation(
                 "skill_label": _clean_text(event.get("skill_label"), limit=80),
                 "age_label": _clean_text(event.get("age_label"), limit=80),
                 "price_usd": _safe_float(event.get("price_usd")) or 0,
+                "competition_format": _clean_text(event.get("competition_format")),
                 "partner_mode": _clean_text(selection.get("partner_mode")),
                 "partner_name": _clean_text(selection.get("partner_name")),
                 "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),

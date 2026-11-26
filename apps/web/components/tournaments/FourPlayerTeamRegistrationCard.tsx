@@ -13,10 +13,12 @@ export const TEAM_SLOTS = [
 
 export type TeamSlot = (typeof TEAM_SLOTS)[number];
 
+type TeammateDraft = { displayName: string; email: string; open?: boolean };
+
 export type TeamRegistrationDraft = {
   teamName: string;
   captainSlot: TeamSlot | "";
-  teammates: Record<TeamSlot, { displayName: string; email: string }>;
+  teammates: Record<TeamSlot, TeammateDraft>;
   idempotencyKey: string;
 };
 
@@ -62,6 +64,49 @@ export function newTeamRegistrationDraft(
   };
 }
 
+export function invitedTeamMembers(draft: TeamRegistrationDraft, slots: readonly TeamSlot[]) {
+  return slots.filter((slot) => {
+    const player = draft.teammates[slot];
+    return !player.open && Boolean(player.displayName.trim() || player.email.trim());
+  }).map((slot) => ({
+    slot,
+    display_name: draft.teammates[slot].displayName.trim(),
+    email: draft.teammates[slot].email.trim().toLowerCase(),
+    gender: slot.startsWith("MAN_") ? "Men" : "Women"
+  }));
+}
+
+export function newTeamMembers(
+  draft: TeamRegistrationDraft,
+  captain: { registration_id: string; email: string; display_name: string; gender?: string | null }
+) {
+  return [
+    { ...captain, slot: draft.captainSlot },
+    ...invitedTeamMembers(draft, TEAM_SLOTS.filter((slot) => slot !== draft.captainSlot))
+  ];
+}
+
+export function teamRegistrationSummary(draft: TeamRegistrationDraft) {
+  const slots = TEAM_SLOTS.filter((slot) => slot !== draft.captainSlot);
+  const vacancies = slots.length - invitedTeamMembers(draft, slots).length;
+  return `Team: ${draft.teamName.trim()}${vacancies ? ` · Needs ${vacancies} player${vacancies === 1 ? "" : "s"}` : ""}`;
+}
+
+export function validateTeamInvites(draft: TeamRegistrationDraft, slots: readonly TeamSlot[], captainEmail: string) {
+  const invites = invitedTeamMembers(draft, slots);
+  if (!invites.length) return "Enter at least one teammate’s name and email.";
+  const emails = new Set([captainEmail.trim().toLowerCase()]);
+  for (const invite of invites) {
+    if (!invite.display_name || !invite.email) {
+      return `Enter both a name and an email for ${slotLabels[invite.slot]}, or leave both blank.`;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invite.email)) return `Enter a valid email for ${slotLabels[invite.slot]}.`;
+    if (emails.has(invite.email)) return "Every player needs a different email address.";
+    emails.add(invite.email);
+  }
+  return null;
+}
+
 export function validateTeamRegistrationDraft(
   draft: TeamRegistrationDraft | undefined,
   captainEmail: string,
@@ -81,19 +126,7 @@ export function validateTeamRegistrationDraft(
   ) {
     return "Choose the men’s or women’s spot that matches your selection above.";
   }
-  const emails = [captainEmail.trim().toLowerCase()];
-  for (const slot of TEAM_SLOTS) {
-    if (slot === draft.captainSlot) continue;
-    const teammate = draft.teammates[slot];
-    if (!teammate.displayName.trim() || !teammate.email.trim()) {
-      return `Enter a name and email for ${slotLabels[slot]}.`;
-    }
-    emails.push(teammate.email.trim().toLowerCase());
-  }
-  if (new Set(emails).size !== 4) {
-    return "Every player needs a different email address.";
-  }
-  return null;
+  return validateTeamInvites(draft, TEAM_SLOTS.filter((slot) => slot !== draft.captainSlot), captainEmail);
 }
 
 type Props = {
@@ -102,6 +135,7 @@ type Props = {
   captainEmail: string;
   captainGender: string;
   value: TeamRegistrationDraft;
+  openSlots?: readonly TeamSlot[];
   onChange: (value: TeamRegistrationDraft) => void;
 };
 
@@ -110,11 +144,12 @@ export default function FourPlayerTeamRegistrationCard({
   captainName,
   captainEmail,
   value,
+  openSlots,
   onChange
 }: Props) {
   function updateTeammate(
     slot: TeamSlot,
-    patch: Partial<{ displayName: string; email: string }>
+    patch: Partial<TeammateDraft>
   ) {
     onChange({
       ...value,
@@ -127,52 +162,57 @@ export default function FourPlayerTeamRegistrationCard({
 
   return (
     <section className={styles.card} data-testid="four-player-team-roster">
-      <div className={styles.header}>
-        <div>
-          <h4>Four-player team roster</h4>
-          <p className={styles.hint}>
-            {publicTournamentEventLabel(event.event_family_label, event.division_name)}
-          </p>
-        </div>
-        <strong>2 men · 2 women</strong>
-      </div>
+      {openSlots ? <h4>Fill open roster spots</h4> : (
+        <>
+          <div className={styles.header}>
+            <div>
+              <h4>Four-player team roster</h4>
+              <p className={styles.hint}>
+                {publicTournamentEventLabel(event.event_family_label, event.division_name)}
+              </p>
+            </div>
+            <strong>2 men · 2 women</strong>
+          </div>
 
-      <label className={styles.field}>
-        Team name
-        <input
-          className={styles.input}
-          value={value.teamName}
-          onChange={(change) =>
-            onChange({ ...value, teamName: change.target.value })
-          }
-          autoComplete="organization"
-        />
-      </label>
+          <label className={styles.field}>
+            Team name
+            <input
+              className={styles.input}
+              value={value.teamName}
+              maxLength={180}
+              onChange={(change) =>
+                onChange({ ...value, teamName: change.target.value })
+              }
+              autoComplete="organization"
+            />
+          </label>
 
-      <label className={styles.field}>
-        Your roster spot
-        <select
-          className={styles.input}
-          value={value.captainSlot}
-          onChange={(change) =>
-            onChange({
-              ...value,
-              captainSlot: change.target.value as TeamSlot | ""
-            })
-          }
-        >
-          <option value="">Choose a spot</option>
-          {TEAM_SLOTS.map((slot) => (
-            <option key={slot} value={slot}>
-              {slotLabels[slot]}
-            </option>
-          ))}
-        </select>
-      </label>
-
+          <label className={styles.field}>
+            Your roster spot
+            <select
+              className={styles.input}
+              value={value.captainSlot}
+              onChange={(change) =>
+                onChange({
+                  ...value,
+                  captainSlot: change.target.value as TeamSlot | ""
+                })
+              }
+            >
+              <option value="">Choose a spot</option>
+              {TEAM_SLOTS.map((slot) => (
+                <option key={slot} value={slot}>
+                  {slotLabels[slot]}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
+      <p className={styles.hint}>Enter each teammate’s name and email. Leave both blank or select “Need a player” to keep a spot open.</p>
       <div className={styles.grid}>
-        {TEAM_SLOTS.map((slot) => {
-          const captain = slot === value.captainSlot;
+        {(openSlots || TEAM_SLOTS).map((slot) => {
+          const captain = !openSlots && slot === value.captainSlot;
           const teammate = value.teammates[slot];
           return (
             <article className={styles.slot} key={slot}>
@@ -186,28 +226,42 @@ export default function FourPlayerTeamRegistrationCard({
               ) : (
                 <>
                   <label className={styles.field}>
-                    Player name
-                    <input
+                    Roster entry
+                    <select
+                      aria-label={`${slotLabels[slot]} player choice`}
                       className={styles.input}
-                      value={teammate.displayName}
-                      onChange={(change) =>
-                        updateTeammate(slot, {
-                          displayName: change.target.value
-                        })
-                      }
-                    />
+                      value={teammate.open ? "open" : "invite"}
+                      onChange={(change) => updateTeammate(slot, { open: change.target.value === "open" })}
+                    >
+                      <option value="invite">Enter player details</option>
+                      <option value="open">Need a player</option>
+                    </select>
                   </label>
-                  <label className={styles.field}>
-                    Player email
-                    <input
-                      className={styles.input}
-                      type="email"
-                      value={teammate.email}
-                      onChange={(change) =>
-                        updateTeammate(slot, { email: change.target.value })
-                      }
-                    />
-                  </label>
+                  {!teammate.open && <>
+                    <label className={styles.field}>
+                      Player name
+                      <input
+                        className={styles.input}
+                        value={teammate.displayName}
+                        onChange={(change) =>
+                          updateTeammate(slot, {
+                            displayName: change.target.value
+                          })
+                        }
+                      />
+                    </label>
+                    <label className={styles.field}>
+                      Player email
+                      <input
+                        className={styles.input}
+                        type="email"
+                        value={teammate.email}
+                        onChange={(change) =>
+                          updateTeammate(slot, { email: change.target.value })
+                        }
+                      />
+                    </label>
+                  </>}
                 </>
               )}
             </article>

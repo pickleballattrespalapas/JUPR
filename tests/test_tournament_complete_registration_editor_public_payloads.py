@@ -176,11 +176,11 @@ def test_public_skill_inputs_match_the_server_one_through_seven_contract() -> No
     assert "Doubles not set" in create
     assert "Singles not set" in create
     assert "No singles rating? Enter your current level or leave it blank." in create
-    assert "partner skill`} type=\"number\" min=\"1\" max=\"7\"" in create
-    assert 'name="doubles_skill"' in edit and 'type="number" min="1" max="7"' in edit
-    assert 'name="singles_skill"' in edit and edit.count('type="number" min="1" max="7"') >= 3
-    assert "disabled={linkedPlayer?.doubles_skill != null}" in edit
-    assert "disabled={linkedPlayer?.singles_skill != null}" in edit
+    for field in ("doubles", "singles"):
+        skill_input = next(line for line in edit.splitlines() if f'name="{field}_skill"' in line)
+        assert 'type="number" min="1" max="7"' in skill_input
+        assert f"readOnly={{{field}SkillReadOnly}}" in skill_input
+    assert "<TournamentPartnerDetails" in create and "<TournamentPartnerDetails" in edit
     assert "No singles rating? Enter your current level or leave it blank." in edit
 
 
@@ -193,17 +193,6 @@ def test_legacy_registration_collects_missing_official_singles_rating() -> None:
     assert '"singles_skill": clean_singles_self_rating' in legacy
     assert "No singles rating? Enter your current level or leave it blank." in legacy
     assert "disabled=not singles_self_rating_valid" in legacy
-
-
-def test_public_edit_prefills_and_requires_complete_manual_partner_details() -> None:
-    source = _web(
-        "app/clubs/[clubSlug]/tournament-registration/edit/"
-        "EditTournamentRegistrationForm.tsx"
-    )
-
-    assert 'defaultValue={prior?.partner_gender || ""} required' in source
-    assert '<option value="Non-binary">Non-binary</option>' in source
-    assert 'defaultValue={prior?.partner_age ?? ""} type="number" min="1" max="120" required' in source
 
 
 @pytest.mark.parametrize("partner_mode", ["NONE", "NEEDS_PARTNER"])

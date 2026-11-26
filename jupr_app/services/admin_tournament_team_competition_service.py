@@ -883,6 +883,7 @@ def create_four_player_team(
     actor_email: str,
     idempotency_key: str,
     public_base_url: str | None = None,
+    fill_team_id: str | None = None,
     sender: Callable[..., dict[str, str]] = send_team_invitation_email,
 ) -> dict[str, Any]:
     require_admin_team_tournament_runtime()
@@ -904,32 +905,40 @@ def create_four_player_team(
         club_id=club_id,
         tournament_id=tournament_id,
         surface="registration",
-        action="four_player_team_create",
-        entity_type="tournament_event_option",
-        entity_id=event_option_id,
-        expected_state="new-team",
+        action="four_player_team_fill" if fill_team_id else "four_player_team_create",
+        entity_type="tournament_four_player_team" if fill_team_id else "tournament_event_option",
+        entity_id=fill_team_id or event_option_id,
+        expected_state="open-spots" if fill_team_id else "new-team",
         payload=payload,
         idempotency_key=idempotency_key,
     )
-    raw = _rpc_data(
-        supabase.rpc(
-            "admin_create_tournament_four_player_team",
-            {
-                "p_club_id": str(club_id),
-                "p_tournament_id": str(tournament_id),
-                "p_event_option_id": str(event_option_id),
-                "p_team_name": team_name,
-                "p_captain_registration_id": str(captain_registration_id),
-                "p_members": normalized_members,
-                "p_creation_fingerprint": creation_fingerprint,
-                "p_operation_key": op["operation_key"],
-                "p_request_fingerprint": op["request_fingerprint"],
-                "p_actor": actor_email,
-            },
-        ).execute()
-    )
-    if not isinstance(raw, dict):
-        raise RuntimeError("Team creation did not return the expected result.")
+    params = {
+        "p_club_id": str(club_id),
+        "p_tournament_id": str(tournament_id),
+        "p_event_option_id": str(event_option_id),
+        "p_captain_registration_id": str(captain_registration_id),
+        "p_members": normalized_members,
+        "p_operation_key": op["operation_key"],
+        "p_request_fingerprint": op["request_fingerprint"],
+        "p_actor": actor_email,
+    }
+    if fill_team_id:
+        params["p_team_id"] = fill_team_id
+        rpc = "server_fill_tournament_four_player_team_spots"
+    else:
+        params.update(p_team_name=team_name, p_creation_fingerprint=creation_fingerprint)
+        rpc = "admin_create_tournament_four_player_team"
+    try:
+        result = _call_rpc(supabase, rpc, params)
+    except Exception as exc:
+        for marker, message in (
+            ("JUPR_TOURNAMENT_TEAM_SPOT_ALREADY_FILLED", "That spot or player is already on the roster. Refresh to see the latest team."),
+            ("JUPR_TOURNAMENT_TEAM_ROSTER_LOCKED", "Team registration changes are closed. Contact the organizer."),
+            ("JUPR_TOURNAMENT_CAPTAIN_EVENT_SELECTION_REQUIRED", "Only the registered captain can fill this team's open spots."),
+        ):
+            if marker in str(exc):
+                raise ValueError(message) from exc
+        raise
     tournament = _one(
         supabase,
         "tournaments",
@@ -937,7 +946,6 @@ def create_four_player_team(
     )
     if not tournament:
         raise RuntimeError("Tournament disappeared after team creation.")
-    result = dict(raw)
     captain = next(
         (
             row

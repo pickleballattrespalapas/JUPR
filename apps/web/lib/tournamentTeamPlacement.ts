@@ -23,3 +23,12 @@ export function playersNeedingTeam(snapshot: TeamCompetitionSnapshot | null, eve
         : Boolean(email) && String(member.invited_email || "").trim().toLowerCase() === email);
   });
 }
+
+export function teamOpeningsLabel(slots: readonly string[]): string {
+  const men = slots.filter(slot => slot.startsWith("MAN_")).length;
+  const women = slots.filter(slot => slot.startsWith("WOMAN_")).length;
+  return [
+    men ? `${men} ${men === 1 ? "man" : "men"}` : "",
+    women ? `${women} ${women === 1 ? "woman" : "women"}` : ""
+  ].filter(Boolean).join(" and ");
+}

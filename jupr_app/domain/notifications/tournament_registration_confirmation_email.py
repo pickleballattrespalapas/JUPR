@@ -71,6 +71,7 @@ def _event_view(selection: dict[str, Any], day: dict[str, Any] | None = None, ev
         "division_name": _safe_text(event.get("division_name") or event.get("label") or selection.get("division_name") or selection.get("division")),
         "skill_label": _safe_text(event.get("skill_label") or selection.get("skill_label")),
         "age_label": _safe_text(event.get("age_label") or selection.get("age_label")),
+        "competition_format": _safe_text(event.get("competition_format") or selection.get("competition_format")).upper(),
         "partner_mode": _safe_text(selection.get("partner_mode") or "NONE").upper() or "NONE",
         "partner_name": _safe_text(selection.get("partner_name")),
         "price_usd": _coerce_money(event.get("price_usd", selection.get("price_usd"))),
@@ -151,7 +152,7 @@ def _partner_display(event: dict[str, Any]) -> str:
     if mode == "HAS_PARTNER":
         return f"Partner: {name}" if name else "Partner entered"
     if mode == "NEEDS_PARTNER":
-        return "Needs partner"
+        return "Needs a team" if event.get("competition_format") == "FOUR_PLAYER_TEAM" else "Needs partner"
     return "—"
 
 
