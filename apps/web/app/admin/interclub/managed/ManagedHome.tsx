@@ -57,7 +57,7 @@ export default function ManagedHome({ clubId, accessToken, initialId }: { clubId
       <p>Manage the teams and schedule here. Send each host a private meet link to print score sheets or enter scores live.</p></div></header>
     {error && <div role="alert" className={styles.error}>{error} <button onClick={() => setReload(n => n + 1)}>Reload seasons</button></div>}
     {!ready && !error && <p>Loading your leagues…</p>}
-    <form onSubmit={create} className={styles.panel}><h2>Create a season</h2><p>Participating clubs need only a name and roster. No club accounts or invitations.</p>
+    <form onSubmit={create} className={styles.panel}><h2>Create a season</h2><p>Add your clubs, then give each captain a private registration link. Captains can register and offer dates to host without creating an account.</p>
       <div className={styles.toolbar}><label className={styles.field}>Season name<input required maxLength={120} value={name} onChange={e => setName(e.target.value)} /></label>
         <button className={styles.primary} disabled={busy || !ready || !name.trim()}>{busy ? "Opening…" : "Create season"}</button></div></form>
     <div className={styles.cards}>{seasons.map(season => <article key={season.id} className={styles.card}><h2>{season.details.name}</h2>

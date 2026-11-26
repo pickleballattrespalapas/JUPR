@@ -11,6 +11,7 @@ await db.exec(`create role anon; create role authenticated; create role service_
  create table pcs_interclub_seasons(id uuid primary key,organizer_club_id text);
  grant select on admin_role_assignments,clubs,pcs_interclub_seasons to service_role;`);
 await db.exec(fs.readFileSync(new URL('../../supabase/migrations/20261114223140_interclub_organizer_managed.sql', import.meta.url), 'utf8'));
+await db.exec(fs.readFileSync(new URL('../../supabase/migrations/20261126120000_managed_interclub_club_entries.sql', import.meta.url), 'utf8'));
 await db.exec('set role service_role');
 http.createServer(async (req, res) => {
  res.setHeader('Content-Type', 'application/json');

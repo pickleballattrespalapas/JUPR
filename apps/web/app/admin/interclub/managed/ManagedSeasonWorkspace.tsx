@@ -6,13 +6,14 @@ import { CompetitionStandings } from "@/components/PublicInterclubCompetition";
 import ManagedScoreboard from "@/components/interclub/ManagedScoreboard";
 import TeamsEditor from "./TeamsEditor";
 import MeetPlanner from "./MeetPlanner";
+import ClubRegistrations, { type SelectedHostOffer } from "./ClubRegistrations";
 import styles from "../setup.module.css";
 
-const tabs = ["Teams & Players", "Schedule", "Enter Results", "Standings"] as const;
+const tabs = ["Teams & Players", "Club registrations", "Schedule", "Enter Results", "Standings"] as const;
 export default function ManagedSeasonWorkspace({ root, accessToken, initial, onClose }: { root: string; accessToken: string; initial: ManagedContext; onClose: () => void }) {
   const [data, setData] = useState(initial), [tab, setTab] = useState<typeof tabs[number]>("Teams & Players");
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [status, setStatus] = useState("");
-  const [planner, setPlanner] = useState<{ meet?: ManagedMeet } | null>(null), [selected, setSelected] = useState(initial.meets[0]?.id || "");
+  const [planner, setPlanner] = useState<{ meet?: ManagedMeet; hostOffer?: SelectedHostOffer } | null>(null), [selected, setSelected] = useState(initial.meets[0]?.id || "");
   const [hostLinks, setHostLinks] = useState<Record<string, string>>({}), [reason, setReason] = useState("");
   const [scoreDirty, setScoreDirty] = useState(false);
   const pending = useRef(false);
@@ -45,29 +46,33 @@ export default function ManagedSeasonWorkspace({ root, accessToken, initial, onC
     standings: details.divisions.map(division => ({ division, rows: data.standings.divisions[division] || [] })), qualification: data.standings.qualification,
     club_cup: { ...data.club_cup, standings: data.club_cup.standings.map(row => ({ ...row, regular_points: row.regular_points || 0, championship_points: row.championship_points || 0 })) } };
   return <section className={styles.page}>
-    <header className={styles.header}><div><p className={styles.eyebrow}>Organizer workspace</p><h1>{details.name}</h1><p>One league, one account. Hosts use their private meet links.</p></div>
+    <header className={styles.header}><div><p className={styles.eyebrow}>Organizer workspace</p><h1>{details.name}</h1><p>Invite club captains, review host dates, and confirm meets here.</p></div>
       <button disabled={busy || scoreDirty} onClick={onClose}>All interclub leagues</button></header>
     <nav aria-label="League workspace" className={styles.toolbar}>{tabs.map(label => <button key={label} aria-current={tab === label ? "page" : undefined}
-      className={tab === label ? styles.primary : undefined} disabled={busy || scoreDirty} onClick={() => { setTab(label); setPlanner(null); }}>{label}</button>)}</nav>
+      className={tab === label ? styles.primary : undefined} disabled={busy || scoreDirty} onClick={() => setTab(label)}>{label}</button>)}</nav>
     {scoreDirty && <p>Keep this meet open until its scores are saved before switching sections.</p>}
     {error && <div role="alert" className={styles.error}><p>{error}</p><button disabled={busy} onClick={() => safe(() => request("", "GET"))}>Reload saved league</button></div>}
     <p role="status">{busy ? "Saving…" : status}</p>
-    {tab === "Teams & Players" && <>
+    <div hidden={tab !== "Teams & Players"}>
       <SeasonSettings key={JSON.stringify({ ...details, clubs: [] })} details={details} disabled={busy} onSave={saveDetails} />
       <TeamsEditor details={details} disabled={busy} onSave={saveDetails} />
-    </>}
-    {tab === "Schedule" && <>
+    </div>
+    <div hidden={tab !== "Club registrations"}>
+      <ClubRegistrations root={root} accessToken={accessToken} clubs={details.clubs} active={tab === "Club registrations"}
+        plannerOpen={!!planner} onPlan={hostOffer => { setPlanner({ hostOffer }); setTab("Schedule"); }} />
+    </div>
+    <div hidden={tab !== "Schedule"}>
       <h2>Meet schedule</h2><p>Choose the host, date and lineups. Generate the court schedule before sharing the host link.</p>
       {!planner && <button disabled={busy || details.clubs.length < 2} onClick={() => setPlanner({})}>Add meet</button>}
       {details.clubs.length < 2 && <p>Add at least two participating clubs first.</p>}
-      {planner && <MeetPlanner key={planner.meet?.id || "new"} details={details} meet={planner.meet} disabled={busy} onSave={saveMeet} onCancel={() => setPlanner(null)} />}
+      {planner && <MeetPlanner key={planner.meet?.id || "new"} details={details} meet={planner.meet} hostOffer={planner.hostOffer} disabled={busy} onSave={saveMeet} onCancel={() => setPlanner(null)} />}
       <div className={styles.cards}>{data.meets.map(meet => <article className={styles.card} key={meet.id}><h3>{when(meet.details.starts_at)}</h3>
         <p>Host: <strong>{clubName(meet.details.host_club_id)}</strong> · {meet.details.courts} courts</p><p>{meet.details.club_ids.map(clubName).join(" · ")}</p><p>{managedState[meet.state]}</p>
-        <div className={styles.toolbar}>{["planning", "draft"].includes(meet.state) && <button disabled={busy} onClick={() => setPlanner({ meet })}>Edit date & lineups</button>}
+        <div className={styles.toolbar}>{["planning", "draft"].includes(meet.state) && <button disabled={busy || !!planner} onClick={() => setPlanner({ meet })}>Edit date & lineups</button>}
           {meet.state === "planning" ? <button disabled={busy || !meet.details.teams.length} onClick={() => safe(() => action(meet, "generate"))}>Generate court schedule</button> :
             <button disabled={busy} onClick={() => { setSelected(meet.id); setTab("Enter Results"); }}>Open meet & host link</button>}</div>
       </article>)}</div>
-    </>}
+    </div>
     {tab === "Enter Results" && <>
       <h2>Meet schedules & results</h2><label className={styles.field}>Meet<select disabled={busy || scoreDirty} value={selected} onChange={e => { setSelected(e.target.value); setReason(""); }}>
         <option value="">Choose a meet</option>{data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.details.starts_at)} · {clubName(meet.details.host_club_id)} · {managedState[meet.state]}</option>)}</select></label>
