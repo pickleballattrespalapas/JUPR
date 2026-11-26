@@ -93,6 +93,8 @@ async function testNewRegistration(rating = 3.4) {
   assert.ok(renderer.root.findAllByType("input").some(node => node.props.type === "radio" && node.props.checked && content(node.parent).includes("Fixture Partner")), "The exact matching partner is selected without a click");
   assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill));
   assert.equal(field("Below 9 partner skill").props.step, "any", "Partner ratings must accept full profile precision");
+  assert.equal(field("Below 9 partner skill").props.min, "1");
+  assert.equal(field("Below 9 partner skill").props.max, "7");
   assert.equal(field("Below 9 partner skill").props.readOnly, true);
   await change("Below 9 partner skill", "2.5");
   assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill), "Selected partner ratings cannot be edited");
@@ -154,6 +156,14 @@ async function testEditing() {
   assert.ok(renderer.root.findAllByType("input").some(node => node.props.type === "radio" && node.props.checked && content(node.parent).includes("Fixture Partner")), "The exact matching partner is selected without a click");
   assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill), "Profile selection updates controlled edit fields");
   assert.equal(field("Below 9 partner gender").props.value, "Women");
+  const genderField = field("Below 9 partner gender");
+  const ageField = field("Below 9 partner age");
+  assert.equal(genderField.props.required, true);
+  assert.ok(genderField.findAllByType("option").some(option => option.props.value === "Non-binary"));
+  assert.equal(ageField.props.value, "70");
+  assert.equal(ageField.props.required, true);
+  assert.equal(ageField.props.min, "1");
+  assert.equal(ageField.props.max, "120");
   assert.equal(field("Below 9 partner skill").props.readOnly, true);
   await change("Below 9 partner skill", "2.5");
   assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill));

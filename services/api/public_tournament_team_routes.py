@@ -30,7 +30,8 @@ class PublicTeamCreateRequest(BaseModel):
     team_name: str = Field(min_length=1, max_length=180)
     captain_registration_id: str
     confirmation_token: str = Field(min_length=24, max_length=4096)
-    members: list[dict[str, Any]] = Field(min_length=4, max_length=4)
+    members: list[dict[str, Any]] = Field(min_length=1, max_length=4)
+    fill_team_id: str | None = Field(default=None, min_length=1, max_length=160)
     idempotency_key: str = Field(min_length=8, max_length=160)
     website: str | None = None
 
@@ -52,6 +53,8 @@ class PublicTeamInvitationResponseRequest(PublicTeamInvitationResolveRequest):
 
 
 def _handle(exc: Exception) -> None:
+    if "JUPR_TOURNAMENT_TEAM_INVITATION_EVENT_SELECTION_REQUIRED" in str(exc):
+        raise HTTPException(status_code=400, detail="Register for this division before accepting the team invitation.") from exc
     if isinstance(exc, ValueError):
         detail = str(exc)
         status = 404 if "not found" in detail.lower() else 400
@@ -163,6 +166,7 @@ def install_public_tournament_team_routes(
                 captain_registration_id=payload.captain_registration_id,
                 confirmation_token=payload.confirmation_token,
                 members=payload.members,
+                fill_team_id=payload.fill_team_id,
                 idempotency_key=payload.idempotency_key,
             )
         except Exception as exc:

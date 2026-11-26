@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "156298f1bf4efa6ae9c1f08d943f2785750ec3fed4652118a346cfcf52eabfb4",
+  "repository_migration_content_sha256": "4d3b617d12648d96cd7795a1ad25261097b4ecebd45c01815b8d5182377eaea1",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -110,6 +110,7 @@
     "registration_attempt_history",
     "registration_cancellation_audit_policies",
     "reharden_staging_feature_objects",
+    "reopen_four_player_team_after_withdrawal",
     "repair_next_staging_schema_contract",
     "repair_tournament_game_draw_scoped_uniqueness",
     "replay_job_idempotency",
@@ -171,6 +172,7 @@
     "tournament_setup_policies_multiday",
     "tournament_sponsor_logo_storage",
     "tournament_team_division_transfer",
+    "tournament_team_open_roster_spots",
     "tournament_team_retirement_results",
     "tournament_terminal_completion_and_schedule_recovery",
     "tournament_venue_inventory",

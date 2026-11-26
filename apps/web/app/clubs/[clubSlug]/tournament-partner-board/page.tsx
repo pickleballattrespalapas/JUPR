@@ -139,6 +139,9 @@ export default async function TournamentPartnerBoardPage(props: Props) {
   }
 
   const partnerEntries = data?.roster?.partner_board_entries || [];
+  const rosterEntries = data?.roster?.registrations_by_event || [];
+  const teamsSeekingPlayers = rosterEntries.filter(entry => entry.status === "Needs Players").length;
+  const soloEntries = rosterEntries.filter(entry => entry.status === "Needs Team").length;
   const eventChoices = Array.from(
     new Map(
       partnerEntries.map((entry) => [eventKey(entry), eventLabel(entry)])
@@ -256,6 +259,28 @@ export default async function TournamentPartnerBoardPage(props: Props) {
           <div><strong>Tournament players</strong><br />{data?.summary?.total_players ?? 0}</div>
         </div>
       </article>
+
+      {teamsSeekingPlayers || soloEntries ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Four-player team openings</h2>
+          <ul>
+            {teamsSeekingPlayers > 0 ? (
+              <li>
+                <Link href={`/clubs/${params.clubSlug}/tournament-roster${selectedQuery}&status=Needs+players`}>
+                  Teams needing players ({teamsSeekingPlayers})
+                </Link>
+              </li>
+            ) : null}
+            {soloEntries > 0 ? (
+              <li>
+                <Link href={`/clubs/${params.clubSlug}/tournament-roster${selectedQuery}&status=Needs+a+team`}>
+                  Individual entries needing a team ({soloEntries})
+                </Link>
+              </li>
+            ) : null}
+          </ul>
+        </article>
+      ) : null}
 
       {editToken && editResponse.data ? (
         <PartnerRequestReviewPanel

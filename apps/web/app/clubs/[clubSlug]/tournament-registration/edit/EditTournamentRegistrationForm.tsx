@@ -804,9 +804,11 @@ export default function EditTournamentRegistrationForm({
                     {schedule || "Schedule TBD"} · {eventMeta(eventOption)}
                   </p>
                   <span style={{ color: "#475569" }}>
-                    Partner: {eventId === partnerInvitation.invitation?.registration_prefill?.event_option_id
-                      ? partnerInvitation.invitation.target_name
-                      : savedSelection?.confirmed_partner_name || partnerStatusLabel(mode)}
+                    {eventOption.competition_format === "FOUR_PLAYER_TEAM"
+                      ? mode === "NEEDS_PARTNER" ? "Needs a team" : "Four-player team entry"
+                      : `Partner: ${eventId === partnerInvitation.invitation?.registration_prefill?.event_option_id
+                        ? partnerInvitation.invitation.target_name
+                        : savedSelection?.confirmed_partner_name || partnerStatusLabel(mode)}`}
                   </span>
                   {savedSelection && savedSelection.event_option_id !== eventId ? <p style={{ color: "#92400e", marginBottom: 0 }}>Division change not saved yet.</p> : null}
                   {eligibilityReason ? <p role="alert" style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason} Update the player details or choose another division before saving.</p> : null}
@@ -1005,7 +1007,23 @@ export default function EditTournamentRegistrationForm({
               {divisionChanged ? <p role="status" style={{ margin: 0, padding: "0.85rem", background: "#eff6ff", borderRadius: "10px", color: "#1e40af" }}>
                 {originalEvent?.division_name || "Current division"} → {eventOption.division_name}. {confirmedTeamTransfer ? `You and ${savedSelection?.confirmed_partner_name || "your confirmed partner"} will move together. ` : ""}Select Save changes to confirm.
               </p> : null}
-              {confirmedTeamTransfer ? <p style={{ margin: 0 }}>Your confirmed partner is kept for this move. To change partners, save that separately before changing division.</p> : <>
+              {eventOption.competition_format === "FOUR_PLAYER_TEAM" ? (
+                <section>
+                  {!savedSelection && <label>How are you registering?
+                    <select
+                      style={{ display: "block", minHeight: "44px", width: "100%", font: "inherit" }}
+                      value={mode}
+                      onChange={(change) => setPartnerModes((current) => ({
+                        ...current, [editingEventId]: change.target.value as "NONE" | "NEEDS_PARTNER"
+                      }))}
+                    >
+                      <option value="NONE">I’m registering a full or partial team</option>
+                      <option value="NEEDS_PARTNER">I need a team</option>
+                    </select>
+                  </label>}
+                  <p>{mode === "NEEDS_PARTNER" ? "You’re registering as an individual who needs a team." : "Use your registration confirmation to manage your team roster."} After saving, select “View updated registration” to see your team options.</p>
+                </section>
+              ) : <>{confirmedTeamTransfer ? <p style={{ margin: 0 }}>Your confirmed partner is kept for this move. To change partners, save that separately before changing division.</p> : <>
               {invitedEvent ? <p>Partner: <strong>{partnerInvitation.invitation?.target_name}</strong>. PCS will add your partner automatically when you save. Keep this division selected to complete the partnership.</p> : eventOption.partner_required ? (
                 <fieldset style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
                   <legend style={{ fontSize: "1.125rem", fontWeight: 800, marginBottom: "0.5rem" }}>Do you have a partner?</legend>
@@ -1067,6 +1085,7 @@ export default function EditTournamentRegistrationForm({
               </>}
               <label>Public partner note (optional)<br /><textarea aria-describedby="edit-partner-note-help" disabled={confirmedTeamTransfer} value={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%", font: "inherit" }} /></label>
               <p id="edit-partner-note-help" style={{ margin: 0, color: "#475569", fontSize: "0.9rem" }}>Visible to everyone when you are listed in Players Needing Partners. Use Notes for organizers for private messages to tournament staff.</p>
+              </>}
             </fieldset>
             {commerce?.available && commerceQuote ? <p><strong>Registration total: {formatCommerceMoney(commerceQuote.total_minor)}</strong></p> : null}
             <p style={{ color: "#475569", fontSize: "1rem" }}>{saveAgreement}</p>

@@ -16,6 +16,8 @@ type Invitation = {
   team?: { name?: string };
   invitation?: {
     invited_name?: string;
+    event_label?: string;
+    needs_event_selection?: boolean;
     slot?: string;
     status?: string;
   };
@@ -46,6 +48,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
   const [invitation, setInvitation] = useState<Invitation | null>(null);
   const [message, setMessage] = useState("Checking your invitation…");
   const [pending, setPending] = useState(false);
+  const [checkCount, setCheckCount] = useState(0);
 
   useEffect(() => {
     const raw = window.location.hash.slice(1);
@@ -54,32 +57,36 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
       "",
       `${window.location.pathname}${window.location.search}`
     );
-    if (!raw) {
+    if (!raw && !token.current) {
       setMessage("This invitation link is incomplete. Open the original link from your invitation email.");
       return;
     }
     try {
-      token.current = decodeURIComponent(
+      if (raw) token.current = decodeURIComponent(
         raw.startsWith("token=") ? raw.slice("token=".length) : raw
       );
     } catch {
       setMessage("This invitation link is incomplete. Open the original link from your invitation email.");
       return;
     }
+    let active = true;
     void (async () => {
       const response = await resolvePublicTeamInvitation(
         clubSlug,
         token.current
       );
+      if (!active) return;
+      setPending(false);
       if (response.error || !response.data) {
-        token.current = "";
-        setMessage("This invitation is unavailable. It may have expired or already been answered.");
+        setMessage(response.error || "We couldn’t open this invitation. Try the original link again.");
         return;
       }
-      setInvitation(response.data as Invitation);
-      setMessage("");
+      const resolved = response.data as Invitation;
+      setInvitation(resolved);
+      setMessage(checkCount && !resolved.registration ? "We couldn’t find a confirmed registration for the invited email yet." : "");
     })();
-  }, [clubSlug]);
+    return () => { active = false; };
+  }, [clubSlug, checkCount]);
 
   async function respond(action: "ACCEPT" | "DECLINE") {
     const registrationId = invitation?.registration?.id;
@@ -101,7 +108,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
     });
     setPending(false);
     if (response.error) {
-      setMessage("We couldn’t update this invitation. Please try again.");
+      setMessage(response.error);
       return;
     }
     token.current = "";
@@ -139,6 +146,26 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
             Roster spot:{" "}
             {rosterSpotLabel(invitation.invitation?.slot)}
           </p>
+          {invitation.invitation?.status === "ACCEPTED" ? (
+            <p>You’ve already accepted this team invitation.</p>
+          ) : !invitation.registration?.id || invitation.invitation?.needs_event_selection ? (
+            <>
+              {invitation.registration?.id ? (
+                <p>Choose “Edit my registration” to add {invitation.invitation?.event_label || "the invited division"}, then return here to accept your spot.</p>
+              ) : (
+                <p>Register for {invitation.invitation?.event_label || "this division"} using the email that received this invitation. Choose individual signup, then return here to accept your spot.</p>
+              )}
+              <a href={`/clubs/${encodeURIComponent(clubSlug)}/tournament-registration?tournament_id=${encodeURIComponent(invitation.tournament?.id || "")}`} target="_blank" rel="noopener noreferrer">
+                {invitation.registration?.id ? "Open tournament registration" : "Register for this tournament"}
+              </a>
+              <p><button type="button" disabled={pending} style={button} onClick={() => {
+                setPending(true);
+                setMessage("Checking your registration…");
+                setCheckCount(count => count + 1);
+              }}>Check my registration</button></p>
+              {invitation.registration?.id ? <button type="button" disabled={pending} style={button} onClick={() => void respond("DECLINE")}>Decline</button> : null}
+            </>
+          ) : (
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem" }}>
             <button
               type="button"
@@ -157,6 +184,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
               Decline
             </button>
           </div>
+          )}
         </>
       ) : null}
       {message ? <p role="status">{message}</p> : null}

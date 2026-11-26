@@ -2,6 +2,7 @@ import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "@/components/PublicClubLink";
 import { redirect } from "next/navigation";
 import PublicTournamentModuleHeader from "@/components/PublicTournamentModuleHeader";
+import { teamOpeningsLabel } from "@/lib/tournamentTeamPlacement";
 import { countIndividualEventEntries } from "@/lib/tournamentRosterCounts";
 import {
   getClubTournamentRoster,
@@ -88,6 +89,9 @@ function statusLabel(entry: PublicTournamentRosterEntry): string {
   if (value === "registered") return "Registered";
   if (value === "waitlist") return "Waitlisted";
   if (value === "needs partner") return "Needs a partner";
+  if (value === "team invitation pending") return "Team invitation pending";
+  if (value === "needs players") return "Needs players";
+  if (value === "needs team") return "Needs a team";
   if (value === "pending partner request") return "Partner request pending";
   if (value === "pending registration") return "Pending registration";
   return "Under review";
@@ -97,7 +101,7 @@ function statusStyle(status: string) {
   if (status === "Registered") {
     return { background: "#dcfce7", borderColor: "#86efac", color: "#166534" };
   }
-  if (status === "Needs a partner" || status === "Partner request pending" || status === "Pending registration") {
+  if (status === "Needs a partner" || status === "Team invitation pending" || status === "Needs players" || status === "Needs a team" || status === "Partner request pending" || status === "Pending registration") {
     return { background: "#fef3c7", borderColor: "#fde68a", color: "#92400e" };
   }
   if (status === "Waitlisted") {
@@ -377,7 +381,7 @@ export default async function TournamentRosterPage(props: Props) {
                           alignItems: "flex-start"
                         }}
                       >
-                        <strong>{entry.entry_type || "Entry"}</strong>
+                        <strong>{entry.team_name || entry.entry_type || "Entry"}</strong>
                         <span
                           style={{
                             border: `1px solid ${tone.borderColor}`,
@@ -399,6 +403,16 @@ export default async function TournamentRosterPage(props: Props) {
                           </li>
                         ))}
                       </ul>
+                      {entry.open_team_slots?.length ? (
+                        <p style={{ margin: "0.65rem 0 0" }}>
+                          {4 - entry.open_team_slots.length} of 4 spots named. Looking for {teamOpeningsLabel(entry.open_team_slots)}.
+                        </p>
+                      ) : null}
+                      {status === "Needs a team" ? (
+                        <p style={{ margin: "0.65rem 0 0", color: "#475569" }}>
+                          Registered individually and awaiting team assignment.
+                        </p>
+                      ) : null}
                       {entry.combined_rating != null ? (
                         <p style={{ margin: "0.65rem 0 0", fontWeight: 700 }}>
                           Combined rating: {entry.combined_rating.toFixed(2)}
