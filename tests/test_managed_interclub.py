@@ -116,9 +116,13 @@ def api(monkeypatch):
         def execute():
             if state['code']:
                 error=RuntimeError('Sensitive database detail');error.code=state['code'];raise error
+            if name == 'pcs_managed_interclub_club_link':
+                return SimpleNamespace(data=0)
+            if name == 'pcs_managed_interclub_club_entry':
+                return SimpleNamespace(data={'registration':params.get('p_registration')})
             return SimpleNamespace(data=deepcopy(season if params['p_action']=='season' else meet))
         return SimpleNamespace(execute=execute)
-    tables={routes.SEASONS:[season],routes.MEETS:[meet]}
+    tables={routes.SEASONS:[season],routes.MEETS:[meet],routes.CLUB_ENTRIES:[]}
     db=SimpleNamespace(table=lambda name:Query(tables[name]),rpc=rpc)
     state['db']=db
     monkeypatch.setattr(routes,'site_administrator',authorize)
@@ -223,3 +227,69 @@ def test_existing_season_import_keeps_original_records_and_official_scores():
     tables['pcs_interclub_competition_batches'].append(dict(tables['pcs_interclub_competition_batches'][0],phase='final'))
     with pytest.raises(HTTPException) as exc: routes.import_legacy(db,'tres_palapas',sid)
     assert exc.value.status_code == 422
+
+
+def captain_registration(**changes):
+    return {
+        'captain': 'Capitana', 'contact_method': 'whatsapp', 'contact': '+52 (612) 123-4567',
+        'divisions': ['3.5'], 'participation': 'host_travel', 'travel_notes': '',
+        'host_offers': [{'date': '2027-02-10'}], **changes,
+    }
+
+
+def test_club_entry_uses_only_private_token_or_organizer_authority(api):
+    client, state = api
+    sid = state['season']['id']
+    admin_path = f'/admin/clubs/tres_palapas/interclub/managed/{sid}/club-entries'
+    other_path = admin_path.replace('tres_palapas', 'other')
+    assert client.get(other_path).status_code == 403
+    assert client.post(other_path+'/club-a/link').status_code == 403
+    assert client.get(admin_path).json() == {'entries': []}
+    issued = client.post(admin_path+'/club-a/link')
+    assert issued.status_code == 200
+    token = issued.json()['token']
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    name, params = state['calls'][-1]
+    assert name == 'pcs_managed_interclub_club_link'
+    assert params['p_token_hash'] == digest and params['p_entry_club_id'] == 'club-a'
+    assert params['p_organizer_club_id'] == 'tres_palapas' and params['p_actor_id']
+    assert token not in str(params)
+    public_path = '/public/interclub-club-entry'
+    assert client.post(public_path+'/read', json={'token':token}).status_code == 200
+    assert state['calls'][-1] == ('pcs_managed_interclub_club_entry', {'p_token_hash':digest})
+    data = {'token':token, 'expected_revision':0, 'registration':captain_registration()}
+    saved = client.post(public_path+'/save', json=data)
+    assert saved.status_code == 200 and saved.headers['cache-control'] == 'no-store'
+    assert saved.json()['registration']['host_offers'][0] == {
+        'date':'2027-02-10', 'start_time':None, 'end_time':None, 'courts':None,
+    }
+    assert set(state['calls'][-1][1]) == {'p_token_hash','p_expected_revision','p_registration'}
+    for code, status in [('PT409',409), ('P0002',404), ('22023',422), ('unexpected',503)]:
+        state['code'] = code
+        response = client.post(public_path+'/save', json=data)
+        assert response.status_code == status and 'Sensitive' not in response.text and token not in response.text
+        assert response.headers['cache-control'] == 'no-store'
+
+
+@pytest.mark.parametrize('changes', [
+    {'captain':' '}, {'contact_method':'email','contact':'not-an-email'}, {'contact':'+1-2'},
+    {'divisions':[]}, {'divisions':['3.5','3.5']}, {'participation':'travel'},
+    {'host_offers':[{'date':'2027-02-01'},{'date':'2027-02-01'}]},
+    {'host_offers':[{'date':'2027-02-01','start_time':'08:00','end_time':'07:00'}]},
+    {'host_offers':[{'date':'2027-02-01','start_time':'25:00','courts':101}]},
+    {'host_offers':[{'date':f'2027-02-0{n}'} for n in range(1,4)]},
+])
+def test_invalid_club_registration_does_not_write(api, changes):
+    client, state = api
+    data = {'token':'a'*43, 'expected_revision':0, 'registration':captain_registration(**changes)}
+    assert client.post('/public/interclub-club-entry/save', json=data).status_code == 422
+    assert not state['calls']
+
+
+def test_travel_only_registration_needs_no_host_or_roster(api):
+    client, state = api
+    for method, contact in (('email','captain@example.org'),('phone','612 123 4567')):
+        data = {'token':'a'*43, 'expected_revision':0,
+                'registration':captain_registration(contact_method=method, contact=contact, participation='travel', host_offers=[])}
+        assert client.post('/public/interclub-club-entry/save', json=data).status_code == 200
+        assert state['calls'][-1][1]['p_registration']['host_offers'] == []

@@ -37,10 +37,20 @@ class Read:
 class DB:
     def table(self, table): return Read(table)
     def rpc(self, name, values):
-        assert name == 'pcs_managed_interclub_write'
-        args = [values[k] for k in ('p_actor_id','p_actor_email','p_club_id','p_season_id','p_meet_id','p_action','p_revision','p_payload','p_token_hash')]
-        args[7] = json.dumps(args[7])
-        return SimpleNamespace(execute=lambda: SimpleNamespace(data=query('select pcs_managed_interclub_write($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9) as result', args)[0]['result']))
+        arguments = {
+            'pcs_managed_interclub_write': ('p_actor_id', 'p_actor_email', 'p_club_id', 'p_season_id', 'p_meet_id', 'p_action', 'p_revision', 'p_payload', 'p_token_hash'),
+            'pcs_managed_interclub_club_link': ('p_actor_id', 'p_actor_email', 'p_organizer_club_id', 'p_season_id', 'p_entry_club_id', 'p_token_hash'),
+            'pcs_managed_interclub_club_entry': ('p_token_hash', 'p_expected_revision', 'p_registration'),
+        }[name]
+        params = []
+        placeholders = []
+        for index, key in enumerate(arguments, start=1):
+            value = values.get(key)
+            is_json = key in {'p_payload', 'p_registration'}
+            params.append(json.dumps(value) if is_json and value is not None else value)
+            placeholders.append(f'${index}' + ('::jsonb' if is_json else ''))
+        sql = f"select {name}({','.join(placeholders)}) as result"
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=query(sql, params)[0]['result']))
 
 def admin(factory, authorization, club_id):
     if authorization != 'Bearer local-reviewer' or club_id != 'tres_palapas': raise HTTPException(403, 'Fixture organizer only')

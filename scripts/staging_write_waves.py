@@ -134,6 +134,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/public/interclub-signups/{share_id}"),
         ("POST", "/public/interclub-host/read"),
         ("POST", "/public/interclub-host/write"),
+        ("POST", "/public/interclub-club-entry/read"),
+        ("POST", "/public/interclub-club-entry/save"),
         ("POST", "/public/interclub-meet-signups/{share_id}"),
         ("POST", "/public/interclub-meet-signups/review"),
         ("POST", "/public/interclub-meet-signups/withdraw"),
@@ -225,6 +227,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     "league-manager": (
         ("PUT", "/admin/clubs/{club_id}/interclub/managed/{season_id}"),
         ("POST", "/admin/clubs/{club_id}/interclub/managed/{season_id}/import"),
+        ("POST", "/admin/clubs/{club_id}/interclub/managed/{season_id}/club-entries/{entry_club_id}/link"),
         ("POST", "/admin/clubs/{club_id}/interclub/managed/{season_id}/visibility/{action}"),
         ("PUT", "/admin/clubs/{club_id}/interclub/managed/{season_id}/meets/{meet_id}"),
         ("PUT", "/admin/clubs/{club_id}/interclub/managed/{season_id}/meets/{meet_id}/scores"),

@@ -23,6 +23,92 @@ async function change(tree,a,b=null) {
  await act(async()=>{const draft=copy(tree.root.findByType(Editor).props.document);draft.encounters[0].pairings[0].games[0]={...game,a,b};tree.root.findByType(Editor).props.onChange(draft);});
 }
 async function tick(){await act(async()=>{const callbacks=[...timers.values()];timers.clear();for(const fn of callbacks)fn();});}
+
+async function clubRegistrationPlanning() {
+  const directory = 'app/admin/interclub/managed/';
+  const setup = load('lib/interclubSetup.ts');
+  const prefix = '/admin/test-season';
+  const host = { id: 'host', name: 'Host club', captain: 'Old captain', contact: 'old@example.invalid', rosters: [] };
+  const visitor = { id: 'visitor', name: 'Visiting club', captain: 'Visitor captain', contact: 'visitor@example.invalid', rosters: [] };
+  const details = { name: 'Season', timezone: 'UTC', divisions: ['3.5'], clubs: [visitor, host], start_date: null, end_date: null, rules: '' };
+  const initial = { season: { id: 'season', revision: 1, details }, meets: [], standings: { divisions: {}, qualification: [] }, club_cup: { standings: [] } };
+  const full = { date: '2027-01-09', start_time: '09:30', end_time: '12:00', courts: 3 };
+  const partial = { date: '2027-01-16', start_time: null, end_time: null, courts: null };
+  const registration = { captain: 'Current captain', contact_method: 'whatsapp', contact: '+52 123', participation: 'host_travel',
+    divisions: ['3.5'], travel_notes: 'Saturday mornings', host_offers: [full, partial] };
+  const entries = [{ club_id: host.id, status: 'registered', revision: 1, registration }];
+  const writes = [];
+  const managedRequest = async (url, accessToken, method, body) => {
+    assert.equal(accessToken, 'admin-session');
+    if (method === 'GET' && url === prefix + '/club-entries') return { entries: [...entries] };
+    writes.push({ url, method, body });
+    if (method === 'POST' && url === prefix + '/club-entries/visitor/link') {
+      entries.push({ club_id: visitor.id, status: 'invited', revision: 0, registration: null });
+      return { token: 'private-test-token' };
+    }
+    assert.match(url, /^\/admin\/test-season\/meets\//);
+    assert.equal(method, 'PUT');
+    return { ...initial, meets: [] };
+  };
+  const mocks = { '@/lib/managedInterclub': { ...helpers, managedRequest }, '@/lib/interclubSetup': setup, '../setup.module.css': {} };
+  const ClubRegistrations = load(directory + 'ClubRegistrations.tsx', mocks).default;
+  const MeetPlanner = load(directory + 'MeetPlanner.tsx', mocks).default;
+  const TeamsEditor = load(directory + 'TeamsEditor.tsx', mocks).default;
+  const Workspace = load(directory + 'ManagedSeasonWorkspace.tsx', { ...mocks,
+    './ClubRegistrations': ClubRegistrations, './MeetPlanner': MeetPlanner, './TeamsEditor': TeamsEditor,
+    '@/components/PublicInterclubCompetition': { CompetitionStandings: () => null },
+    '@/components/interclub/ManagedScoreboard': () => null, 'next/link': () => null,
+  }).default;
+  window.location = { origin: 'https://example.invalid' };
+  let tree;
+  await act(async () => { tree = create(React.createElement(Workspace, { root: prefix, accessToken: 'admin-session', initial, onClose() {} })); });
+  const click = async label => { await act(async () => button(tree, label).props.onClick()); };
+  const input = (area, label) => area.findAllByType('label').find(node => nodeText(node).startsWith(label)).findByType('input');
+  const planner = () => tree.root.findByType(MeetPlanner);
+  const draftClub = () => input(tree.root.findByType(TeamsEditor), 'Participating club');
+  await act(async () => draftClub().props.onChange({ target: { value: 'Unsaved club' } }));
+  await click('Club registrations');
+  const cards = tree.root.findByType(ClubRegistrations).findAllByType('article');
+  assert.match(nodeText(cards[0]), /Awaiting invitation.*Visitor captain.*visitor@example.invalid/);
+  assert.match(nodeText(cards[1]), /Registered.*Current captain.*WhatsApp.*Saturday mornings/);
+  assert.doesNotMatch(nodeText(cards[1]), /Old captain|old@example/);
+  await click('Create registration link');
+  assert.equal(input(cards[0], 'Private registration link').props.value, 'https://example.invalid/interclub/club-entry#token=private-test-token');
+  assert.match(nodeText(cards[0]), /Invited/);
+  const planAt = date => 'Plan meet at Host club on ' + setup.seasonDateLabel(date);
+  await click(planAt(partial.date));
+  assert.equal(input(planner(), 'Meet date').props.value, partial.date);
+  assert.equal(input(planner(), 'Start time').props.value, '');
+  assert.equal(input(planner(), 'Courts').props.value, '');
+  await click('Cancel');
+  await click('Club registrations');
+  await click(planAt(full.date));
+  assert.equal(input(planner(), 'Meet date').props.value, full.date);
+  assert.equal(input(planner(), 'Start time').props.value, full.start_time);
+  assert.equal(input(planner(), 'Duration').props.value, 150);
+  assert.equal(input(planner(), 'Courts').props.value, full.courts);
+  assert.equal(planner().findByProps({ 'aria-label': 'Host' }).props.value, host.id);
+  assert.equal(input(planner(), 'Visiting club').props.checked, false);
+  assert.equal(writes.length, 1, 'Selecting a host offer only prepares a draft');
+  const submit = async () => { await act(async () => planner().findByType('form').props.onSubmit({ preventDefault() {} })); };
+  await submit();
+  assert.equal(writes.length, 1, 'A meet requires a visiting club');
+  await act(async () => input(planner(), 'Visiting club').props.onChange({ target: { checked: true } }));
+  await click('Club registrations');
+  assert.equal(button(tree, planAt(partial.date)).props.disabled, true);
+  await click('Teams & Players');
+  assert.equal(draftClub().props.value, 'Unsaved club');
+  await click('Schedule');
+  assert.equal(input(planner(), 'Visiting club').props.checked, true);
+  assert.ok(button(tree, 'Confirm and save meet'));
+  await submit();
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].body.details.starts_at, '2027-01-09T09:30:00.000Z');
+  assert.deepEqual(writes[1].body.details.club_ids, ['host', 'visitor']);
+  assert.equal(writes[1].body.details.duration_minutes, 150);
+  await act(async () => tree.unmount());
+}
+
 (async()=>{
  const club={rosters:[{division:'3.5',roster:[{entry_id:'kept',name:'Ana',gender:'female',starting_rating:3.6}]}]};
  assert.equal(helpers.readRoster('Ana | 3.7','',club)[0].entry_id,'kept');
@@ -57,5 +143,7 @@ async function tick(){await act(async()=>{const callbacks=[...timers.values()];t
  await change(tree,11,7);await tick();assert.equal(tree.root.findByType(Editor).props.disabled,false);
  await act(async()=>button(tree,'Save scores now').props.onClick());assert.equal(attempts,2);
  assert.equal(button(tree,'Submit completed meet').props.disabled,false);await act(async()=>tree.unmount());
+ await clubRegistrationPlanning();
+ console.log('Club registration links, offer review, draft retention and explicit meet confirmation passed.');
  console.log('Managed interclub roster identity, concurrent typing, conflicts, revoked links and outage recovery passed.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

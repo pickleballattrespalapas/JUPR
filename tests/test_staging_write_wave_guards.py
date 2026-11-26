@@ -152,9 +152,12 @@ def test_every_unsafe_fastapi_route_has_an_exact_nonstale_wave_classification() 
 @pytest.mark.parametrize("wave,method,path", [
     ("league-manager", "PUT", "/admin/clubs/tres/interclub/managed/season-1"),
     ("league-manager", "POST", "/admin/clubs/tres/interclub/managed/season-1/import"),
+    ("league-manager", "POST", "/admin/clubs/tres/interclub/managed/season-1/club-entries/club-1/link"),
     ("league-manager", "POST", "/admin/clubs/tres/interclub/managed/season-1/meets/meet-1/approve"),
     ("public-intake-auth", "POST", "/public/interclub-host/read"),
     ("public-intake-auth", "POST", "/public/interclub-host/write"),
+    ("public-intake-auth", "POST", "/public/interclub-club-entry/read"),
+    ("public-intake-auth", "POST", "/public/interclub-club-entry/save"),
 ])
 def test_managed_interclub_preserves_exact_staging_write_boundaries(wave, method, path):
     assert wave_allows_request("open", method, path)

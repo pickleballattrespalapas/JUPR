@@ -1,24 +1,27 @@
 """Single-organizer seasons and revocable, meet-scoped host links."""
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
+import re
 import secrets
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import HTTPException, Response
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from jupr_app.domain import managed_interclub as managed
 from jupr_app.domain import interclub_competition as competition
 from services.api.auth import auth_header
 from services.api.club_site_routes import site_administrator
 from services.api.interclub_competition_models import CompetitionDocument
+from services.api.interclub_models import Division
 from services.api.interclub_result_views import result_rows
 from services.api.staging_write_guard import require_league_manager_write_or_403, require_public_intake_or_403
 
 SEASONS = "pcs_managed_interclub_seasons"
 MEETS = "pcs_managed_interclub_meets"
+CLUB_ENTRIES = "pcs_managed_interclub_club_entries"
 SEASON_FIELDS = "id,organizer_club_id,revision,details,published,source_season_id,updated_at"
 MEET_FIELDS = "id,season_id,revision,details,state,document,approved_document,host_expires_at,updated_at"
 PRIVATE_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow"}
@@ -53,6 +56,66 @@ class HostWrite(HostRead):
     expected_revision: int = Field(ge=1)
     action: Literal["scores", "submit"]
     document: CompetitionDocument | None = None
+
+
+LocalTime = Annotated[str, Field(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")]
+
+
+class HostingOffer(managed.Model):
+    date: date
+    start_time: LocalTime | None = None
+    end_time: LocalTime | None = None
+    courts: int | None = Field(default=None, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def ordered_times(self):
+        if self.start_time and self.end_time and self.end_time <= self.start_time:
+            raise ValueError("The end time must follow the start time.")
+        return self
+
+
+class ClubRegistration(managed.Model):
+    captain: str = Field(min_length=1, max_length=120)
+    contact_method: Literal["email", "whatsapp", "phone"]
+    contact: str = Field(min_length=1, max_length=254)
+    divisions: list[Division] = Field(min_length=1, max_length=8)
+    participation: Literal["host_travel", "host", "travel", "undecided"]
+    travel_notes: str = Field(default="", max_length=1000)
+    host_offers: list[HostingOffer] = Field(default_factory=list, max_length=2)
+
+    @model_validator(mode="after")
+    def validate_registration(self):
+        if self.contact_method == "email":
+            if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", self.contact):
+                raise ValueError("Enter an email address.")
+        elif not re.fullmatch(r"[+0-9(). \-]+", self.contact) or not 7 <= len(re.findall(r"[0-9]", self.contact)) <= 15:
+            raise ValueError("Enter a phone number with 7 to 15 digits.")
+        if len(set(self.divisions)) != len(self.divisions):
+            raise ValueError("Select each division once.")
+        if self.host_offers and self.participation == "travel":
+            raise ValueError("Choose a hosting option to offer a date.")
+        if len({offer.date for offer in self.host_offers}) != len(self.host_offers):
+            raise ValueError("Offer two different dates or remove the second date.")
+        return self
+
+
+class ClubEntrySave(HostRead):
+    expected_revision: int = Field(ge=0)
+    registration: ClubRegistration
+
+
+def _club_entry_rpc(db, name, params):
+    try:
+        return db.rpc(name, params).execute().data
+    except Exception as exc:
+        status, message = {
+            "42501": (403, "Organizer access required."),
+            "PT409": (409, "This registration changed. Reload before saving again."),
+            "40001": (409, "This registration changed. Reload before saving again."),
+            "P0002": (404, "Club link unavailable. Ask your organizer for a new link."),
+            "22023": (422, "Choose offered divisions and hosting dates within the season."),
+        }.get(str(getattr(exc, "code", "")), (503, "Could not confirm your club entry. Reload before retrying."))
+        raise HTTPException(status, message, headers=PRIVATE_HEADERS) from exc
 
 
 def _rows(db, table, fields="*", **where):
@@ -324,6 +387,44 @@ def install_managed_interclub_routes(app, *, get_supabase_client):
         result = context(db, _one(db, SEASONS, SEASON_FIELDS, id=str(season_id)))
         if token: result["host_token"] = token
         return result
+
+    @app.get("/admin/clubs/{club_id}/interclub/managed/{season_id}/club-entries")
+    def club_entries(club_id: str, season_id: UUID, response: Response, authorization: str | None = auth_header()):
+        response.headers.update(PRIVATE_HEADERS)
+        _, db, season = admin(club_id, authorization, season_id)
+        entries = _rows(db, CLUB_ENTRIES, "club_id,revision,registration", season_id=season["id"])
+        return {"entries": [{**entry, "status": "registered" if entry["registration"] is not None else "invited"}
+                            for entry in entries]}
+
+    @app.post("/admin/clubs/{club_id}/interclub/managed/{season_id}/club-entries/{entry_club_id}/link")
+    def issue_club_link(club_id: str, season_id: UUID, entry_club_id: str, response: Response,
+                        authorization: str | None = auth_header()):
+        response.headers.update(PRIVATE_HEADERS)
+        require_league_manager_write_or_403()
+        user, db, _ = admin(club_id, authorization, season_id)
+        token = secrets.token_urlsafe(32)
+        _club_entry_rpc(db, "pcs_managed_interclub_club_link", {
+            "p_actor_id": user.user_id, "p_actor_email": user.email, "p_organizer_club_id": club_id,
+            "p_season_id": str(season_id), "p_entry_club_id": entry_club_id,
+            "p_token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        })
+        return {"token": token}
+
+    @app.post("/public/interclub-club-entry/read")
+    def read_club_entry(body: HostRead, response: Response):
+        response.headers.update(PRIVATE_HEADERS)
+        return _club_entry_rpc(get_supabase_client(), "pcs_managed_interclub_club_entry", {
+            "p_token_hash": hashlib.sha256(body.token.encode()).hexdigest(),
+        })
+
+    @app.post("/public/interclub-club-entry/save")
+    def save_club_entry(body: ClubEntrySave, response: Response):
+        response.headers.update(PRIVATE_HEADERS)
+        require_public_intake_or_403()
+        return _club_entry_rpc(get_supabase_client(), "pcs_managed_interclub_club_entry", {
+            "p_token_hash": hashlib.sha256(body.token.encode()).hexdigest(),
+            "p_expected_revision": body.expected_revision, "p_registration": body.registration.model_dump(mode="json"),
+        })
 
     @app.post("/public/interclub-host/read")
     def host_read(body: HostRead, response: Response):
