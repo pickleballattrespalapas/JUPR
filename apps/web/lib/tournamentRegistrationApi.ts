@@ -166,6 +166,8 @@ export type PublicTournamentRosterEntry = {
   status?: string | null;
   entry_type?: string | null;
   members: PublicTournamentRosterMember[];
+  team_name?: string | null;
+  open_team_slots?: string[];
   combined_rating?: number | null;
 };
 
@@ -387,6 +389,7 @@ export type PublicRegistrationConfirmationResponse = {
     submitted_at?: string | null;
   };
   selections: Array<{
+    competition_format?: string | null;
     event_label: string;
     event_family_label: string;
     day_label: string;

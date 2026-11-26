@@ -29,6 +29,15 @@ def test_build_view_model_two_events_total_80():
     assert len(vm["selected_events"]) == 2
 
 
+def test_solo_team_signup_is_labeled_as_needing_a_team_in_both_email_formats():
+    vm = emailer.build_registration_confirmation_view_model(
+        selections=[{"event_option_id": "team", "partner_mode": "NEEDS_PARTNER"}],
+        event_options=[{"id": "team", "competition_format": "FOUR_PLAYER_TEAM"}],
+    )
+    assert "Needs a team" in emailer.build_tournament_registration_confirmation_html(vm)
+    assert "Needs a team" in emailer.build_tournament_registration_confirmation_text(vm)
+
+
 def test_missing_blank_price_treated_as_zero():
     vm = emailer.build_registration_confirmation_view_model(
         tournament={"name": "No Price Open"},

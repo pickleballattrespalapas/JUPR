@@ -153,7 +153,7 @@ def test_confirmation_and_secure_edit_use_per_event_actions() -> None:
     confirmation = read(
         "app/clubs/[clubSlug]/tournament-registration/confirmation/page.tsx"
     )
-    registration = read("app/clubs/[clubSlug]/tournament-registration/page.tsx")
+    registration = read("app/clubs/[clubSlug]/tournament-registration/TournamentRegistrationForm.tsx")
     edit = read(
         "app/clubs/[clubSlug]/tournament-registration/edit/"
         "EditTournamentRegistrationForm.tsx"
@@ -162,14 +162,14 @@ def test_confirmation_and_secure_edit_use_per_event_actions() -> None:
     assert "Edit this event" in confirmation
     assert "Add an event" in confirmation
     assert "selection.scheduled_days?.length" in confirmation
-    assert 'id="manage-registration"' in registration
+    assert 'window.location.hash === "#manage-registration"' in registration
     assert "EditLinkRequestForm" in registration
     assert "Registered events" in edit
     assert "Edit event" in edit
     assert "InteractionDialog" in edit
-    assert "Apply event changes" in edit
+    assert "onClick={() => saveEvent()}" in edit
     assert "Add event" in edit
-    assert "Edit any event below" in edit
+    assert "Open Edit event to update your partner" in edit
 
 
 def test_secure_edit_recomputes_event_eligibility_from_the_live_age_draft() -> None:
@@ -185,7 +185,7 @@ def test_secure_edit_recomputes_event_eligibility_from_the_live_age_draft() -> N
     assert 'const submittedAge = numberOrNull(formData.get("age"))' in edit
     assert "age: submittedAge" in edit
     assert "Enter an age between 1 and 120" in edit
-    assert edit.index("const formData = new FormData(event.currentTarget)") < edit.index("const ineligible = selectedIds")
+    assert edit.index('const submittedAge = numberOrNull(formData.get("age"))') < edit.index("const ineligible = eventIds")
     assert "publicEventEligibilityReason(event, eligibilityProfile)" in edit
     assert "choose another division before saving" in edit
 

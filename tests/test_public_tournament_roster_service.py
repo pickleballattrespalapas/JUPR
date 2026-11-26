@@ -250,3 +250,103 @@ def test_public_tournament_roster_reports_missing_schema() -> None:
     assert payload["available"] is False
     assert payload["tournament"] is None
     assert "tournament_registration_selections" in str(payload["setup_error"])
+
+
+@pytest.mark.parametrize("registration_status, expected", [
+    ("confirmed", "Needs Team"), ("ADMIN_CONFIRMED", "Needs Team"),
+    ("REVIEW", "Review"), ("PENDING", "Review"), ("UNKNOWN", "Review"),
+])
+def test_solo_four_player_roster_distinguishes_team_placement_from_review(registration_status, expected):
+    from jupr_app.domain.tournament_registration_repo import build_registration_state
+
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        competition_format="FOUR_PLAYER_TEAM", team_roster_size=4,
+        event_type="MIXED_DOUBLES", partner_required=True, gender_restriction="MIXED",
+    )
+    storage["tournament_registrations"] = [{
+        "id": "solo", "tournament_id": "t1", "display_name": "Solo Player",
+        "email": "solo.private@example.invalid", "status": registration_status,
+        "gender": "Men", "doubles_skill": 5.24, "age": 38,
+    }]
+    storage["tournament_registration_selections"] = [{
+        "id": "solo-selection", "registration_id": "solo", "tournament_id": "t1",
+        "event_option_id": "event1", "registration_day_id": "day1", "partner_mode": "NONE",
+    }]
+    supabase = FakeSupabase(storage)
+    payload = build_public_tournament_roster_page(supabase, club_id="club-1", registration_slug="tres-open")
+    entry, = payload["roster"]["registrations_by_event"]
+    assert entry["status"] == expected
+    assert entry["members"][0]["display_name"] == "Solo Player"
+    assert not payload["roster"]["confirmed_teams"]
+    assert not payload["roster"]["players_needing_partners"]
+    assert bool(payload["roster"]["unresolved_partner_entries"]) == (expected == "Review")
+    assert "solo.private@example.invalid" not in json.dumps(payload)
+    state = build_registration_state(
+        supabase, storage["tournaments"][0], storage["tournament_registration_settings"][0],
+        storage["tournament_registration_days"], storage["tournament_event_options"],
+    )
+    compiled, = state["event_rosters"][0]["entries"]
+    assert compiled["status"] == "REVIEW", "An individual signup must not become a draw-ready four-player team"
+    assert any(issue["issue_type"] == "FOUR_PLAYER_TEAM_SETUP_REQUIRED" for issue in state["issues"])
+
+
+def test_partial_team_roster_distinguishes_open_slots_from_invitations_and_solo_entries():
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        competition_format="FOUR_PLAYER_TEAM", capacity_teams=1,
+        event_type="MIXED_DOUBLES", partner_required=True,
+    )
+    for registration_id, name in [("solo", "Solo Player"), ("captain", "Team Captain"), ("invited", "Registered Invitee")]:
+        storage["tournament_registrations"].append({
+            "id": registration_id, "tournament_id": "t1", "display_name": name,
+            "email": f"{registration_id}@example.invalid", "status": "CONFIRMED",
+        })
+        storage["tournament_registration_selections"].append({
+            "id": f"selection-{registration_id}", "registration_id": registration_id,
+            "tournament_id": "t1", "event_option_id": "event1", "registration_day_id": "day1",
+            "partner_mode": "NEEDS_PARTNER" if registration_id == "solo" else "NONE",
+        })
+    team_scope = {"tournament_id": "t1", "event_option_id": "event1"}
+    storage["tournament_four_player_teams"] = [{
+        **team_scope, "id": "team", "name": "Kitchen Crew", "captain_registration_id": "captain",
+        "status": "FORMING", "eligibility_state": "NOT_REQUIRED", "created_at": "2026-08-01T12:00:00",
+    }]
+    storage["tournament_four_player_team_members"] = [
+        {**team_scope, "team_id": "team", "slot": slot, "registration_id": registration_id,
+         "invited_email": email, "display_name_snapshot": "Private invite snapshot", "status": status}
+        for slot, status, registration_id, email in [
+            ("MAN_1", "ACCEPTED", "captain", "captain@example.invalid"),
+            ("WOMAN_1", "INVITED", None, "invited@example.invalid"),
+            ("MAN_2", "INVITED", None, "new@example.invalid"),
+            ("WOMAN_2", "DECLINED", None, "declined@example.invalid"),
+        ]
+    ]
+    supabase = FakeSupabase(storage)
+    def roster():
+        return build_public_tournament_roster_page(supabase, club_id="club-1", registration_slug="tres-open")["roster"]
+
+    state = roster()
+    entries = {row["members"][0]["display_name"]: row for row in state["registrations_by_event"]}
+    team = entries["Team Captain"]
+    assert team["status"] == "Needs Players" and team["team_name"] == "Kitchen Crew"
+    assert team["open_team_slots"] == ["WOMAN_2"]
+    assert [member["display_name"] for member in team["members"]] == ["Team Captain"]
+    assert entries["Solo Player"]["status"] == "Needs Team"
+    assert entries["Registered Invitee"]["status"] == "Team Invitation Pending"
+    assert not state["confirmed_teams"] and not state["partner_board_entries"]
+    assert state["summary"]["total_players"] == state["summary"]["total_event_entries"] == 3
+    assert "Private invite snapshot" not in json.dumps(state) and "@example.invalid" not in json.dumps(state)
+
+    storage["tournament_four_player_team_members"][-1].update(status="INVITED", invited_email="solo@example.invalid")
+    state = roster()
+    assert {row["status"] for row in state["registrations_by_event"]} == {"Review", "Team Invitation Pending"}
+    assert not any(row.get("open_team_slots") for row in state["registrations_by_event"])
+
+    storage["tournament_four_player_team_members"][-1].update(status="ACCEPTED", registration_id="solo")
+    state = roster()
+    team = next(row for row in state["registrations_by_event"] if row.get("team_name") == "Kitchen Crew")
+    assert [member["display_name"] for member in team["members"]] == ["Team Captain", "Solo Player"]
+    assert len(state["registrations_by_event"]) == 2
+    assert not any(row["status"] == "Needs Team" for row in state["registrations_by_event"])
+    assert not state["partner_board_entries"] and state["summary"]["total_event_entries"] == 3

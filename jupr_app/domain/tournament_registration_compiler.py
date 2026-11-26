@@ -8,6 +8,8 @@ import math
 import re
 import uuid
 
+from jupr_app.domain.tournament_four_player_team import TEAM_SLOTS
+
 
 DoublesTypes = {"GENDER_DOUBLES", "MIXED_DOUBLES", "DOUBLES", "MIXED"}
 
@@ -1026,6 +1028,8 @@ def _compile_four_player_team_roster(
             continue
         members_by_team[str(member.get("team_id") or "")].append(member)
 
+    invited_registration_ids: set[str] = set()
+    invited_emails: set[str] = set()
     represented_selection_ids: set[str] = set()
     active_team_statuses = {
         "FORMING",
@@ -1064,7 +1068,15 @@ def _compile_four_player_team_roster(
         submitted_values: list[str] = []
 
         for member in durable_members:
-            if str(member.get("status") or "").upper() != "ACCEPTED":
+            member_status = str(member.get("status") or "").upper()
+            if member_status == "INVITED":
+                invitee_id = str(member.get("registration_id") or "")
+                if invitee_id:
+                    registration = registration_aliases.get(invitee_id, {})
+                    invited_registration_ids.add(str(registration.get("id") or invitee_id))
+                elif member.get("invited_email"):
+                    invited_emails.add(_normalize_email(member["invited_email"]))
+            if member_status != "ACCEPTED":
                 continue
             registration_id = str(member.get("registration_id") or "")
             registration = registration_aliases.get(registration_id)
@@ -1129,6 +1141,10 @@ def _compile_four_player_team_roster(
                 str(captain_registration.get("submitted_at") or "")
             )
 
+        occupied_slots = {
+            member.get("slot") for member in durable_members
+            if str(member.get("status") or "").upper() in {"ACCEPTED", "INVITED"}
+        }
         team_status = str(team.get("status") or "").upper()
         eligibility = str(team.get("eligibility_state") or "").upper()
         if team_status == "CONFIRMED" and eligibility in {
@@ -1199,6 +1215,9 @@ def _compile_four_player_team_roster(
                 "status": roster_status,
                 "entry_type": "four_player_team",
                 "four_player_team_id": team_id or None,
+                "open_team_slots": [
+                    slot for slot in TEAM_SLOTS if slot not in occupied_slots
+                ] if team_status == "FORMING" else [],
                 "team_name": str(team.get("name") or "").strip() or None,
                 "members": accepted_members,
                 "source_registration_ids": list(
@@ -1243,6 +1262,10 @@ def _compile_four_player_team_roster(
                 "event_label": str(event.get("label") or ""),
                 "status": "REVIEW",
                 "entry_type": "four_player_team_setup_required",
+                "team_invitation_pending": (
+                    str(registration.get("id") or "") in invited_registration_ids
+                    or _normalize_email(registration.get("email")) in invited_emails
+                ),
                 "members": [_to_member_from_registration(registration, selection)],
                 **_entry_identity(selection, registration),
                 "submitted_at": registration.get("submitted_at"),
@@ -1269,7 +1292,9 @@ def _apply_capacity(
     out: list[dict[str, Any]] = []
     for entry in ordered:
         status = str(entry.get("status") or "")
-        if status in {"NEEDS_PARTNER", "PARTNER_MISSING", "LEGACY_PARTNER_UNRESOLVED", "PENDING_PARTNER_REQUEST"}:
+        if entry.get("entry_type") == "four_player_team_setup_required" or status in {
+            "NEEDS_PARTNER", "PARTNER_MISSING", "LEGACY_PARTNER_UNRESOLVED", "PENDING_PARTNER_REQUEST"
+        }:
             out.append(entry)
             continue
         confirmed_slots += 1

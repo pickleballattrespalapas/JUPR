@@ -30,7 +30,8 @@ import {
 } from "@/lib/tournamentRegistrationEligibility";
 import { createPublicFourPlayerTeam } from "@/lib/tournamentTeamCompetitionApi";
 import FourPlayerTeamRegistrationCard, {
-  TEAM_SLOTS,
+  newTeamMembers,
+  teamRegistrationSummary,
   TeamRegistrationDraft,
   newTeamRegistrationDraft,
   validateTeamRegistrationDraft
@@ -266,6 +267,7 @@ export default function TournamentRegistrationForm({
   const [teamDrafts, setTeamDrafts] = useState<
     Record<string, TeamRegistrationDraft>
   >({});
+  const [teamEntryModes, setTeamEntryModes] = useState<Record<string, "team" | "solo">>({});
   const [savedRegistration, setSavedRegistration] = useState<{
     registrationId: string;
     confirmationToken: string;
@@ -277,7 +279,8 @@ export default function TournamentRegistrationForm({
     stage: pending ? "submit" : ["contact", "profile", "events", "review"][step - 1],
     name: `${contact.firstName} ${contact.lastName}`.trim(), email: contact.email, error,
     completed: Boolean(savedRegistration || recovery),
-    selections: selectedIds.map(id => ({ event_option_id: id, partner_mode: partnerDetails[id]?.mode,
+    selections: selectedIds.map(id => ({ event_option_id: id,
+      partner_mode: teamDrafts[id] ? (teamEntryModes[id] === "solo" ? "NEEDS_PARTNER" : "NONE") : partnerDetails[id]?.mode,
       partner_name: partnerDetails[id]?.name,
       same_email_as_player: Boolean(partnerDetails[id]?.email && partnerDetails[id].email.trim().toLowerCase() === contact.email.trim().toLowerCase()) }))
   });
@@ -382,6 +385,7 @@ export default function TournamentRegistrationForm({
     setCommerceQuote(null);
     setCommerceIdempotencyKey(crypto.randomUUID());
     setTeamDrafts({});
+    setTeamEntryModes({});
     setSavedRegistration(null);
     setCreatedTeamEventIds([]);
     setError(null);
@@ -578,6 +582,7 @@ export default function TournamentRegistrationForm({
         String(event.competition_format || "").toUpperCase() ===
         "FOUR_PLAYER_TEAM"
       ) {
+        if (teamEntryModes[id] === "solo") continue;
         const teamError = validateTeamRegistrationDraft(
           teamDrafts[id],
           contact.email,
@@ -683,7 +688,7 @@ export default function TournamentRegistrationForm({
         String(event.competition_format || "").toUpperCase() ===
         "FOUR_PLAYER_TEAM";
       const partner = teamFormat
-        ? { ...emptyPartnerState(event), mode: "NONE" as const }
+        ? { ...emptyPartnerState(event), mode: teamEntryModes[eventId] === "solo" ? "NEEDS_PARTNER" as const : "NONE" as const }
         : partnerDetails[eventId] || emptyPartnerState(event);
       return {
         event_option_id: eventId,
@@ -840,6 +845,7 @@ export default function TournamentRegistrationForm({
 
     const completedTeamEvents = new Set(createdTeamEventIds);
     for (const teamEvent of selectedTeamEvents) {
+      if (teamEntryModes[teamEvent.id] === "solo") continue;
       if (completedTeamEvents.has(teamEvent.id)) continue;
       const draft = teamDrafts[teamEvent.id];
       const teamResponse = await createPublicFourPlayerTeam(clubSlug, {
@@ -848,22 +854,11 @@ export default function TournamentRegistrationForm({
         team_name: draft.teamName.trim(),
         captain_registration_id: saved.registrationId,
         confirmation_token: saved.confirmationToken,
-        members: TEAM_SLOTS.map((slot) => {
-          if (slot === draft.captainSlot) {
-            return {
-              slot,
-              registration_id: saved.registrationId,
-              email: contact.email.trim().toLowerCase(),
-              display_name: profile.displayName.trim(),
-              gender: contact.gender
-            };
-          }
-          return {
-            slot,
-            email: draft.teammates[slot].email.trim().toLowerCase(),
-            display_name: draft.teammates[slot].displayName.trim(),
-            gender: slot.startsWith("MAN_") ? "Men" : "Women"
-          };
+        members: newTeamMembers(draft, {
+          registration_id: saved.registrationId,
+          email: contact.email.trim().toLowerCase(),
+          display_name: profile.displayName.trim(),
+          gender: contact.gender
         }),
         idempotency_key: draft.idempotencyKey,
         website: ""
@@ -1082,23 +1077,43 @@ export default function TournamentRegistrationForm({
             <p>{selectableEvents.length ? "No available divisions match your age and skill level." : "No events are open for registration."}</p>
           ) : null}
           {selectedTeamEvents.map((teamEvent) => (
-            <FourPlayerTeamRegistrationCard
-              key={teamEvent.id}
-              event={teamEvent}
-              captainName={profile.displayName}
-              captainEmail={contact.email}
-              captainGender={contact.gender}
-              value={
-                teamDrafts[teamEvent.id] ||
-                newTeamRegistrationDraft(contact.gender)
-              }
-              onChange={(draft) =>
-                setTeamDrafts((current) => ({
-                  ...current,
-                  [teamEvent.id]: draft
-                }))
-              }
-            />
+            <section key={teamEvent.id} style={{ ...cardStyle, marginTop: "1rem" }} data-testid="four-player-entry-plan">
+              <h3 style={{ marginTop: 0 }}>{publicTournamentEventLabel(teamEvent.event_family_label, teamEvent.division_name)}</h3>
+              <label>
+                How are you registering?
+                <select
+                  aria-label={`${teamEvent.division_name} team plan`}
+                  style={{ ...inputStyle, marginTop: "0.4rem" }}
+                  value={teamEntryModes[teamEvent.id] || "team"}
+                  onChange={(change) => setTeamEntryModes(current => ({ ...current, [teamEvent.id]: change.target.value as "team" | "solo" }))}
+                >
+                  <option value="team">I’m registering a full or partial team</option>
+                  <option value="solo">I need a team</option>
+                </select>
+              </label>
+              {teamEntryModes[teamEvent.id] === "solo" ? (
+                <p style={{ color: "#475569", marginBottom: 0 }}>
+                  Your name will appear under players needing a team. The organizer can place you on a team later.
+                </p>
+              ) : (
+                <FourPlayerTeamRegistrationCard
+                  event={teamEvent}
+                  captainName={profile.displayName}
+                  captainEmail={contact.email}
+                  captainGender={contact.gender}
+                  value={
+                    teamDrafts[teamEvent.id] ||
+                    newTeamRegistrationDraft(contact.gender)
+                  }
+                  onChange={(draft) =>
+                    setTeamDrafts((current) => ({
+                      ...current,
+                      [teamEvent.id]: draft
+                    }))
+                  }
+                />
+              )}
+            </section>
           ))}
           <p><strong>Estimated total:</strong> ${totalPrice.toFixed(2)}</p>
           {commerce?.available ? (
@@ -1129,7 +1144,7 @@ export default function TournamentRegistrationForm({
               const entryLabel =
                 String(event.competition_format || "").toUpperCase() ===
                 "FOUR_PLAYER_TEAM"
-                  ? `Team: ${teamDraft?.teamName || "not named"}`
+                  ? teamEntryModes[id] === "solo" ? "Individual signup · Needs a team" : teamRegistrationSummary(teamDraft)
                   : id === invitedEventId ? `Partner: ${partnerInvitation.invitation?.target_name} (automatic pairing)` : event.partner_required
                 ? partner.mode === "HAS_PARTNER" ? `Partner: ${partner.name}` : "Needs partner"
                 : isDoublesEvent(event) ? "Registered as an individual" : "Singles";

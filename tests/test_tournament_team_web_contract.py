@@ -66,7 +66,9 @@ def test_team_tournament_surfaces_are_responsive_and_publicly_discoverable():
 
     assert "@media (max-width: 760px)" in css
     assert "grid-template-columns: 1fr" in css
-    assert 'href: `${base}/tournaments`' in club
+    assert "ClubSiteContent" in club
+    assert '["Tournaments", "tournaments"]' in _read("apps/web/lib/clubSite.ts")
+    assert 'href={`/clubs/${slug}/${path}`}' in _read("apps/web/components/ClubSiteContent.tsx")
     assert "tournament-team-results" in registration
 
 

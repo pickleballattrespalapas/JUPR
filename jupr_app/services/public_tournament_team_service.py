@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Callable
 
 from jupr_app.domain.notifications.tournament_team_invitation_email import (
@@ -9,7 +10,7 @@ from jupr_app.domain.notifications.tournament_team_invitation_email import (
 from jupr_app.domain.tournament_admin_operations import (
     build_tournament_admin_operation_request,
 )
-from jupr_app.domain.tournament_four_player_team import build_team_standings
+from jupr_app.domain.tournament_four_player_team import TEAM_SLOTS, build_team_standings
 from jupr_app.domain.tournament_registration_confirmation_tokens import (
     verify_registration_confirmation_token,
 )
@@ -404,6 +405,7 @@ def create_public_four_player_team(
     idempotency_key: str,
     public_base_url: str | None = None,
     sender: Callable[..., dict[str, str]] = send_team_invitation_email,
+    fill_team_id: str | None = None,
 ) -> dict[str, Any]:
     captain = _one(
         supabase,
@@ -435,8 +437,34 @@ def create_public_four_player_team(
             ("event_option_id", str(event_option_id)),
         ),
     )
-    if not selection or str(selection.get("partner_mode") or "NONE").upper() != "NONE":
+    if not selection or str(selection.get("partner_mode") or "NONE").upper() not in {"NONE", "NEEDS_PARTNER"}:
         raise ValueError("Captain must select this exact four-player team event.")
+    slots: set[str] = set()
+    emails: set[str] = set()
+    captain_rows = 0
+    for member in members:
+        slot = str(member.get("slot") or "").strip().upper()
+        email = str(member.get("email") or "").strip().lower()
+        name = str(member.get("display_name") or "").strip()
+        if slot not in TEAM_SLOTS or slot in slots:
+            raise ValueError("Choose a different roster spot for each player.")
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) or email in emails:
+            raise ValueError("Enter a different, valid email address for each named player.")
+        registration_id = member.get("registration_id")
+        if registration_id:
+            if fill_team_id or str(registration_id) != str(captain_registration_id):
+                raise ValueError("Only the captain can be registered directly. Invite each teammate by email.")
+            captain_rows += 1
+        elif not name:
+            raise ValueError("Enter a name for each invited player.")
+        emails.add(email)
+        slots.add(slot)
+    if fill_team_id:
+        if not 1 <= len(members) <= 3:
+            raise ValueError("Choose one to three open spots to fill.")
+    elif not 2 <= len(members) <= 4 or captain_rows != 1:
+        raise ValueError("Include yourself and at least one teammate, or choose ‘I need a team’.")
+
     result = create_four_player_team(
         supabase,
         club_id=club_id,
@@ -449,6 +477,7 @@ def create_public_four_player_team(
         idempotency_key=idempotency_key,
         public_base_url=public_base_url,
         sender=sender,
+        fill_team_id=fill_team_id,
     )
     return _public_team_creation_response(result)
 
@@ -507,6 +536,11 @@ def build_public_four_player_team_setup_recovery(
         for selection in selections
         if str(selection.get("event_option_id") or "")
     }
+    solo_event_ids = {
+        str(selection.get("event_option_id") or "")
+        for selection in selections
+        if str(selection.get("partner_mode") or "").upper() == "NEEDS_PARTNER"
+    }
     event_options = [
         event
         for event in _rows(
@@ -518,6 +552,25 @@ def build_public_four_player_team_setup_recovery(
         and str(event.get("competition_format") or "").upper()
         == "FOUR_PLAYER_TEAM"
     ]
+    tournament_members = _rows(
+        supabase,
+        "tournament_four_player_team_members",
+        filters=(("tournament_id", tournament_id),),
+    )
+    registration_email = str(registration.get("email") or "").strip().lower()
+    member_team_ids = {
+        str(member.get("team_id") or "")
+        for member in tournament_members
+        if str(member.get("status") or "").upper() in {"INVITED", "ACCEPTED"}
+        and (
+            str(member.get("registration_id") or "") == registration_id
+            or (
+                not member.get("registration_id")
+                and str(member.get("invited_email") or "").strip().lower()
+                == registration_email
+            )
+        )
+    }
     active_teams = [
         team
         for team in _rows(
@@ -525,31 +578,35 @@ def build_public_four_player_team_setup_recovery(
             "tournament_four_player_teams",
             filters=(
                 ("tournament_id", tournament_id),
-                ("captain_registration_id", registration_id),
             ),
         )
         if str(team.get("status") or "").upper()
-        not in {"WITHDRAWN", "CANCELLED"}
+        not in {"WITHDRAWN", "CANCELLED", "CANCELED"}
+        and (
+            str(team.get("captain_registration_id") or "") == registration_id
+            or str(team.get("id") or "") in member_team_ids
+        )
     ]
     team_by_event: dict[str, dict[str, Any]] = {}
     for team in active_teams:
         event_option_id = str(team.get("event_option_id") or "")
         if event_option_id in team_by_event:
             raise RuntimeError(
-                "Multiple active team setups exist for the same captain and event."
+                "Multiple active team setups exist for the same registration and event."
             )
         team_by_event[event_option_id] = team
     active_team_ids = {str(team.get("id") or "") for team in active_teams}
     members = [
         member
-        for member in _rows(
-            supabase,
-            "tournament_four_player_team_members",
-            filters=(("tournament_id", tournament_id),),
-        )
+        for member in tournament_members
         if str(member.get("team_id") or "") in active_team_ids
         and str(member.get("status") or "").upper() != "REMOVED"
     ]
+
+    occupied_slots_by_team: dict[str, set[str]] = {}
+    for member in members:
+        if member.get("status") in {"INVITED", "ACCEPTED"}:
+            occupied_slots_by_team.setdefault(str(member["team_id"]), set()).add(str(member["slot"]))
 
     operation_query = (
         supabase.table("tournament_team_operations")
@@ -594,6 +651,8 @@ def build_public_four_player_team_setup_recovery(
             # A committed operation without its business row is inconsistent;
             # keep the public surface fail-closed and direct staff recovery.
             setup_state = "STAFF_RECOVERY_REQUIRED"
+        elif event_id in solo_event_ids:
+            setup_state = "NEEDS_TEAM"
         else:
             setup_state = "SETUP_REQUIRED"
         recovery_events.append(
@@ -621,6 +680,11 @@ def build_public_four_player_team_setup_recovery(
                         "id": team.get("id"),
                         "name": team.get("name"),
                         "status": team.get("status"),
+                        "is_captain": str(team.get("captain_registration_id") or "") == registration_id,
+                        "open_slots": [
+                            slot for slot in TEAM_SLOTS
+                            if slot not in occupied_slots_by_team.get(str(team["id"]), set())
+                        ],
                         "eligibility_state": team.get("eligibility_state"),
                         "version": team.get("version"),
                         "members": [
@@ -754,11 +818,23 @@ def build_public_team_invitation(
         == str(member.get("invited_email") or "").strip().lower()
         and str(row.get("status") or "").upper() == "CONFIRMED"
     ]
-    if len(matching) != 1:
-        raise ValueError(
-            "A single confirmed registration with the invited email is required."
-        )
-    registration = matching[0]
+    if len(matching) > 1:
+        raise ValueError("Multiple registrations match this invitation. Contact the organizer.")
+    registration = matching[0] if matching else None
+    event = _one(
+        supabase,
+        "tournament_event_options",
+        filters=(("id", team.get("event_option_id")), ("tournament_id", str(tournament["id"]))),
+    ) or {}
+    selection = _one(
+        supabase,
+        "tournament_registration_selections",
+        filters=(
+            ("tournament_id", str(tournament["id"])),
+            ("event_option_id", team.get("event_option_id")),
+            ("registration_id", registration["id"]),
+        ),
+    ) if registration else None
     return {
         "tournament": {
             "id": tournament.get("id"),
@@ -771,6 +847,8 @@ def build_public_team_invitation(
             "status": member.get("status"),
             "invitation_version": member.get("invitation_version"),
             "invited_name": member.get("display_name_snapshot"),
+            "event_label": event.get("label"),
+            "needs_event_selection": bool(registration and not selection),
         },
         "registration": {
             "id": registration.get("id"),
@@ -784,7 +862,7 @@ def build_public_team_invitation(
                     ],
                 )
             ),
-        },
+        } if registration else None,
     }
 
 

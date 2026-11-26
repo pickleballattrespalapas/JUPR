@@ -19,6 +19,7 @@ import {
 import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
+import { playersNeedingTeam, teamOpeningsLabel } from "@/lib/tournamentTeamPlacement";
 
 import styles from "./TeamTournamentAdminPanel.module.css";
 
@@ -265,6 +266,16 @@ export default function TeamTournamentAdminPanel({
     ["CONFIRMED", "ADMIN_CONFIRMED"].includes(text(row, "status").toUpperCase())
   );
   const selectedTeam = teamsById.get(manageTeamId);
+  const teamPlacementPool = playersNeedingTeam(snapshot, teamEventId);
+  const teamsWithOpenings = (snapshot?.teams || [])
+    .filter(team => team.event_option_id === teamEventId && team.status === "FORMING")
+    .map(team => {
+      const occupied = new Set(teamMembers(team.id)
+        .filter(member => ["ACCEPTED", "INVITED"].includes(member.status))
+        .map(member => member.slot));
+      return { team, openSlots: TEAM_SLOTS.filter(slot => !occupied.has(slot)) };
+    })
+    .filter(({ openSlots }) => openSlots.length);
   const selectedDraw = (snapshot?.draws || []).find((row) => row.id === drawId);
   const routeContext = {
     tournamentId,
@@ -413,7 +424,8 @@ export default function TeamTournamentAdminPanel({
     setManageTeamId(teamId);
     const next = emptyRoster();
     for (const member of snapshot?.members || []) {
-      if (member.team_id !== teamId || !TEAM_SLOTS.includes(member.slot)) continue;
+      if (member.team_id !== teamId || !TEAM_SLOTS.includes(member.slot)
+        || !["ACCEPTED", "INVITED"].includes(member.status.toUpperCase())) continue;
       next[member.slot] = {
         registrationId: member.registration_id || "",
         email: member.invited_email || "",
@@ -1069,6 +1081,30 @@ export default function TeamTournamentAdminPanel({
                         </SearchablePlayerSelect>
                       </label>
                     </div>
+                    <section className={styles.card} data-testid="players-needing-team">
+                      <h3>Players needing a team ({teamPlacementPool.length})</h3>
+                      <p>Registered players in this division who haven’t joined a team. Choose them in the roster fields below to build a team, or add them to an existing team.</p>
+                      {teamPlacementPool.length ? (
+                        <ul>
+                          {teamPlacementPool.map(registration => (
+                            <li key={text(registration, "id")}>
+                              <strong>{registrationName(registration)}</strong> · {text(registration, "gender") || "Gender not provided"}
+                              {registration.doubles_skill != null ? ` · ${Number(registration.doubles_skill).toFixed(2)}` : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : <p>No players are waiting for a team in this division.</p>}
+                      {teamsWithOpenings.length ? (
+                        <>
+                          <h3>Teams needing players</h3>
+                          <ul>
+                            {teamsWithOpenings.map(({ team, openSlots }) => (
+                              <li key={team.id}>{team.name} · Looking for {teamOpeningsLabel(openSlots)}</li>
+                            ))}
+                          </ul>
+                        </>
+                      ) : null}
+                    </section>
                     <div className={styles.rosterGrid}>
                       {TEAM_SLOTS.map((slot) => (
                         <RosterSlotEditor
