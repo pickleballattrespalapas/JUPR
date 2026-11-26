@@ -205,6 +205,7 @@ for (const action of ["ACCEPT", "DECLINE"] as const) {
       const popup = page.waitForEvent("popup");
       await page.getByRole("link", { name: /register/i }).click();
       const signup = await popup;
+      await signup.waitForLoadState("networkidle");
       await enterRegistrant(signup);
       await selectTeamEvent(signup);
       await signup.getByLabel("Mixed 5.0 team plan", { exact: true }).selectOption("solo");

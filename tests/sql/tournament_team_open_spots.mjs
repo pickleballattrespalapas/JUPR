@@ -125,5 +125,63 @@ const final = await respond(replacement.members[0],3,"ACCEPT",lastKey);
 assert.deepEqual(await respond(replacement.members[0],3,"ACCEPT",lastKey), final);
 assert.equal((await db.query("select status from tournament_four_player_teams where id=$1", [partial.team.id])).rows[0].status, "CONFIRMED");
 await assert.rejects(fill([newMember]), /ROSTER_LOCKED/);
+
+// A formerly confirmed partial roster is possible after a legacy withdrawal.
+await db.query("update tournament_four_player_teams set status='CONFIRMED' where id=$1", [pair.team.id]);
+await db.exec(await readFile(new URL("20261126031000_reopen_four_player_team_after_withdrawal.sql", migrations), "utf8"));
+assert.equal((await db.query("select status from tournament_four_player_teams where id=$1", [pair.team.id])).rows[0].status, "FORMING");
+assert.equal((await db.query("select status from tournament_four_player_teams where id=$1", [partial.team.id])).rows[0].status, "CONFIRMED");
+// The complete cancellation RPC removes accepted membership with this DELETE.
+const cancellation = await readFile(new URL("20260921174724_complete_registration_cancellation.sql", migrations), "utf8");
+const deleteMember = "delete from public.tournament_four_player_team_members where tournament_id::text = p_tournament_id and registration_id = any(v_ids)";
+assert.ok(cancellation.includes(deleteMember));
+const cancellationDelete = deleteMember.replace("p_tournament_id", "$1").replace("v_ids", "$2::text[]");
+const withdraw = (registrationId = "r3") => db.transaction(async tx => {
+  await tx.query("update tournament_registrations set status='cancelled' where id=$1", [registrationId]);
+  await tx.query(cancellationDelete, [tournament, [registrationId]]);
+});
+const teamStatus = async () => (await db.query("select status from tournament_four_player_teams where id=$1", [partial.team.id])).rows[0].status;
+const restoreRegistrant = () => db.query("update tournament_registrations set status='CONFIRMED' where id='r3'");
+async function refillAfterWithdrawal() {
+  await restoreRegistrant();
+  const refill = await fill([newMember]);
+  await respond(refill.members[0], 3, "ACCEPT");
+}
+
+await withdraw();
+assert.equal(await teamStatus(), "FORMING", "Withdrawing an accepted teammate must reopen the vacancy");
+await refillAfterWithdrawal();
+const drawId = randomUUID();
+await db.query("insert into tournament_event_draws (id) values ($1)", [drawId]);
+await db.query("update tournament_four_player_teams set draw_id=$1 where id=$2", [drawId, partial.team.id]);
+await assert.rejects(withdraw(), /IN_USE|LOCKED|IMPORTED/);
+assert.equal((await db.query("select status from tournament_registrations where id='r3'")).rows[0].status, "CONFIRMED");
+assert.equal((await db.query("select count(*)::int as n from tournament_four_player_team_members where team_id=$1 and status='ACCEPTED'", [partial.team.id])).rows[0].n, 4);
+await db.query("update tournament_four_player_teams set draw_id=null where id=$1", [partial.team.id]);
+const matchupId = randomUUID();
+await db.query("insert into tournament_team_matchups values ($1,$2,$3,'SCHEDULED')", [matchupId, partial.team.id, full.team.id]);
+await assert.rejects(withdraw(), /IN_USE|LOCKED|IMPORTED/);
+await db.query("update tournament_team_matchups set status='VOID' where id=$1", [matchupId]);
+
+for (const state of ["REVIEW_REQUIRED", "WAITLIST", "INELIGIBLE"]) {
+  await db.query("update tournament_four_player_teams set status=$1 where id=$2", [state, partial.team.id]);
+  await withdraw();
+  assert.equal(await teamStatus(), state === "REVIEW_REQUIRED" ? "FORMING" : state);
+  await db.query("update tournament_four_player_teams set status='FORMING' where id=$1", [partial.team.id]);
+  await refillAfterWithdrawal();
+}
+const removed = await db.query("insert into tournament_four_player_team_members(team_id,tournament_id,event_option_id,slot,invited_email,registration_id,status) values ($1,$2,'team','WOMAN_2','declined@example.invalid','r3','REMOVED') returning id", [partial.team.id,tournament]);
+await db.query("delete from tournament_four_player_team_members where id=$1", [removed.rows[0].id]);
+assert.equal(await teamStatus(), "CONFIRMED");
+// Declined invites carry a registration id but their cleanup cannot release an active spot.
+const declined = await db.query("update tournament_four_player_team_members set status='DECLINED',registration_id='r1' where team_id=$1 and slot='MAN_2' returning id", [full.team.id]);
+await db.query("update tournament_four_player_teams set status='INELIGIBLE' where id=$1", [full.team.id]);
+await withdraw("r1");
+assert.equal((await db.query("select count(*)::int as n from tournament_four_player_team_members where id=$1", [declined.rows[0].id])).rows[0].n, 0);
+assert.equal((await db.query("select status from tournament_four_player_teams where id=$1", [full.team.id])).rows[0].status, "INELIGIBLE");
+// Tournament teardown should cascade through teams and members normally, even if a draw started.
+await db.query("update tournament_four_player_teams set draw_id=$1 where id=$2", [drawId, partial.team.id]);
+await db.query("delete from tournaments where id=$1", [tournament]);
+assert.equal((await db.query("select count(*)::int as n from tournament_four_player_team_members where tournament_id=$1", [tournament])).rows[0].n, 0);
 await db.close();
 console.log("Team signup SQL passed: partial/full creation, solo conversion, routing and permissions, rollback, replay, declined replacement and confirmation after four acceptances.");
